@@ -4,6 +4,8 @@
 
 ## 目前狀態
 
+- **2026-09-28 索引大小研究（研究，未改 `src/`、未改產品行為）**：0.38.0 在真實 index 上約為文字量的 6 倍（172.7 MiB 文字、約 1,040 MiB 索引），主因是一行一列。在同一份快照上實測直接掃描、區段 trigram（64K／16K）、sparse grams、Tantivy，並讀完 Succinct 與 Ferragina 等人的壓縮索引實測論文。建議「64K 區段不記位置 trigram＋zstd 原文＋依排序走訪、找滿第一頁即停」：內容部分 83.6 MiB（0.48 倍），225 查詢全部正確，第一頁 2–18 ms、計數到 10,000 筆 23–319 ms。總筆數語意（超過 10,000 筆）與索引引擎（SQLite FTS5／Tantivy）待使用者決定，尚未寫入 SPEC。見 `research/index-size-2026-09-28/RESULTS.md`。本機 win32 證據，不是公司 Windows 驗收。
+
 - **2026-09-28 0.38.1**：依 SPEC §51／D082 完成。
   - 起因：真實 index 排除 `AppData` 後，刪除校正移除 175,324 份文件，單一交易約兩小時。根因是 `index_migration_documents` 缺少 `document_id` 索引，CASCADE 每份全表掃描約 24 萬筆 marker（35.9 ms／份，補索引後 0.1 ms）。
   - 範圍：外鍵子表索引與 schema 自動檢查；遷移完成即清除 marker；`removeMissing` 每 1,000 份分批提交、可取消、有進度。
