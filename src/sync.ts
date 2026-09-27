@@ -6,7 +6,7 @@ import { parseDocument } from "./parser.js";
 import { scan, validateRoot, RootError } from "./scanner.js";
 import { canonicalizeRootInput, planRootOperation, resolveUserRootPath, runtimePathPlatform, type RootOperationKind } from "./root-plan.js";
 import { emptyStatusCounts, classifyReprocess, emptyReasonCounts, reprocessAction, reprocessReasonLabels, type Diagnostic, type DocumentRecord, type ReprocessReason, type SyncSummary } from "./model.js";
-import { indexArtifactPaths, isIndexArtifact, type IndexStore, type UpsertTimings } from "./store.js";
+import { indexArtifactPaths, isIndexArtifact, type IndexStore, type RemovalResult, type UpsertTimings } from "./store.js";
 import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { addTimingSample, createTimingReservoir, rememberSlowFile, type SlowFileProfile, type TimingReservoir } from "./profile.js";
 
@@ -289,12 +289,24 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
   }
   notePhase("刪除校正");
   const removeStarted = performance.now();
-  const removal = store.removeMissing(
-    knownPaths,
-    root,
-    plan.kind === "subtree" ? scanStart : undefined,
-    found.protectedScopes,
-  );
+  let removal: RemovalResult;
+  try {
+    removal = await store.removeMissing(
+      knownPaths,
+      root,
+      plan.kind === "subtree" ? scanStart : undefined,
+      found.protectedScopes,
+      { ...(options.signal ? { signal: options.signal } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) },
+    );
+  } catch (error) {
+    if (error instanceof OperationCancelledError) {
+      // Committed removal batches stay; the next sync recomputes the rest (SPEC §51.3).
+      report.removed = (error.partial as RemovalResult | undefined)?.removed ?? 0;
+      report.elapsedMs = Math.round((performance.now() - started) * 100) / 100;
+      error.partial = report;
+    }
+    throw error;
+  }
   report.removed = removal.removed;
   report.protectedByScanFailure = removal.protected;
   addPhase("remove", performance.now() - removeStarted);

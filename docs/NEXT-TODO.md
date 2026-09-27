@@ -10,6 +10,8 @@
 
 - [x] A／B／C1／C2／D 在真實 store snapshot 上建置、2,000 查詢差分、延遲、成本模型與 migration 等價；見 [PROTOTYPE-RESULTS.md](research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md)。
 - [x] 0.38.0 已依 D081 實作 C2-hybrid（SPEC §50），並修正 U+0000 查詢錯誤。
+- [x] 0.38.1 已依 D082 修正大量刪除效能（SPEC §51）。
+- [ ] 另案：遷移遇到 SQLITE_BUSY 直接失敗（`database is locked`），應可重試或等待。
 - [ ] 0.38.0 公司 Windows 驗收：舊 index 遷移時間、索引大小、`SPEC.md`／`測試`／常見詞延遲、Workbench 202→自動重送。
 - [ ] 仍待處理（原 ADR 前補證清單）：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
 - [ ] 所有使用中的 index 都遷移後，移除遷移期舊搜尋路徑（Bloom／文件級 postings）程式碼。

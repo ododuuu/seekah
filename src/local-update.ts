@@ -349,7 +349,7 @@ async function applyPathDeleteLocked(
     });
     return result;
   }
-  const removal = store.removeMissing(new Set(), root, filePath);
+  const removal = await store.removeMissing(new Set(), root, filePath);
   result.removed = removal.removed;
   result.kind = removal.removed > 1 || (removal.removed === 1 && !store.getDocument(filePath) && !samePath(filePath, root))
     ? (removal.removed > 1 ? "subtree-delete" : "file-delete")

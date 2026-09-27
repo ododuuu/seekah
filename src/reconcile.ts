@@ -200,7 +200,7 @@ export async function runBackgroundReconcileBatch(
       const blocked = failedBelow(state, directory) || pendingBelow(queue, root, directory, state.scopeAcks);
       if (!blocked) {
         const known = new Set(queue.reconcileSeenPaths(root, state.generation));
-        const removal = store.removeMissing(known, root, directory);
+        const removal = await store.removeMissing(known, root, directory);
         removed += removal.removed;
       } else if (!state.failedScopes.some(item => coversPath(directory, item))) {
         uniquePush(state.failedScopes, directory);

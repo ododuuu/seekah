@@ -94,7 +94,8 @@ test("0.38.0 block index migration preserves payload bytes, resumes, then drops 
       const after = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
       assert.deepEqual(after, before);
       assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), "1");
-      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 300);
+      // Completion drops the per-document markers in the same transaction (SPEC §51.2).
+      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
       assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'payload_bloom_version'"), undefined);
       assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('document_blooms', 'document_payload_blooms', 'search_unigrams', 'search_trigrams')"), 0);
     } finally { db.close(); }

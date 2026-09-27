@@ -68,7 +68,7 @@ test("FTS5 unigram/trigram postings preserve exact, phrase, all-terms, filename,
       assert.equal(count(deleted, "SELECT count(*) AS count FROM search_trigrams"), 1);
     } finally { deleted.close(); }
 
-    assert.deepEqual(store.removeMissing(new Set(), root), { removed: 1, protected: 0 });
+    assert.deepEqual(await store.removeMissing(new Set(), root), { removed: 1, protected: 0 });
     const missing = new DatabaseSync(databasePath, { readOnly: true });
     try {
       assert.equal(count(missing, "SELECT count(*) AS count FROM search_unigrams"), 0);

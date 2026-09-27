@@ -8,7 +8,7 @@ import {
   documentStatuses, TEXT_PARSE_VERSION, emptyStatusCounts, textParseExtensions,
   type Diagnostic, type SyncSummary, type DocumentRecord, type DocumentStatus, type TextBlock,
 } from "./model.js";
-import { throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
+import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
 import type { SearchTrace, SearchTraceRecorder } from "./search-trace.js";
@@ -18,6 +18,10 @@ export type DataDirSource = "LOCALDOCSEARCH_DATA_DIR" | "LOCALAPPDATA" | "XDG_DA
 export interface RemovalResult {
   removed: number;
   protected: number;
+}
+export interface RemoveMissingOptions {
+  signal?: AbortSignal;
+  onProgress?: (update: ProgressUpdate) => void;
 }
 export interface TrashedRoot { path: string; deletedAt: string; documentCount: number }
 
@@ -170,6 +174,13 @@ function trigramValues(value: string): string[] {
 // 0.38.0 block-level index (SPEC §50／D081).
 const BLOCK_INDEX_VERSION = "1";
 const BLOCK_MIGRATION_VERSION = "block_index_1";
+// A migration's per-document markers are obsolete once its metadata version is written.
+const COMPLETED_MIGRATION_MARKERS = [
+  { key: "content_storage_version", value: "2", marker: "content_storage_2" },
+  { key: "block_index_version", value: BLOCK_INDEX_VERSION, marker: BLOCK_MIGRATION_VERSION },
+] as const;
+// removeMissing commits deletions in batches of this many documents (SPEC §51.3).
+const REMOVE_BATCH_SIZE = 1000;
 const LEGACY_SEARCH_TABLES = ["document_blooms", "document_payload_blooms", UNIGRAM_TABLE, TRIGRAM_TABLE] as const;
 const BLOCK_TABLES = { tri: "search_block_trigrams", uni: "search_block_unigrams", bi: "search_block_bigrams" } as const;
 const FILENAME_TABLES = { tri: "search_filename_trigrams", uni: "search_filename_unigrams", bi: "search_filename_bigrams" } as const;
@@ -491,9 +502,28 @@ export class IndexStore {
         this.db.exec(`INSERT OR REPLACE INTO metadata(key, value) VALUES
           ('content_storage_version', '2'), ('multi_root_version', '1'),
           ('root_merge_version', '1'), ('block_index_version', '${BLOCK_INDEX_VERSION}')`);
+      } else {
+        this.purgeCompletedMigrationMarkers();
       }
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
+  }
+
+  /** Markers only track an in-progress migration; 0.38.0 left them behind after completion (SPEC §51.2). */
+  private purgeCompletedMigrationMarkers(): void {
+    const completed = COMPLETED_MIGRATION_MARKERS
+      .filter(({ key, value }) => this.metadata(key) === value)
+      .map(({ marker }) => marker);
+    if (!completed.length) return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const remove = this.db.prepare("DELETE FROM index_migration_documents WHERE version = ?");
+      for (const marker of completed) remove.run(marker);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private initializeSchema(fresh: boolean): void {
@@ -563,6 +593,8 @@ export class IndexStore {
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         PRIMARY KEY(version, document_id)
       );
+      -- Deleting a document cascades here by document_id alone (SPEC §51.1).
+      CREATE INDEX IF NOT EXISTS index_migration_documents_document ON index_migration_documents(document_id);
       CREATE TABLE IF NOT EXISTS search_headings (
         id INTEGER PRIMARY KEY,
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -627,7 +659,8 @@ export class IndexStore {
     const ngramCompletedDocuments = this.hasTable("index_migration_documents")
       ? Number((this.db.prepare(`SELECT count(*) AS count FROM index_migration_documents WHERE version = ?`).get(NGRAM_MIGRATION_VERSION) as { count: number }).count) : 0;
     const pending = this.textUpgradePending();
-    const blockIndexCompletedDocuments = this.hasTable("index_migration_documents")
+    // Markers exist only while the migration runs; a finished index counts every document (SPEC §51.2).
+    const blockIndexCompletedDocuments = this.blockIndexReady() ? totalDocuments : this.hasTable("index_migration_documents")
       ? Number((this.db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = ?").get(BLOCK_MIGRATION_VERSION) as { count: number }).count) : 0;
     return { contentStorageVersion, payloadBloomVersion, ngramIndexVersion, ngramCompletedDocuments, ngramTablesReady,
       blockIndexVersion: this.metadata("block_index_version"), blockIndexCompletedDocuments,
@@ -1097,7 +1130,8 @@ export class IndexStore {
     for (const block of blocks) {
       if (block.content) insertTokens(writes.blockFts, block.id, normalizeSearchText(block.content));
     }
-    writes.insertMigration.run(BLOCK_MIGRATION_VERSION, documentId);
+    // The marker records migration progress only (SPEC §51.2).
+    if (!this.blockIndexReady()) writes.insertMigration.run(BLOCK_MIGRATION_VERSION, documentId);
   }
 
 
@@ -1182,36 +1216,73 @@ export class IndexStore {
     }
   }
 
-  removeMissing(
+  /**
+   * Delete indexed documents that the scan no longer found. Deletions commit in
+   * batches; a cancelled run keeps committed batches and the next scan
+   * recomputes the rest (SPEC §51.3).
+   */
+  async removeMissing(
     knownPaths: Set<string>,
     root?: string,
     subtree?: string,
     protectedScopes: readonly string[] = [],
-  ): RemovalResult {
-    let removed = 0;
+    options: RemoveMissingOptions = {},
+  ): Promise<RemovalResult> {
     let protectedCount = 0;
     const rows = (root ? this.db.prepare("SELECT id, path FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").all(root) : this.db.prepare("SELECT id, path FROM documents").all()) as { id: number; path: string }[];
-    const writes = this.writes();
-    const remove = this.db.prepare("DELETE FROM documents WHERE path = ?");
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      for (const row of rows) {
-        if (subtree && !coversPath(subtree, row.path)) continue;
-        if (knownPaths.has(row.path)) continue;
-        if (protectedScopes.some(scope => coversPath(scope, row.path))) {
-          protectedCount++;
-          continue;
-        }
-        this.deleteSearchRows(row.id, writes);
-        remove.run(row.path);
-        removed++;
+    const targets: number[] = [];
+    for (const row of rows) {
+      if (subtree && !coversPath(subtree, row.path)) continue;
+      if (knownPaths.has(row.path)) continue;
+      if (protectedScopes.some(scope => coversPath(scope, row.path))) {
+        protectedCount++;
+        continue;
       }
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
+      targets.push(row.id);
+    }
+    let removed = 0;
+    const report = () => options.onProgress?.({ stage: "write", message: "刪除校正", current: removed, total: targets.length });
+    if (targets.length) report();
+    for (let start = 0; start < targets.length; start += REMOVE_BATCH_SIZE) {
+      if (options.signal?.aborted) {
+        const error = new OperationCancelledError();
+        error.partial = { removed, protected: protectedCount } satisfies RemovalResult;
+        throw error;
+      }
+      const batch = targets.slice(start, start + REMOVE_BATCH_SIZE);
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        this.removeDocumentBatch(batch);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+      removed += batch.length;
+      report();
+      if (start + REMOVE_BATCH_SIZE < targets.length) await yieldToEvents();
     }
     return { removed, protected: protectedCount };
+  }
+
+  /** Set-based delete of one batch inside the caller's transaction; FTS rows go before the rows that locate them. */
+  private removeDocumentBatch(ids: readonly number[]): void {
+    this.db.exec("CREATE TEMP TABLE IF NOT EXISTS remove_batch(id INTEGER PRIMARY KEY); DELETE FROM temp.remove_batch;");
+    const insert = this.db.prepare("INSERT INTO temp.remove_batch(id) VALUES (?)");
+    for (const id of ids) insert.run(id);
+    const documents = "SELECT id FROM temp.remove_batch";
+    const blocks = `SELECT id FROM blocks WHERE document_id IN (${documents})`;
+    const headings = `SELECT id FROM search_headings WHERE document_id IN (${documents})`;
+    const deletes: string[] = [
+      ...Object.values(BLOCK_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${blocks})`),
+      ...Object.values(HEADING_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${headings})`),
+      ...Object.values(FILENAME_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${documents})`),
+      ...(this.hasNgramTables() ? [UNIGRAM_TABLE, TRIGRAM_TABLE].map(table => `DELETE FROM ${table} WHERE rowid IN (${documents})`) : []),
+      `DELETE FROM search_headings WHERE document_id IN (${documents})`,
+      `DELETE FROM documents WHERE id IN (${documents})`,
+      "DELETE FROM temp.remove_batch",
+    ];
+    for (const sql of deletes) this.db.exec(sql);
   }
 
   removeDocument(filePath: string): boolean {
@@ -1863,6 +1934,7 @@ export class IndexStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('content_storage_version', '2')").run();
+      this.db.exec("DELETE FROM index_migration_documents WHERE version = 'content_storage_2'");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -1932,7 +2004,7 @@ export class IndexStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       for (const table of LEGACY_SEARCH_TABLES) this.db.exec(`DROP TABLE IF EXISTS ${table}`);
-      this.db.exec(`DELETE FROM index_migration_documents WHERE version IN ('payload_bloom_1', 'payload_bloom_2', '${NGRAM_MIGRATION_VERSION}');
+      this.db.exec(`DELETE FROM index_migration_documents WHERE version IN ('payload_bloom_1', 'payload_bloom_2', '${NGRAM_MIGRATION_VERSION}', '${BLOCK_MIGRATION_VERSION}');
         DELETE FROM metadata WHERE key IN ('payload_bloom_version', 'ngram_index_version');`);
       this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('block_index_version', ?)").run(BLOCK_INDEX_VERSION);
       this.db.exec("COMMIT");

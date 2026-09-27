@@ -186,13 +186,14 @@ test("fresh block index has no legacy structures and every removal path clears i
     store.moveRootsToTrash([other]);
     assert.equal(search(store, "trash-token").length, 0);
     assert.equal(search(store, "垃圾").length, 0);
-    assert.deepEqual(store.removeMissing(new Set([path.join(root, "keep.txt")]), root), { removed: 2, protected: 0 });
+    assert.deepEqual(await store.removeMissing(new Set([path.join(root, "keep.txt")]), root), { removed: 2, protected: 0 });
     assert.equal(search(store, "new-token").length, 0);
     assert.equal(search(store, "keep-token").length, 1);
     const blocks = count(databasePath, "SELECT count(*) FROM blocks");
     assert.equal(blocks, 1);
     assert.equal(count(databasePath, "SELECT count(*) FROM search_headings"), 1);
-    assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 1);
+    // A finished block index keeps no per-document migration markers (SPEC §51.2).
+    assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
 
     store.clearDocuments();
     assert.equal(search(store, "keep-token").length, 0);

@@ -1,13 +1,16 @@
 # 專案狀態
 
-最後更新：2026-09-28（0.38.1 進行中：大量刪除效能與遷移記號清理；package 仍為 0.38.0）
+最後更新：2026-09-28（package 0.38.1：大量刪除效能與遷移記號清理）
 
 ## 目前狀態
 
-- **2026-09-28 0.38.1 進行中**：依 SPEC §51／D082。已寫入 SPEC 與 DECISIONS，程式尚未實作。
+- **2026-09-28 0.38.1**：依 SPEC §51／D082 完成。
   - 起因：真實 index 排除 `AppData` 後，刪除校正移除 175,324 份文件，單一交易約兩小時。根因是 `index_migration_documents` 缺少 `document_id` 索引，CASCADE 每份全表掃描約 24 萬筆 marker（35.9 ms／份，補索引後 0.1 ms）。
   - 範圍：外鍵子表索引與 schema 自動檢查；遷移完成即清除 marker；`removeMissing` 每 1,000 份分批提交、可取消、有進度。
+  - 測試：新增 m41（外鍵索引檢查、marker 生命週期、分批刪除與取消接續、sync 刪除進度）；`npm test` 319 項，314 通過、3 略過，M26 path coverage、M36 profile chmod 兩項既有 win32 環境失敗仍在。
+  - 真實 store 複本（240,237 份）刪除 2,000 份：0.38.0 72 ms／份；0.38.1 在含 31.7 萬 block 的一批為 12 ms／份，metadata-only 批次 0.73 ms／份（含掃描）。見 `0.38.1-VALIDATION.md`。
   - 另案：遷移遇到鎖直接失敗（`database is locked`），不在本版。
+  - 本機 win32 證據，不是公司 Windows 驗收。
 
 - **2026-09-27 0.38.0**：依 SPEC §50／D081 實作 C2-hybrid 搜尋後端。
   - 索引：content 用 block 級 trigram `detail=full`（`case_sensitive 1`）phrase 加 unigram／bigram token；檔名與 heading 各自建表。排序前不讀正文，payload 只供當頁 snippet／passages。
