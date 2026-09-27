@@ -1,0 +1,1778 @@
+{
+  "generatedAt": "2026-09-26T21:21:27.487Z",
+  "before": {
+    "generatedAt": "2026-09-26T21:16:38.697Z",
+    "database": {
+      "basename": "index.db",
+      "identity": {
+        "documentCount": 235463,
+        "tableCounts": {
+          "documents": 235463,
+          "blocks": 5313248,
+          "document_payloads": 27468,
+          "document_payload_blocks": 5316529,
+          "document_payload_blooms": 27468
+        },
+        "metadata": {
+          "content_storage_version": "2",
+          "payload_bloom_version": "2",
+          "multi_root_version": "1",
+          "root_merge_version": "1",
+          "ngram_index_version": "1"
+        },
+        "dataVersion": 1,
+        "sizeBytes": 1466884096,
+        "modifiedAtMs": 1790433833844.4653,
+        "snapshotKey": "{\"documents\":235463,\"tables\":{\"documents\":235463,\"blocks\":5313248,\"document_payloads\":27468,\"document_payload_blocks\":5316529,\"document_payload_blooms\":27468},\"metadata\":{\"content_storage_version\":\"2\",\"payload_bloom_version\":\"2\",\"multi_root_version\":\"1\",\"root_merge_version\":\"1\",\"ngram_index_version\":\"1\"},\"dataVersion\":1,\"sizeBytes\":1466884096,\"modifiedAtMs\":1790433833844.4653}"
+      }
+    },
+    "plans": {
+      "sparseOneSeed": {
+        "seedCount": 1,
+        "q1": [
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        ],
+        "q2": [
+          "SEARCH p USING INDEX sqlite_autoindex_document_payloads_1 (document_id=? AND ordinal=?)",
+          "LIST SUBQUERY 2",
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH m USING INDEX document_payload_blocks_document_block (document_id=? AND block_id=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR DISTINCT"
+        ]
+      },
+      "specMaximumSeed": {
+        "seedCount": 575,
+        "q1": [
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        ],
+        "q2": [
+          "SEARCH p USING INDEX sqlite_autoindex_document_payloads_1 (document_id=? AND ordinal=?)",
+          "LIST SUBQUERY 2",
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH m USING INDEX document_payload_blocks_document_block (document_id=? AND block_id=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR DISTINCT"
+        ]
+      }
+    }
+  },
+  "after": {
+    "generatedAt": "2026-09-26T21:21:21.793Z",
+    "database": {
+      "basename": "index.db",
+      "identity": {
+        "documentCount": 235463,
+        "tableCounts": {
+          "documents": 235463,
+          "blocks": 5313248,
+          "document_payloads": 27468,
+          "document_payload_blocks": 5316529,
+          "document_payload_blooms": 27468
+        },
+        "metadata": {
+          "content_storage_version": "2",
+          "payload_bloom_version": "2",
+          "multi_root_version": "1",
+          "root_merge_version": "1",
+          "ngram_index_version": "1"
+        },
+        "dataVersion": 1,
+        "sizeBytes": 1466884096,
+        "modifiedAtMs": 1790433833844.4653,
+        "snapshotKey": "{\"documents\":235463,\"tables\":{\"documents\":235463,\"blocks\":5313248,\"document_payloads\":27468,\"document_payload_blocks\":5316529,\"document_payload_blooms\":27468},\"metadata\":{\"content_storage_version\":\"2\",\"payload_bloom_version\":\"2\",\"multi_root_version\":\"1\",\"root_merge_version\":\"1\",\"ngram_index_version\":\"1\"},\"dataVersion\":1,\"sizeBytes\":1466884096,\"modifiedAtMs\":1790433833844.4653}"
+      }
+    },
+    "plans": {
+      "sparseOneSeed": {
+        "seedCount": 1,
+        "q1": [
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        ],
+        "q2": [
+          "SEARCH p USING INDEX sqlite_autoindex_document_payloads_1 (document_id=? AND ordinal=?)",
+          "LIST SUBQUERY 2",
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH m USING INDEX document_payload_blocks_document_block (document_id=? AND block_id=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR DISTINCT"
+        ]
+      },
+      "specMaximumSeed": {
+        "seedCount": 575,
+        "q1": [
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH b USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        ],
+        "q2": [
+          "SEARCH p USING INDEX sqlite_autoindex_document_payloads_1 (document_id=? AND ordinal=?)",
+          "LIST SUBQUERY 2",
+          "MATERIALIZE selected",
+          "SCAN seed VIRTUAL TABLE INDEX 1:",
+          "SEARCH m USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=? AND payload_ordinal=?)",
+          "USE TEMP B-TREE FOR DISTINCT",
+          "SCAN s",
+          "SEARCH m USING INDEX document_payload_blocks_document_block (document_id=? AND block_id=?)",
+          "CREATE BLOOM FILTER",
+          "USE TEMP B-TREE FOR DISTINCT"
+        ]
+      }
+    }
+  },
+  "protocol": {
+    "queries": [
+      "tests",
+      "spec",
+      "snipaste",
+      "absent"
+    ],
+    "pageSize": 20,
+    "warmupRounds": 3,
+    "measurementRounds": 10,
+    "p50": "nearest-rank 5/10",
+    "p95": "nearest-rank 10/10 (maximum of ten samples)",
+    "tracePersistence": "disabled by benchmark-only read-only subclass",
+    "noGcOrPragmaTuning": true
+  },
+  "resultHashesEqual": true,
+  "queries": {
+    "tests": {
+      "query": "測試",
+      "result": {
+        "total": 96,
+        "pageCount": 5,
+        "resultHash": "324a7467ee8bf60e484ad6ced94b1c7b54a83de362f8672b6f829243649bfed5"
+      },
+      "ranking": {
+        "traceMs": {
+          "beforeP50": 5432.137000000017,
+          "afterP50": 5168.592700000008,
+          "p50Ratio": 0.9514842317121222,
+          "beforeP95": 5465.9579000000085,
+          "afterP95": 5272.857099999994,
+          "p95Ratio": 0.9646721025787603
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 653633,
+            "afterP50": 653633,
+            "p50Ratio": 1,
+            "beforeP95": 653633,
+            "afterP95": 653633,
+            "p95Ratio": 1
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "owningBlocksFound": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadBlobRows": {
+            "beforeP50": 2601,
+            "afterP50": 2601,
+            "p50Ratio": 1,
+            "beforeP95": 2601,
+            "afterP95": 2601,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 1844.2647999996261,
+            "afterP50": 1600.7286000000458,
+            "p50Ratio": 0.8679494397986506,
+            "beforeP95": 1860.0488999998197,
+            "afterP95": 1693.9960000003339,
+            "p95Ratio": 0.9107265943387285
+          },
+          "prepareCount": {
+            "beforeP50": 214,
+            "afterP50": 214,
+            "p50Ratio": 1,
+            "beforeP95": 214,
+            "afterP95": 214,
+            "p95Ratio": 1
+          },
+          "prepareMs": {
+            "beforeP50": 4.506700000027195,
+            "afterP50": 4.203699999838136,
+            "p50Ratio": 0.9327667694350122,
+            "beforeP95": 4.880100000009406,
+            "afterP95": 4.469100000016624,
+            "p95Ratio": 0.9157804143374132
+          },
+          "payloadLookupMs": {
+            "beforeP50": 1850.484500000166,
+            "afterP50": 1606.7556999999215,
+            "p50Ratio": 0.8682891966940427,
+            "beforeP95": 1866.804700000037,
+            "afterP95": 1700.4064000001526,
+            "p95Ratio": 0.9108646448126678
+          },
+          "brotliMs": {
+            "beforeP50": 634.1000999997195,
+            "afterP50": 626.9443000002357,
+            "p50Ratio": 0.9887150309557008,
+            "beforeP95": 641.9715999998589,
+            "afterP95": 641.2958999997354,
+            "p95Ratio": 0.9989474612270642
+          },
+          "decodeParseMs": {
+            "beforeP50": 830.1965000010969,
+            "afterP50": 820.1453000002075,
+            "p50Ratio": 0.9878929867797852,
+            "beforeP95": 840.037000000535,
+            "afterP95": 833.182700000456,
+            "p95Ratio": 0.9918404784550268
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 1461.1498000002175,
+            "afterP50": 1447.3387999999686,
+            "p50Ratio": 0.9905478548467468,
+            "beforeP95": 1478.1359000000666,
+            "afterP95": 1466.2300000000978,
+            "p95Ratio": 0.9919453278957853
+          },
+          "exactSelfMs": {
+            "beforeP50": 2065.8336000005947,
+            "afterP50": 2054.430300000022,
+            "p50Ratio": 0.9944800491188789,
+            "beforeP95": 2079.8793999999616,
+            "afterP95": 2070.9745000001276,
+            "p95Ratio": 0.9957185498352288
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 5379.998500000074,
+            "afterP50": 5116.047099999967,
+            "p50Ratio": 0.9509383878080815,
+            "beforeP95": 5414.5285000001895,
+            "afterP95": 5220.5932999996585,
+            "p95Ratio": 0.9641824398928689
+          },
+          "exactTextMs": {
+            "beforeP50": 1014.2587999928801,
+            "afterP50": 1009.0868999923987,
+            "p50Ratio": 0.9949008083533338,
+            "beforeP95": 1020.9584999929066,
+            "afterP95": 1014.340500003862,
+            "p95Ratio": 0.993517856025401
+          },
+          "traceMs": {
+            "beforeP50": 5432.137000000017,
+            "afterP50": 5168.592700000008,
+            "p50Ratio": 0.9514842317121222,
+            "beforeP95": 5465.9579000000085,
+            "afterP95": 5272.857099999994,
+            "p95Ratio": 0.9646721025787603
+          },
+          "compressedBytes": {
+            "beforeP50": 31806280,
+            "afterP50": 31806280,
+            "p50Ratio": 1,
+            "beforeP95": 31806280,
+            "afterP95": 31806280,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 154125816,
+            "afterP50": 154125816,
+            "p50Ratio": 1,
+            "beforeP95": 154125816,
+            "afterP95": 154125816,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 2601,
+            "afterP50": 2601,
+            "p50Ratio": 1,
+            "beforeP95": 2601,
+            "afterP95": 2601,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 2601,
+            "afterP50": 2601,
+            "p50Ratio": 1,
+            "beforeP95": 2601,
+            "afterP95": 2601,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "completed": {
+        "traceMs": {
+          "beforeP50": 5446.220399999991,
+          "afterP50": 5181.306200000006,
+          "p50Ratio": 0.9513581565667109,
+          "beforeP95": 5478.962700000033,
+          "afterP95": 5285.441299999977,
+          "p95Ratio": 0.9646791900955897
+        },
+        "wallMs": {
+          "beforeP50": 5446.446399999986,
+          "afterP50": 5181.532899999991,
+          "p50Ratio": 0.9513603034815517,
+          "beforeP95": 5479.200899999996,
+          "afterP95": 5285.674499999994,
+          "p95Ratio": 0.9646798130727415
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 654014,
+            "afterP50": 653891,
+            "p50Ratio": 0.9998119306314543,
+            "beforeP95": 654014,
+            "afterP95": 653891,
+            "p95Ratio": 0.9998119306314543
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 258,
+            "afterP50": 18,
+            "p50Ratio": 0.06976744186046512,
+            "beforeP95": 258,
+            "afterP95": 18,
+            "p95Ratio": 0.06976744186046512
+          },
+          "owningBlocksFound": {
+            "beforeP50": 240,
+            "afterP50": 240,
+            "p50Ratio": 1,
+            "beforeP95": 240,
+            "afterP95": 240,
+            "p95Ratio": 1
+          },
+          "payloadBlobRows": {
+            "beforeP50": 2619,
+            "afterP50": 2619,
+            "p50Ratio": 1,
+            "beforeP95": 2619,
+            "afterP95": 2619,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 1849.9732999995176,
+            "afterP50": 1606.002500000046,
+            "p50Ratio": 0.8681219885716538,
+            "beforeP95": 1865.9249999997846,
+            "afterP95": 1699.0734000005468,
+            "p95Ratio": 0.910579685679083
+          },
+          "prepareCount": {
+            "beforeP50": 304,
+            "afterP50": 286,
+            "p50Ratio": 0.9407894736842105,
+            "beforeP95": 304,
+            "afterP95": 286,
+            "p95Ratio": 0.9407894736842105
+          },
+          "prepareMs": {
+            "beforeP50": 6.651999999186955,
+            "afterP50": 6.910199999794713,
+            "p50Ratio": 1.0388153939626152,
+            "beforeP95": 7.274200000218116,
+            "afterP95": 7.232499999809079,
+            "p95Ratio": 0.9942674107932438
+          },
+          "payloadLookupMs": {
+            "beforeP50": 1858.4779000001145,
+            "afterP50": 1615.0027999998129,
+            "p50Ratio": 0.8689922005527821,
+            "beforeP95": 1874.99410000004,
+            "afterP95": 1708.245600000053,
+            "p95Ratio": 0.9110671868247567
+          },
+          "brotliMs": {
+            "beforeP50": 636.2117999998154,
+            "afterP50": 628.9983000003267,
+            "p50Ratio": 0.9886617947050168,
+            "beforeP95": 643.928299998719,
+            "afterP95": 643.3572999997996,
+            "p95Ratio": 0.9991132553128654
+          },
+          "decodeParseMs": {
+            "beforeP50": 832.0816000010527,
+            "afterP50": 822.0930000001972,
+            "p50Ratio": 0.9879956485026915,
+            "beforeP95": 841.9763000005623,
+            "afterP95": 835.1034000004584,
+            "p95Ratio": 0.991837181165195
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 1465.1999000002688,
+            "afterP50": 1451.2736999999324,
+            "p50Ratio": 0.9904953583464388,
+            "beforeP95": 1481.9523000000481,
+            "afterP95": 1470.2329000001191,
+            "p95Ratio": 0.9920919182082119
+          },
+          "exactSelfMs": {
+            "beforeP50": 2065.8336000005947,
+            "afterP50": 2054.430300000022,
+            "p50Ratio": 0.9944800491188789,
+            "beforeP95": 2079.8793999999616,
+            "afterP95": 2070.9745000001276,
+            "p95Ratio": 0.9957185498352288
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 5379.998500000074,
+            "afterP50": 5116.047099999967,
+            "p50Ratio": 0.9509383878080815,
+            "beforeP95": 5414.5285000001895,
+            "afterP95": 5220.5932999996585,
+            "p95Ratio": 0.9641824398928689
+          },
+          "exactTextMs": {
+            "beforeP50": 1014.2587999928801,
+            "afterP50": 1009.0868999923987,
+            "p50Ratio": 0.9949008083533338,
+            "beforeP95": 1020.9584999929066,
+            "afterP95": 1014.340500003862,
+            "p95Ratio": 0.993517856025401
+          },
+          "traceMs": {
+            "beforeP50": 5446.220399999991,
+            "afterP50": 5181.306200000006,
+            "p50Ratio": 0.9513581565667109,
+            "beforeP95": 5478.962700000033,
+            "afterP95": 5285.441299999977,
+            "p95Ratio": 0.9646791900955897
+          },
+          "compressedBytes": {
+            "beforeP50": 31903048,
+            "afterP50": 31903048,
+            "p50Ratio": 1,
+            "beforeP95": 31903048,
+            "afterP95": 31903048,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 154348680,
+            "afterP50": 154348680,
+            "p50Ratio": 1,
+            "beforeP95": 154348680,
+            "afterP95": 154348680,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 2601,
+            "afterP50": 2601,
+            "p50Ratio": 1,
+            "beforeP95": 2601,
+            "afterP95": 2601,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 18,
+            "afterP50": 18,
+            "p50Ratio": 1,
+            "beforeP95": 18,
+            "afterP95": 18,
+            "p95Ratio": 1
+          },
+          "payloadsRead": {
+            "beforeP50": 2619,
+            "afterP50": 2619,
+            "p50Ratio": 1,
+            "beforeP95": 2619,
+            "afterP95": 2619,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "structural": {
+        "before": {
+          "passes": 125,
+          "filteredPasses": 18,
+          "candidatePayloadOrdinals": 18,
+          "blockExpansionInputPayloads": 18,
+          "owningBlocksFound": 240,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 1
+        },
+        "after": {
+          "passes": 125,
+          "filteredPasses": 18,
+          "candidatePayloadOrdinals": 18,
+          "blockExpansionInputPayloads": 18,
+          "owningBlocksFound": 240,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 1
+        },
+        "stableBefore": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        },
+        "stableAfter": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        }
+      }
+    },
+    "spec": {
+      "query": "SPEC.md",
+      "result": {
+        "total": 85,
+        "pageCount": 5,
+        "resultHash": "24c4f0e878b70009514a34887635b47d8f17ac0f4a7a10561bb7fc85b00effc6"
+      },
+      "ranking": {
+        "traceMs": {
+          "beforeP50": 13766.006900000008,
+          "afterP50": 12235.722299999994,
+          "p50Ratio": 0.888835984819969,
+          "beforeP95": 13888.761899999983,
+          "afterP95": 12697.942899999995,
+          "p95Ratio": 0.9142602480643008
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 1652374,
+            "afterP50": 1442468,
+            "p50Ratio": 0.8729670159419115,
+            "beforeP95": 1652374,
+            "afterP95": 1442468,
+            "p95Ratio": 0.8729670159419115
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 1442468,
+            "afterP50": 0,
+            "p50Ratio": 0,
+            "beforeP95": 1442468,
+            "afterP95": 0,
+            "p95Ratio": 0
+          },
+          "owningBlocksFound": {
+            "beforeP50": 1442468,
+            "afterP50": 1442468,
+            "p50Ratio": 1,
+            "beforeP95": 1442468,
+            "afterP95": 1442468,
+            "p95Ratio": 1
+          },
+          "payloadBlobRows": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 6101.304599999799,
+            "afterP50": 5181.300799999983,
+            "p50Ratio": 0.8492119537844666,
+            "beforeP95": 6150.926899999729,
+            "afterP95": 5396.421000000293,
+            "p95Ratio": 0.8773346013916261
+          },
+          "prepareCount": {
+            "beforeP50": 318,
+            "afterP50": 212,
+            "p50Ratio": 0.6666666666666666,
+            "beforeP95": 318,
+            "afterP95": 212,
+            "p95Ratio": 0.6666666666666666
+          },
+          "prepareMs": {
+            "beforeP50": 14.500399999553338,
+            "afterP50": 16.199900000327034,
+            "p50Ratio": 1.117203663404185,
+            "beforeP95": 15.097599999600789,
+            "afterP95": 16.780600000405684,
+            "p95Ratio": 1.1114746715272228
+          },
+          "payloadLookupMs": {
+            "beforeP50": 6471.264900000242,
+            "afterP50": 5202.542499999952,
+            "p50Ratio": 0.8039452225174336,
+            "beforeP95": 6515.6518999998225,
+            "afterP95": 5418.210799999855,
+            "p95Ratio": 0.831568488181513
+          },
+          "brotliMs": {
+            "beforeP50": 1173.752299998945,
+            "afterP50": 1182.5490000026766,
+            "p50Ratio": 1.0074945114090421,
+            "beforeP95": 1196.2139999986684,
+            "afterP95": 1188.4032999991032,
+            "p95Ratio": 0.9934704827066277
+          },
+          "decodeParseMs": {
+            "beforeP50": 1305.5275000005786,
+            "afterP50": 1265.5532000015082,
+            "p50Ratio": 0.9693807292461839,
+            "beforeP95": 1332.1149000003352,
+            "afterP95": 1291.8561999998929,
+            "p95Ratio": 0.9697783577074078
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 2478.1503999994893,
+            "afterP50": 2452.1472999995167,
+            "p50Ratio": 0.9895070533249403,
+            "beforeP95": 2525.5140999986615,
+            "afterP95": 2478.396599999658,
+            "p95Ratio": 0.9813434025179156
+          },
+          "exactSelfMs": {
+            "beforeP50": 4756.782299998493,
+            "afterP50": 4497.712700000309,
+            "p50Ratio": 0.9455367970070302,
+            "beforeP95": 4789.330100001447,
+            "afterP95": 4743.098000000347,
+            "p95Ratio": 0.9903468545630033
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 13695.201999999874,
+            "afterP50": 12164.144399999932,
+            "p50Ratio": 0.8882048180085291,
+            "beforeP95": 13815.830899999943,
+            "afterP95": 12624.768299999996,
+            "p95Ratio": 0.9137900131652631
+          },
+          "exactTextMs": {
+            "beforeP50": 2110.411199975759,
+            "afterP50": 2078.507500000298,
+            "p50Ratio": 0.984882709125204,
+            "beforeP95": 2153.763699990901,
+            "afterP95": 2112.8367999908514,
+            "p95Ratio": 0.9809974975433831
+          },
+          "traceMs": {
+            "beforeP50": 13766.006900000008,
+            "afterP50": 12235.722299999994,
+            "p50Ratio": 0.888835984819969,
+            "beforeP95": 13888.761899999983,
+            "afterP95": 12697.942899999995,
+            "p95Ratio": 0.9142602480643008
+          },
+          "compressedBytes": {
+            "beforeP50": 61846570,
+            "afterP50": 61846570,
+            "p50Ratio": 1,
+            "beforeP95": 61846570,
+            "afterP95": 61846570,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 285103909,
+            "afterP50": 285103909,
+            "p50Ratio": 1,
+            "beforeP95": 285103909,
+            "afterP95": 285103909,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "completed": {
+        "traceMs": {
+          "beforeP50": 13766.292499999981,
+          "afterP50": 12235.99519999999,
+          "p50Ratio": 0.8888373685216995,
+          "beforeP95": 13889.032699999982,
+          "afterP95": 12698.21179999999,
+          "p95Ratio": 0.9142617829677949
+        },
+        "wallMs": {
+          "beforeP50": 13766.51449999999,
+          "afterP50": 12236.204700000002,
+          "p50Ratio": 0.88883825313953,
+          "beforeP95": 13889.246899999998,
+          "afterP95": 12698.415200000018,
+          "p95Ratio": 0.9142623276428342
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 1652374,
+            "afterP50": 1442468,
+            "p50Ratio": 0.8729670159419115,
+            "beforeP95": 1652374,
+            "afterP95": 1442468,
+            "p95Ratio": 0.8729670159419115
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 1442468,
+            "afterP50": 0,
+            "p50Ratio": 0,
+            "beforeP95": 1442468,
+            "afterP95": 0,
+            "p95Ratio": 0
+          },
+          "owningBlocksFound": {
+            "beforeP50": 1442468,
+            "afterP50": 1442468,
+            "p50Ratio": 1,
+            "beforeP95": 1442468,
+            "afterP95": 1442468,
+            "p95Ratio": 1
+          },
+          "payloadBlobRows": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 6101.304599999799,
+            "afterP50": 5181.300799999983,
+            "p50Ratio": 0.8492119537844666,
+            "beforeP95": 6150.926899999729,
+            "afterP95": 5396.421000000293,
+            "p95Ratio": 0.8773346013916261
+          },
+          "prepareCount": {
+            "beforeP50": 318,
+            "afterP50": 212,
+            "p50Ratio": 0.6666666666666666,
+            "beforeP95": 318,
+            "afterP95": 212,
+            "p95Ratio": 0.6666666666666666
+          },
+          "prepareMs": {
+            "beforeP50": 14.500399999553338,
+            "afterP50": 16.199900000327034,
+            "p50Ratio": 1.117203663404185,
+            "beforeP95": 15.097599999600789,
+            "afterP95": 16.780600000405684,
+            "p95Ratio": 1.1114746715272228
+          },
+          "payloadLookupMs": {
+            "beforeP50": 6471.264900000242,
+            "afterP50": 5202.542499999952,
+            "p50Ratio": 0.8039452225174336,
+            "beforeP95": 6515.6518999998225,
+            "afterP95": 5418.210799999855,
+            "p95Ratio": 0.831568488181513
+          },
+          "brotliMs": {
+            "beforeP50": 1173.752299998945,
+            "afterP50": 1182.5490000026766,
+            "p50Ratio": 1.0074945114090421,
+            "beforeP95": 1196.2139999986684,
+            "afterP95": 1188.4032999991032,
+            "p95Ratio": 0.9934704827066277
+          },
+          "decodeParseMs": {
+            "beforeP50": 1305.5275000005786,
+            "afterP50": 1265.5532000015082,
+            "p50Ratio": 0.9693807292461839,
+            "beforeP95": 1332.1149000003352,
+            "afterP95": 1291.8561999998929,
+            "p95Ratio": 0.9697783577074078
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 2478.1503999994893,
+            "afterP50": 2452.1472999995167,
+            "p50Ratio": 0.9895070533249403,
+            "beforeP95": 2525.5140999986615,
+            "afterP95": 2478.396599999658,
+            "p95Ratio": 0.9813434025179156
+          },
+          "exactSelfMs": {
+            "beforeP50": 4756.782299998493,
+            "afterP50": 4497.712700000309,
+            "p50Ratio": 0.9455367970070302,
+            "beforeP95": 4789.330100001447,
+            "afterP95": 4743.098000000347,
+            "p95Ratio": 0.9903468545630033
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 13695.201999999874,
+            "afterP50": 12164.144399999932,
+            "p50Ratio": 0.8882048180085291,
+            "beforeP95": 13815.830899999943,
+            "afterP95": 12624.768299999996,
+            "p95Ratio": 0.9137900131652631
+          },
+          "exactTextMs": {
+            "beforeP50": 2110.411199975759,
+            "afterP50": 2078.507500000298,
+            "p50Ratio": 0.984882709125204,
+            "beforeP95": 2153.763699990901,
+            "afterP95": 2112.8367999908514,
+            "p95Ratio": 0.9809974975433831
+          },
+          "traceMs": {
+            "beforeP50": 13766.292499999981,
+            "afterP50": 12235.99519999999,
+            "p50Ratio": 0.8888373685216995,
+            "beforeP95": 13889.032699999982,
+            "afterP95": 12698.21179999999,
+            "p95Ratio": 0.9142617829677949
+          },
+          "compressedBytes": {
+            "beforeP50": 61846570,
+            "afterP50": 61846570,
+            "p50Ratio": 1,
+            "beforeP95": 61846570,
+            "afterP95": 61846570,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 285103909,
+            "afterP50": 285103909,
+            "p50Ratio": 1,
+            "beforeP95": 285103909,
+            "afterP95": 285103909,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 4638,
+            "afterP50": 4638,
+            "p50Ratio": 1,
+            "beforeP95": 4638,
+            "afterP95": 4638,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "structural": {
+        "before": {
+          "passes": 106,
+          "filteredPasses": 106,
+          "candidatePayloadOrdinals": 4607,
+          "blockExpansionInputPayloads": 4607,
+          "owningBlocksFound": 1442468,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 575
+        },
+        "after": {
+          "passes": 106,
+          "filteredPasses": 106,
+          "candidatePayloadOrdinals": 4607,
+          "blockExpansionInputPayloads": 4607,
+          "owningBlocksFound": 1442468,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 575
+        },
+        "stableBefore": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        },
+        "stableAfter": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        }
+      }
+    },
+    "snipaste": {
+      "query": "Snipaste-2.11.3-x64",
+      "result": {
+        "total": 1,
+        "pageCount": 1,
+        "resultHash": "0a89977dd9543360d7dfccdb68bb85b36352bbe10b48279804d5b80e3f2344f3"
+      },
+      "ranking": {
+        "traceMs": {
+          "beforeP50": 606.8019000000204,
+          "afterP50": 586.5479999999807,
+          "p50Ratio": 0.9666218909333688,
+          "beforeP95": 620.4311999999918,
+          "afterP95": 639.7868999999773,
+          "p95Ratio": 1.031197173836496
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 50493,
+            "afterP50": 50493,
+            "p50Ratio": 1,
+            "beforeP95": 50493,
+            "afterP95": 50493,
+            "p95Ratio": 1
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 50493,
+            "afterP50": 0,
+            "p50Ratio": 0,
+            "beforeP95": 50493,
+            "afterP95": 0,
+            "p95Ratio": 0
+          },
+          "owningBlocksFound": {
+            "beforeP50": 50493,
+            "afterP50": 50493,
+            "p50Ratio": 1,
+            "beforeP95": 50493,
+            "afterP95": 50493,
+            "p95Ratio": 1
+          },
+          "payloadBlobRows": {
+            "beforeP50": 461,
+            "afterP50": 461,
+            "p50Ratio": 1,
+            "beforeP95": 461,
+            "afterP95": 461,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 161.3533999999927,
+            "afterP50": 163.85129999998026,
+            "p50Ratio": 1.0154809257194932,
+            "beforeP95": 166.31159999998636,
+            "afterP95": 224.45040000000154,
+            "p95Ratio": 1.3495775399913172
+          },
+          "prepareCount": {
+            "beforeP50": 6,
+            "afterP50": 4,
+            "p50Ratio": 0.6666666666666666,
+            "beforeP95": 6,
+            "afterP95": 4,
+            "p95Ratio": 0.6666666666666666
+          },
+          "prepareMs": {
+            "beforeP50": 0.4223000000056345,
+            "afterP50": 0.40329999999084976,
+            "p50Ratio": 0.9550082879125474,
+            "beforeP95": 0.4589999999734573,
+            "afterP95": 0.4818000000086613,
+            "p95Ratio": 1.0496732026939486
+          },
+          "payloadLookupMs": {
+            "beforeP50": 178.6935999999987,
+            "afterP50": 164.67579999999725,
+            "p50Ratio": 0.9215539896224513,
+            "beforeP95": 183.30629999999655,
+            "afterP95": 225.19430000000284,
+            "p95Ratio": 1.2285136953831215
+          },
+          "brotliMs": {
+            "beforeP50": 94.89789999974892,
+            "afterP50": 99.7003000001423,
+            "p50Ratio": 1.050605967048861,
+            "beforeP95": 96.78139999974519,
+            "afterP95": 102.52050000004238,
+            "p95Ratio": 1.059299617491711
+          },
+          "decodeParseMs": {
+            "beforeP50": 98.77000000013504,
+            "afterP50": 80.0852000003506,
+            "p50Ratio": 0.8108251493392842,
+            "beforeP95": 101.10579999997572,
+            "afterP95": 89.94290000016917,
+            "p95Ratio": 0.889591892850764
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 194.15600000007544,
+            "afterP50": 177.46610000038345,
+            "p50Ratio": 0.9140387111411159,
+            "beforeP95": 196.8985999993747,
+            "afterP95": 191.1506000002264,
+            "p95Ratio": 0.9708073089439612
+          },
+          "exactSelfMs": {
+            "beforeP50": 190.94879999983823,
+            "afterP50": 188.09209999997984,
+            "p50Ratio": 0.9850394451294755,
+            "beforeP95": 197.6824000001361,
+            "afterP95": 198.18269999936456,
+            "p95Ratio": 1.0025308272219888
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 562.8584000000264,
+            "afterP50": 540.6733999999997,
+            "p50Ratio": 0.9605851134139142,
+            "beforeP95": 576.5401000000129,
+            "afterP95": 593.7592999999761,
+            "p95Ratio": 1.0298664394722288
+          },
+          "exactTextMs": {
+            "beforeP50": 107.88960000185762,
+            "afterP50": 105.35600000046543,
+            "p50Ratio": 0.9765167356135479,
+            "beforeP95": 110.92819999737549,
+            "afterP95": 115.53210000140825,
+            "p95Ratio": 1.041503422972172
+          },
+          "traceMs": {
+            "beforeP50": 606.8019000000204,
+            "afterP50": 586.5479999999807,
+            "p50Ratio": 0.9666218909333688,
+            "beforeP95": 620.4311999999918,
+            "afterP95": 639.7868999999773,
+            "p95Ratio": 1.031197173836496
+          },
+          "compressedBytes": {
+            "beforeP50": 5687561,
+            "afterP50": 5687561,
+            "p50Ratio": 1,
+            "beforeP95": 5687561,
+            "afterP95": 5687561,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 29293470,
+            "afterP50": 29293470,
+            "p50Ratio": 1,
+            "beforeP95": 29293470,
+            "afterP95": 29293470,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 461,
+            "afterP50": 461,
+            "p50Ratio": 1,
+            "beforeP95": 461,
+            "afterP95": 461,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 461,
+            "afterP50": 461,
+            "p50Ratio": 1,
+            "beforeP95": 461,
+            "afterP95": 461,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "completed": {
+        "traceMs": {
+          "beforeP50": 626.6191000000108,
+          "afterP50": 590.9234999999753,
+          "p50Ratio": 0.9430346122548213,
+          "beforeP95": 640.5051000000094,
+          "afterP95": 644.1840999999549,
+          "p95Ratio": 1.0057439043029408
+        },
+        "wallMs": {
+          "beforeP50": 626.8594000000157,
+          "afterP50": 591.1579999999958,
+          "p50Ratio": 0.9430471968674011,
+          "beforeP95": 640.8277999999991,
+          "afterP95": 644.4267000000109,
+          "p95Ratio": 1.0056160172826645
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 59948,
+            "afterP50": 51374,
+            "p50Ratio": 0.8569760459064523,
+            "beforeP95": 59948,
+            "afterP95": 51374,
+            "p95Ratio": 0.8569760459064523
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 51374,
+            "afterP50": 1,
+            "p50Ratio": 0.000019465099077354303,
+            "beforeP95": 51374,
+            "afterP95": 1,
+            "p95Ratio": 0.000019465099077354303
+          },
+          "owningBlocksFound": {
+            "beforeP50": 51373,
+            "afterP50": 51373,
+            "p50Ratio": 1,
+            "beforeP95": 51373,
+            "afterP95": 51373,
+            "p95Ratio": 1
+          },
+          "payloadBlobRows": {
+            "beforeP50": 462,
+            "afterP50": 462,
+            "p50Ratio": 1,
+            "beforeP95": 462,
+            "afterP95": 462,
+            "p95Ratio": 1
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 178.18409999998403,
+            "afterP50": 167.07809999998426,
+            "p50Ratio": 0.9376712063534246,
+            "beforeP95": 182.88360000000102,
+            "afterP95": 227.6759000000311,
+            "p95Ratio": 1.2449224534076857
+          },
+          "prepareCount": {
+            "beforeP50": 11,
+            "afterP50": 8,
+            "p50Ratio": 0.7272727272727273,
+            "beforeP95": 11,
+            "afterP95": 8,
+            "p95Ratio": 0.7272727272727273
+          },
+          "prepareMs": {
+            "beforeP50": 0.6494999999995343,
+            "afterP50": 0.6221999999834225,
+            "p50Ratio": 0.9579676674116528,
+            "beforeP95": 0.6932999999844469,
+            "afterP95": 0.6903999999922235,
+            "p95Ratio": 0.9958171066027859
+          },
+          "payloadLookupMs": {
+            "beforeP50": 196.01499999998487,
+            "afterP50": 168.13279999996303,
+            "p50Ratio": 0.8577547636659235,
+            "beforeP95": 200.328600000008,
+            "afterP95": 228.65789999999106,
+            "p95Ratio": 1.1414141565407132
+          },
+          "brotliMs": {
+            "beforeP50": 95.12309999973513,
+            "afterP50": 99.92090000014286,
+            "p50Ratio": 1.0504378011273927,
+            "beforeP95": 97.00689999974566,
+            "afterP95": 102.72520000004442,
+            "p95Ratio": 1.058947353232747
+          },
+          "decodeParseMs": {
+            "beforeP50": 98.98670000012498,
+            "afterP50": 80.2847000003676,
+            "p50Ratio": 0.8110655269876279,
+            "beforeP95": 101.31289999997534,
+            "afterP95": 90.16010000015376,
+            "p95Ratio": 0.8899172760840496
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 194.58780000009574,
+            "afterP50": 177.893300000389,
+            "p50Ratio": 0.9142058237993413,
+            "beforeP95": 197.33409999933792,
+            "afterP95": 191.57780000023195,
+            "p95Ratio": 0.9708296741459014
+          },
+          "exactSelfMs": {
+            "beforeP50": 190.94879999983823,
+            "afterP50": 188.09209999997984,
+            "p50Ratio": 0.9850394451294755,
+            "beforeP95": 197.6824000001361,
+            "afterP95": 198.18269999936456,
+            "p95Ratio": 1.0025308272219888
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 562.8584000000264,
+            "afterP50": 540.6733999999997,
+            "p50Ratio": 0.9605851134139142,
+            "beforeP95": 576.5401000000129,
+            "afterP95": 593.7592999999761,
+            "p95Ratio": 1.0298664394722288
+          },
+          "exactTextMs": {
+            "beforeP50": 107.88960000185762,
+            "afterP50": 105.35600000046543,
+            "p50Ratio": 0.9765167356135479,
+            "beforeP95": 110.92819999737549,
+            "afterP95": 115.53210000140825,
+            "p95Ratio": 1.041503422972172
+          },
+          "traceMs": {
+            "beforeP50": 626.6191000000108,
+            "afterP50": 590.9234999999753,
+            "p50Ratio": 0.9430346122548213,
+            "beforeP95": 640.5051000000094,
+            "afterP95": 644.1840999999549,
+            "p95Ratio": 1.0057439043029408
+          },
+          "compressedBytes": {
+            "beforeP50": 5694799,
+            "afterP50": 5694799,
+            "p50Ratio": 1,
+            "beforeP95": 5694799,
+            "afterP95": 5694799,
+            "p95Ratio": 1
+          },
+          "decompressedBytes": {
+            "beforeP50": 29358987,
+            "afterP50": 29358987,
+            "p50Ratio": 1,
+            "beforeP95": 29358987,
+            "afterP95": 29358987,
+            "p95Ratio": 1
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 461,
+            "afterP50": 461,
+            "p50Ratio": 1,
+            "beforeP95": 461,
+            "afterP95": 461,
+            "p95Ratio": 1
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 1,
+            "afterP50": 1,
+            "p50Ratio": 1,
+            "beforeP95": 1,
+            "afterP95": 1,
+            "p95Ratio": 1
+          },
+          "payloadsRead": {
+            "beforeP50": 462,
+            "afterP50": 462,
+            "p50Ratio": 1,
+            "beforeP95": 462,
+            "afterP95": 462,
+            "p95Ratio": 1
+          }
+        }
+      },
+      "structural": {
+        "before": {
+          "passes": 3,
+          "filteredPasses": 3,
+          "candidatePayloadOrdinals": 461,
+          "blockExpansionInputPayloads": 461,
+          "owningBlocksFound": 51373,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 449
+        },
+        "after": {
+          "passes": 3,
+          "filteredPasses": 3,
+          "candidatePayloadOrdinals": 461,
+          "blockExpansionInputPayloads": 461,
+          "owningBlocksFound": 51373,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 449
+        },
+        "stableBefore": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        },
+        "stableAfter": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        }
+      }
+    },
+    "absent": {
+      "query": "seekah_absent_20260927_f391a7",
+      "result": {
+        "total": 0,
+        "pageCount": 0,
+        "resultHash": "c0bb9fad36e48c1edfb1c7d9a712f074d7c7d43f83a8798284565894f8dbc7d9"
+      },
+      "ranking": {
+        "traceMs": {
+          "beforeP50": 41.717399999994086,
+          "afterP50": 41.88230000002659,
+          "p50Ratio": 1.0039527870872231,
+          "beforeP95": 42.08999999999651,
+          "afterP95": 42.5164999999688,
+          "p95Ratio": 1.010133048229326
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "owningBlocksFound": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadBlobRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "prepareCount": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "prepareMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadLookupMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "brotliMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "decodeParseMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactSelfMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactTextMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "traceMs": {
+            "beforeP50": 41.717399999994086,
+            "afterP50": 41.88230000002659,
+            "p50Ratio": 1.0039527870872231,
+            "beforeP95": 42.08999999999651,
+            "afterP95": 42.5164999999688,
+            "p95Ratio": 1.010133048229326
+          },
+          "compressedBytes": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "decompressedBytes": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          }
+        }
+      },
+      "completed": {
+        "traceMs": {
+          "beforeP50": 41.75840000002063,
+          "afterP50": 41.92050000000745,
+          "p50Ratio": 1.0038818537105527,
+          "beforeP95": 42.130799999999,
+          "afterP95": 42.5618999999715,
+          "p95Ratio": 1.0102324190372012
+        },
+        "wallMs": {
+          "beforeP50": 41.990700000023935,
+          "afterP50": 42.13649999999325,
+          "p50Ratio": 1.0034721974144092,
+          "beforeP95": 42.34900000000198,
+          "afterP95": 42.897399999958,
+          "p95Ratio": 1.0129495383587805
+        },
+        "metrics": {
+          "blocksMetadataRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "owningBlockMappingRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "owningBlocksFound": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadBlobRows": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "sqlExecuteSumMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "prepareCount": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "prepareMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadLookupMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "brotliMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "decodeParseMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadDecompressionMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactSelfMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactInclusiveMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "exactTextMs": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "traceMs": {
+            "beforeP50": 41.75840000002063,
+            "afterP50": 41.92050000000745,
+            "p50Ratio": 1.0038818537105527,
+            "beforeP95": 42.130799999999,
+            "afterP95": 42.5618999999715,
+            "p95Ratio": 1.0102324190372012
+          },
+          "compressedBytes": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "decompressedBytes": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "uniquePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "duplicatePayloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          },
+          "payloadsRead": {
+            "beforeP50": 0,
+            "afterP50": 0,
+            "p50Ratio": null,
+            "beforeP95": 0,
+            "afterP95": 0,
+            "p95Ratio": null
+          }
+        }
+      },
+      "structural": {
+        "before": {
+          "passes": 0,
+          "filteredPasses": 0,
+          "candidatePayloadOrdinals": 0,
+          "blockExpansionInputPayloads": 0,
+          "owningBlocksFound": 0,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 0
+        },
+        "after": {
+          "passes": 0,
+          "filteredPasses": 0,
+          "candidatePayloadOrdinals": 0,
+          "blockExpansionInputPayloads": 0,
+          "owningBlocksFound": 0,
+          "fullDocumentFallbacks": 0,
+          "maxSeedCount": 0
+        },
+        "stableBefore": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        },
+        "stableAfter": {
+          "ranking": {
+            "stable": true,
+            "signatureCount": 1
+          },
+          "completed": {
+            "stable": true,
+            "signatureCount": 1
+          }
+        }
+      }
+    }
+  },
+  "notes": [
+    "Q1 selected metadata includes the mapping relation inside a MATERIALIZED CTE and preserves selected owners with LEFT JOIN.",
+    "Q2 reconstructs the complete owning-block payload closure and uses the existing document_payload_blocks_document_block index.",
+    "mappingSelectionPlacement: ranking/snippet filtered retrieval; blockSource standalone mapping remains separately timed.",
+    "selectedMetadataMapPlacement: Q1 rows become the membership Map after payload lookup timing and before decode; this placement is held constant for BEFORE/AFTER and included in exact self.",
+    "The report contains hashes, counts, timings and plans only; it does not contain document paths,正文或 snippets."
+  ]
+}

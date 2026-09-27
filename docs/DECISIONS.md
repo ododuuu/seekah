@@ -1,5 +1,99 @@
 # 設計決策紀錄
 
+## D081：0.38.0 搜尋改用 block 級 FTS5 位置索引（C2-hybrid），Bloom 與文件級 postings 退為遷移期 fallback
+
+- 日期：2026-09-27。依據 `research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md`：在真實 235,463 份文件 store 的唯讀 snapshot 上，比較 A（現況）、B（payload 級 postings）、C1（block 級 `detail=none`）、C2（block 級 `detail=full`）、D（fts5vocab 最稀有 trigram）五種索引。使用者於 2026-09-27 授權「依你認為最好的做法實作並發布」，本 ADR 據此核准。
+- 根因：文件級 postings 只能指出「哪份文件」，候選確定後必須解壓並逐 block 驗證整份文件；成本與候選文件 bytes 成正比，實測約 42 ms／MB（R² 0.98）。固定 1 KiB Bloom 在 64 KiB payload 上已飽和，無法定位文件內位置。
+- 決定：content 以 block 為 FTS row（rowid＝`blocks.id`）。
+  - 三個以上 code point：trigram `detail=full`，以 phrase 查詢證明連續出現，排序前不讀正文。
+  - 一、二個 code point：`detail=none` 的 unigram／bigram token，本身就是精確判斷。
+  - 檔名與 heading 各自有小型 trigram／unigram／bigram 表，候選以明文驗證。
+  - rank、代表 block、all-terms 覆蓋度、`field`／`sort`／篩選語意完全不變。
+  - payload 只在當頁 snippet 與 passages 讀取。
+- 證據：2,000 查詢差分與暴力 ground truth 完全相同（含 snippet）。`SPEC.md` 12.8 s→4 ms，`測試` 5.2 s→2 ms，`ing` 39.5 s→0.86 s。kill／resume 與 delete／reinsert 均與 clean build 等價。
+- 代價：store 約從 1.37 GiB 增至約 2.9 GiB；每文件刪除成本與 block 數成正比。命中十萬筆以上的查詢（例如單字 `e`）仍約 3 s，瓶頸在結果集大小；total count／top-K 另行決策，本版不改分頁與總數語意。
+- 否決：
+  - B：常見 ASCII 查詢仍 O(bytes)。
+  - C1：≥3 字仍需讀正文，`ing` 仍約 5.9 s。可作為大小預算不足時的備案。
+  - D：fts5vocab instance 會把 offset 全部送進 JS，常見詞比原生 phrase 慢約 8 倍。
+  - 外部 sidecar：沒有必要承擔部署與跨庫一致性風險。
+  - 以 unigram `detail=full` 做短詞：大小是 token 表的兩倍，精確度相同。
+- 相容：舊 index 仍保留 D076 路徑，直到 writer 以逐文件 marker（`block_index_1`）完成遷移；唯讀 CLI／MCP 不遷移，未完成時只走舊路徑。
+  - 遷移完成時，同一交易刪除 `document_blooms`、`document_payload_blooms`、`search_unigrams`、`search_trigrams`，之後的寫入不再產生它們。
+  - fresh index 從不建立這些結構；DB 檔不做 VACUUM，釋放的 page 由新索引重用。
+  - 舊路徑程式碼只為遷移期保留，日後可移除。
+- trigram 表一律使用 `case_sensitive 1`：實作時的差分測試發現，預設 trigram 會再做一次 case folding，把 `ΣΟΦΟΣ`→`σοφος` 查詢誤配到 `σοφοσreport`（JS 的 final sigma 取決於上下文），prototype 的查詢集沒有抽到這種情況。由於文字與查詢已先由 JS 正規化，關閉 folding 後 phrase 就是精確的 code point 子字串。
+- 含 U+0000 的 ≥3 字查詢無法寫成 FTS5 字串（SQLite 會截斷），改以 unigram token AND 取候選後讀正文驗證；舊路徑的同一錯誤一併改走保守 fallback，不再丟出 `unterminated string`。
+- 版本：0.37.0 從未發布，因此 0.38.0 同時包含 0.37.0 各階段與本搜尋後端；公司 Windows 驗收仍未回報，不得宣稱通過。
+
+## D080：搜尋效能診斷先補 payload／nested phase 可觀測性，不改搜尋架構
+
+- 日期：2026-09-26。使用者提供的 `測試`／`SPEC.md` trace 顯示 postings 查詢只有毫秒級，主要成本落在 payload lookup、Brotli／JSON 解壓與 exact verification；先證明候選傳遞與 fallback，再決定是否優化，不新增第二套 index、不把猜測當根因。
+- 程式實證：`postingDocumentIds()` 的 FTS5 rows 只含 document `rowid`；payload ordinal 來自 `document_payload_blooms`，再由 `document_payload_blocks` 展開到完整 owning block。每次 `streamBlocksFor` 是一個 block mapping query 加一個 payload SELECT，不是每個 payload 一條 SQL；`blockSource()` 在 page materialization 可能再次讀相同文件。
+- Search trace schema version 3 保留 `phasesMs` 作 inclusive，新增 `phaseSelfMs` 與 `inclusiveBottleneck`；`bottleneck` 改依 self time。新增 `payloadReadPasses`、`postingPayloadHits`、`expandedPayloads`、`fullDocumentFallbacks`、`filenameOnlyFallbacks`、`blockExpansionRatio`，並明確記錄 `payloadsRead` 可跨 candidate pass／page reread，故不與 `payloadsConsidered` 直接作上限比較。
+- 實測 `測試`：111 posting documents → 109 document-Bloom 後 exact；短詞使 payload Bloom 保守回完整文件，107 次實際 full fallback，2 個 filename-only，2,601 payload。page 20 後 2,619 rows／125 pass，新增 18 rows 來自 page materialization reread。實測 `SPEC.md`：144 documents、4,954 summaries、4,640 payload candidates、38 filename-only、106 pass、4,638 rows、31 個 block expansion，self bottleneck 為 payload lookup。
+- 本批只修 diagnostics／回歸與文件；不改短詞 fallback、block reconstruction、SQL batching 或 payload storage。後續若要降低成本，必須以 schema 3 metrics 先建立可重現基線。
+- 2026-09-27 補：保留既有搜尋行為，增補 SQL prepare／execute、metadata／mapping rows、ranking／snippet reads、unique／duplicate、bytes、Brotli／JSON 與 exact text 計時。實際 235,463 文件的四查詢證據寫入 `search-payload-profile-2026-09-27.json`。`SPEC.md` 的 4,638 payload 只有 31 個為 expansion、無 duplicate；lookup 主要為 1,652,374 metadata rows 與 1,442,468 mapping rows 的查詢／JS materialization，不是每 payload round trip。優先提案是減少 metadata／mapping 資料量與改善既有候選選擇性；未核准前不實作、不截斷完整 block，也不新增索引。
+- 2026-09-27 實作補充：依 `metadata-mapping-overfetch-optimization-spec.md` 完成兩條 statement-local selected CTE。Q1 只回 selected metadata、以 `s.block_id AS id`／`ordinal IS NULL` 保留 missing marker；Q2 以既有 `(document_id, block_id)` index 求完整 owning-block payload closure；selected Map 在 payload lookup boundary 後建立以保持 timing 可比。新增三個 trace counters，未新增 index／schema／cache。256-block fixture metadata 256→2、first page 256→4；同 snapshot SPEC.md metadata 1,652,374→1,442,468、standalone mapping 1,442,468→0、payload 4,638 不變；第二組完整 3＋10 benchmark 的 result hashes 相同，payloadLookup p50 0.804×、wall p50 0.889×，測試／稀有／不存在詞 p50／p95 gates 通過。報告見 `docs/metadata-mapping-optimization-2026-09-27-*.json`；本機證據不等於公司 Windows 驗收。
+
+## D079：0.37.0 工作台索引改由 worker 執行並持久化可恢復進度
+
+- 日期：2026-09-26。使用者回報第一次索引在約 85%／86.86% 停住、停止後重跑仍停住、重開 `seekah-ui.cmd` 後狀態變未知並在 99.52% 卡住。根因是 Workbench 原本在 HTTP Node event loop 直接執行 `sync()`；大型或慢 parser／SQLite 寫入會阻塞 `/api/index-status` 與停止要求，而進度只存在程序記憶體，頁面 reload 也沒有持續輪詢。
+- 手動 Workbench 索引現在由 `worker_threads` 執行，主程序只負責 API、狀態與控制；每個已提交文件仍由既有 `sync()` 交易保留，並以索引資料目錄內原子替換的 `indexing.json` 保存狀態、進度、目前路徑與摘要。這不是第二套 parser、資料庫或同步語意；檔案只保存 metadata，不保存正文，並列為索引產物。
+- 新程序若讀到前一程序 `running`／`stopping` 但 PID 已死亡，改顯示「已中斷」而不偽造完成；普通索引會依既有 metadata 略過已提交文件、繼續檢查未完成部分。狀態檔只作診斷／恢復提示，寫入失敗不能讓索引本身失敗。
+- Workbench 頁面在索引中每 750 ms 讀取狀態，保留最後成功狀態以避免暫時 SQLite busy／locked 變成「未知」；停止先送取消，兩秒仍未離開安全點才終止 worker。這不能中斷單次不可取消的 parser 內部運算，但能恢復 HTTP 控制面，下一次索引依已提交交易接續。
+
+## D075：工作台搜尋、更新與拖曳失敗皆使用真實可控狀態
+
+- 日期：2026-09-26。工作台搜尋欄位、根目錄、格式、解析狀態與排序皆由 server 搜尋契約套用，不保留只改文字的假控制項。相關性固定為檔名完全符合、檔名包含、標題、內容，同級以修改時間再路徑排序。
+- 工作台啟動不再暗中執行完整校正。「完整校正」仍列舉根目錄並比較 metadata，只解析新增或變更文件；使用者可中止目前同步，server 等待 write store 關閉後才允許根目錄刪除。日常增量更新沿用既有 detached `autoupdate`，由設定頁明確啟停。
+- 拖曳不支援格式或 parser 失敗時，server 仍建立本次 session 的穩定文件 ID 與狀態，因此可依檔名搜尋並移除；沒有正文的項目不能加入上下文。臨時文件不寫入永久索引。
+
+## D074：0.37.0 工作台採 desktop-only Paperless-inspired clean cutover
+
+- 日期：2026-09-26。依使用者最新 UI 契約，正式工作台以 Paperless 的資訊層級作參考，完全取代舊三區 GUI；不把 Paperless 假資料、品牌或外部服務帶入 runtime。
+- `src/workbench-app.ts` 採固定桌面 shell：最小 1180 CSS px、58 px topbar、約 246 px sidebar；中央文件頁支援 Preview list／Table，明細 route 使用左右獨立捲動，已選上下文改為固定 overlay drawer。手機版與底部導覽不實作。
+- 所有狀態由既有 loopback API 提供；GUI 不顯示 Provider、model、API Key、AI question、送出或 answer。`/api/preview` 僅重新驗證並產生可複製的本機上下文。
+- 舊固定第三欄、舊 route、假資料、unsafe HTML、瀏覽器儲存與外部資源均不保留。此決策只改 GUI；CLI／TUI／MCP 與既有 provider backend 契約維持。
+
+## D073：0.37.0 工作台根目錄刪除採垃圾桶流程
+
+- 日期：2026-09-26。使用者要求可勾選已索引目錄、全選、確認刪除、下次不再提醒、設定重新開啟提醒，以及垃圾桶。
+- UI 刪除只移除索引資料，不刪來源資料夾或檔案；刪除的根目錄 metadata 進入 SQLite 垃圾桶。還原不保存舊索引快照，而是重新驗證來源並重新索引；成功後移除垃圾桶項目。
+- 刪除提醒預設開啟，偏好保存於索引 metadata；確認對話框可關閉後續提醒，設定頁可再次開啟。垃圾桶永久刪除只移除垃圾桶 metadata，不操作來源路徑。
+
+## D072：0.37.0 工作台加入資料夾改用本機資料夾選擇器
+
+- 日期：2026-09-25。使用者要求「加入資料夾」改為按鈕開啟資料夾選擇器，不要求使用者手動輸入完整路徑；選取後必須再按確認才開始索引。
+- Windows 工作台由 loopback server 透過目前使用者的 PowerShell `FolderBrowserDialog` 取得選取路徑；瀏覽器先顯示唯讀選取結果，只有「確認並建立索引」才呼叫既有索引入口。
+- 取消選擇或未確認不送出索引；非 Windows 若沒有原生選擇器則清楚提示並保留 CLI `index <資料夾路徑>` 入口。臨時文件的瀏覽器選取仍是另一個只留工作階段的流程。
+
+## D070：0.37.0 登入啟動採目前使用者 Startup 捷徑
+
+- 日期：2026-09-25。`autoupdate startup enable|disable|status` 僅在 Windows 實作；預設關閉，enable 不立即啟動 daemon，disable 不影響現存 daemon。
+- enable 在目前使用者 Startup 資料夾建立產品專屬 `.lnk`，固定指向目前 `node.exe` 與編譯 CLI，透過 `--data-dir` 綁定實際索引資料目錄。使用 PowerShell COM 並以 encoded command／環境變數傳遞路徑，不拼接未跳脫 shell 命令。
+- 以旁邊的產品擁有權 marker 驗證可更新或刪除的捷徑；同名非本產品檔案拒絕覆寫，disable 不刪除。政策拒絕、路徑搬移與非 Windows 平台明確回報，手動 `autoupdate start` 保留。
+
+## D071：0.37.0 all-terms 以必要長詞 Bloom 做文件候選縮減
+
+- 日期：2026-09-25。all-terms 的文件級 Bloom 判定改為所有不在檔名中的必要長詞都必須可能存在；缺任一長詞即可安全排除，全部短詞仍完整精確掃描。
+- payload 級仍只在沒有短詞時縮小候選 payload；混合長短詞必須讀取完整文件 payload，避免長詞與短詞分散時 false negative。缺少或舊版 Bloom 一律保守放行。
+- filename-only 命中不受正文 Bloom 排除；排序、精確判定、snippet、passages 與 phrase 模式不變。測試涵蓋中文／英文、檔名命中、跨 payload、短詞與缺詞。
+
+## D069：0.37.0 背景校正採可接續批次並釋放 writer lock
+
+- 日期：2026-09-25。依 SPEC §46.8，daemon 啟動與週期完整校正不再以單次整根 `sync()` 長時間持有 writer lock；改由獨立工作狀態庫保存 generation、directory frontier、已檢查數、失敗 scope 與本輪待確認的事件世代。
+- 每批最多處理 500 個 entries 或約 250 ms，批次結束即釋放 writer lock；下一批前先處理已落盤事件，連續事件時至少每 5 秒讓一批校正執行。目錄會重列並依 generation 去重，不把 OS iterator 或排序 offset 當成可靠 cursor。
+- 只有成功列舉完成且沒有失敗或較新事件的 scope 才允許 `removeMissing`；失敗、離線、尚未完成或交錯事件的範圍保留既有索引。工作庫與主索引仍沒有跨庫原子交易，採至少一次重播與冪等更新。
+- 手動 `index`、前景 `watch` 及既有局部事件契約不變；本決策不加入 USN、Service、提權或 parser selection 變更。
+
+## D068：0.37.0 工作台要能加入新的索引根目錄
+
+- 日期：2026-09-25。使用者確認已有索引時，也要能在 UI 直接加入新資料夾，不必改用 CLI。完整行為見 SPEC §46.0 與 §46.11。2026-09-25 使用者決定開工；CURRENT 已切到 0.37.0，階段 7 已實作。
+- 重用既有 `POST /api/index` 帶 `root`、`sync()` 與多根合併／重疊拒絕；不另建 parser、資料目錄或索引寫入入口。開啟工作台仍只同步已登錄根，不得把未確認輸入當新根。
+- 索引狀態頁在 `available` 時提供「選擇資料夾」與「確認並建立索引」兩步按鈕；選取結果先顯示但不開始索引。進行中同步必須可見拒絕，禁止默默吞掉第二次請求。daemon 若已在跑，沿用動態 roots 刷新，不暗中 start。
+- 臨時文件拖曳仍不進入永久索引。GUI 提供根目錄多選刪除、全選、確認提醒與垃圾桶；不刪來源資料，還原以重新索引完成。仍不提供一次選取多條新路徑、整碟建議或 GUI 內 autoupdate 開關。
+
 ## D067：雙擊啟動自行建立相依並顯示索引進度
 
 - 日期：2026-09-24。使用者要求不必先開終端執行 `npm ci` 或 `index`。`seekah-ui.cmd`／`seekah-ui.command` 在命令視窗顯示進度；缺少 `node_modules` 或 `dist` 時自動安裝相依，完成後才開工作台。
@@ -510,3 +604,27 @@
 - 排除作用域存於 `root_ignore_scopes`，合併歷史存於 `root_merge_history`，schema 標記 `root_merge_version=1`。上層規則與適用子根規則共同約束。已涵蓋子樹可單獨增量同步，但不得宣稱上層已完整同步。
 - 同步、搜尋篩選、監看與根移除共同理解合併後的歸屬；不得呼叫會刪文件的 removeRoot 來合併。
 - 2026-09-22 補：Windows 命令列把 `"D:\"` 的尾端反斜線當成跳脫，argv 變成 `D:`；全形 `＼` 也不是路徑分隔符。輸入層將僅磁碟代號或全形分隔符正規化為 `D:\`，涵蓋判斷仍以路徑元件進行，不以字串 `D:` 當前綴。磁碟根目錄請優先寫 `D:/`。
+
+## D076：以 FTS5 unigram／trigram postings 取代全文件候選掃描
+
+- 日期：2026-09-26。依新搜尋需求加入兩個 contentless FTS5 虛擬表：`search_unigrams` 將正規化 Unicode code point 編成 token，供一、二字查詢；`search_trigrams` 保存正規化全文，供三字以上查詢。每個文件各有一列，`rowid` 綁定 `documents.id`，正文仍只存在既有 64 KiB Brotli payload。
+- FTS postings 是候選文件的第一來源；phrase 與 all-terms 先在 postings 取交集，再沿既有 Bloom／payload pruning 讀取必要 payload，最後保留原有全文核對、檔名層、排序、snippet、reference。FTS 只可排除不可能文件，不能直接作最終命中判定。
+- `ngram_index_version=1` 與每文件 `ngram_1` marker 使遷移可中斷後接續；每份文件的 postings、marker 單一交易提交，payload bytes 不重壓縮。舊 content payload 遷移同樣逐文件提交並檢查取消訊號。唯讀 CLI、status、MCP 只回報未完成並使用保守 fallback，不建表、不遷移、不寫 marker。
+- upsert、remove、root cleanup 在同一寫入交易清掉舊 postings；replace 不改文件 ID，避免 stable reference 變動。FTS5 需要 `contentless_delete=1`，以支援明確 rowid 清理。
+- Workbench 遇到 `format.needsUpgrade` 回 `202 pendingUpgrade`，背景 writer 執行 upgrade；前端輪詢狀態後重新送出原查詢。新增 benchmark 比較停用 FTS fallback 與 FTS postings 的 index time、SQLite bytes、RSS 及 rare/common/two-character/three-character/long-phrase 查詢。
+
+## D077：每次搜尋使用同一份 structured Diagnostics／Performance Trace
+
+- 日期：2026-09-26。搜尋問題需要知道總耗時、實際 phase、候選來源、文件／payload 數量、exact verification、結果數與瓶頸；trace 另外以 `bottleneck` 指出 phase 中耗時最高者。沿用既有 `performance.now()` profile／phase timing pattern，新增單一 `SearchTraceRecorder`，不引入第二套 logging framework。
+- trace 在 query normalization、FTS postings／restricted ids、document enumeration、document／payload Bloom、payload lookup／Brotli decompression、exact verification、ranking 與 snippet materialization 的實際 code path 累計量測。Bloom 已排除的文件在 trace 中可見，但不得進 exact verification；`candidateStrategy` 由實際來源推導。
+- 無 index 的 Workbench 搜尋仍回 schema-complete trace，以空 `candidateSources`／`candidateStrategy=none` 表示沒有候選管線；這與已建立索引但零命中的 `postings` trace 分開，避免診斷混淆。
+- 可見性同時提供程序內與有界持久化：`SearchResultSet.trace`、`SearchSession.trace`、`IndexStore.lastSearchTrace()`、MCP／Workbench `trace` 欄位、CLI `--verbose` 的 `SEARCH_TRACE <JSON>` 與 `/traces` UI。trace 不寫 SQLite／profile；完成事件寫入本機 `trace.log` JSONL，保留 query／question 但不保存文件內容。
+- `/api/ask` 另用同一 instrumentation pattern 的 `AnswerTraceRecorder` 記錄 context build、preview validation、provider request、response parsing 與 fallback attempt；response、`WorkbenchHandle.lastAnswerTrace()` 與本機 JSONL log 提供 schema version 2。只記 question、route、phase、bytes／counts，不記 key、context 或 answer 正文。
+- SearchSession 會暫停 recorder 以排除使用者停留時間；page／passage 物化仍記錄實際 payload reread、decompression 與 snippet，讓長期診斷能區分候選、I/O、解壓與展示階段。traceId 與 status/errorCode 讓 UI／log 可把成功、失敗與同一事件對回。
+
+## D078：Trace 必須有獨立 UI 與有界 JSONL 持久化
+
+- 日期：2026-09-26。僅把 trace 放在 response、stderr 或程序記憶體不足以追查長時間／間歇性問題；新增獨立 Workbench `/traces#<token>` 頁面與 token-protected `GET /api/traces`，可查看最近 search／answer、篩選類型／狀態、phase bars、counts、bottleneck、錯誤碼與 raw JSON。
+- 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
+- logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
+- 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。

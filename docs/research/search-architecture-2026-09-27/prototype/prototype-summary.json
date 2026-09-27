@@ -1,0 +1,3995 @@
+{
+ "generatedAt": "2026-09-27T10:04:02.816Z",
+ "environment": {
+  "node": "v22.23.2",
+  "sqlite": "3.51.3"
+ },
+ "querySet": {
+  "seed": 20260927,
+  "count": 2000,
+  "composition": {
+   "substring/ascii": 444,
+   "substring/cjk": 284,
+   "substring/mixed": 161,
+   "substring/other": 11,
+   "normalization/ascii": 70,
+   "normalization-special/other": 22,
+   "normalization-special/ascii": 4,
+   "normalization-special/cjk": 4,
+   "synthetic-random/mixed": 73,
+   "synthetic-random/ascii": 153,
+   "synthetic-random/cjk": 174,
+   "synthetic-spliced/ascii": 286,
+   "synthetic-spliced/other": 5,
+   "synthetic-spliced/mixed": 9,
+   "synthetic-marker/ascii": 300
+  }
+ },
+ "sizes": {
+  "generatedAt": "2026-09-27T08:28:53.352Z",
+  "snapshotBytes": 1466884096,
+  "baseStoreBytesWithoutACandidateStructures": 1039724544,
+  "structures": {
+   "A.documentFts(unigram+trigram, detail=none)": 69488640,
+   "A.documentBlooms": 319643648,
+   "A.payloadBlooms": 38027264,
+   "fields.filename(tri+uni+bi)": 26615808,
+   "fields.heading(tri+uni+bi+map)": 19533824,
+   "B.payloadFts(tri+uni)+rows": 95969280,
+   "C1.content_tri(detail=none)": 378609664,
+   "C1.content_uni(detail=none)": 164290560,
+   "C1.content_bi(detail=none)": 278794240,
+   "C2.content_tri_full(detail=full)": 1565376512,
+   "C2.content_uni_full(detail=full)": 926289920
+  },
+  "variantSearchStructureBytes": {
+   "A": 427159552,
+   "B": 122585088,
+   "C1": 867844096,
+   "C2": 2537816064,
+   "D": 2054610944
+  },
+  "projectedStoreBytes": {
+   "A": 1466884096,
+   "B": 1162309632,
+   "C1": 1907568640,
+   "C2": 3577540608,
+   "D": 3094335488
+  },
+  "files": {
+   "snapshot": 1466884096,
+   "fields": 48291840,
+   "B": 96747520,
+   "C1": 823222272,
+   "C2": 2504175616
+  },
+  "notes": [
+   "Base store keeps documents, blocks, document_payloads (docstore for snippets/verification) and document_payload_blocks for every variant.",
+   "D reuses C2's detail=full trigram table plus C1's unigram/bigram tables; in a product it would own only those.",
+   "Sizes are as built (no FTS optimize), after WAL checkpoint."
+  ]
+ },
+ "builds": {
+  "fields": {
+   "buildMs": 31203.099199999997,
+   "timings": {
+    "readDecodeMs": 10369.147900000069,
+    "normalizeMs": 477.3601000001512,
+    "insertMs": 9094.598799999076,
+    "commitMs": 10741.115299999987
+   },
+   "counts": {
+    "documents": 235463,
+    "rows": 356756,
+    "textChars": 10006424,
+    "alreadyDone": 0
+   },
+   "fileBytes": 48291840,
+   "maxRSSKiB": 215084,
+   "batchDocs": 50
+  },
+  "B": {
+   "buildMs": 198822.7394,
+   "timings": {
+    "readDecodeMs": 16428.374799999056,
+    "normalizeMs": 11918.639999999717,
+    "insertMs": 160440.33490000103,
+    "commitMs": 9886.51559999983
+   },
+   "counts": {
+    "documents": 18096,
+    "rows": 30749,
+    "textChars": 647005814,
+    "alreadyDone": 0
+   },
+   "fileBytes": 96747520,
+   "maxRSSKiB": 710160,
+   "batchDocs": 50
+  },
+  "C1": {
+   "buildMs": 548666.8066,
+   "timings": {
+    "readDecodeMs": 33049.56669999913,
+    "normalizeMs": 5333.19859999999,
+    "insertMs": 459710.3605000725,
+    "commitMs": 48801.255799999926
+   },
+   "counts": {
+    "documents": 18096,
+    "rows": 5313248,
+    "textChars": 632760647,
+    "alreadyDone": 0
+   },
+   "fileBytes": 823222272,
+   "maxRSSKiB": 2281888,
+   "batchDocs": 50
+  },
+  "C2": {
+   "buildMs": 440247.9539,
+   "timings": {
+    "readDecodeMs": 33437.94890000002,
+    "normalizeMs": 5049.758400001032,
+    "insertMs": 320407.19170002476,
+    "commitMs": 79707.60269999996
+   },
+   "counts": {
+    "documents": 18096,
+    "rows": 5313248,
+    "textChars": 632760647,
+    "alreadyDone": 0
+   },
+   "fileBytes": 2504175616,
+   "maxRSSKiB": 1834576,
+   "batchDocs": 50
+  }
+ },
+ "migration": {
+  "generatedAt": "2026-09-27T08:26:06.337Z",
+  "limit": 3000,
+  "variants": {
+   "fields": {
+    "cleanMs": 1568.4493,
+    "doneAtKill": 550,
+    "resumeMs": 1146.3093,
+    "resumedEqualsClean": true,
+    "churnDocuments": 285,
+    "deleteMs": 2563.6672999999996,
+    "deleteMsPerDocument": 8.99532385964912,
+    "reinsertMs": 810.6297999999997,
+    "churnEqualsClean": true,
+    "clean": {
+     "fname_tri": {
+      "terms": 5153,
+      "hash": "1a3796e845d4ea23",
+      "integrity": "ok"
+     },
+     "fname_uni": {
+      "terms": 71,
+      "hash": "fe98a0253361467f",
+      "integrity": "ok"
+     },
+     "fname_bi": {
+      "terms": 1000,
+      "hash": "8d51aa8427900730",
+      "integrity": "ok"
+     },
+     "head_tri": {
+      "terms": 1949,
+      "hash": "b57f81ec9dc0c7c0",
+      "integrity": "ok"
+     },
+     "head_uni": {
+      "terms": 57,
+      "hash": "80f63f18022e754a",
+      "integrity": "ok"
+     },
+     "head_bi": {
+      "terms": 649,
+      "hash": "8da5a70446189362",
+      "integrity": "ok"
+     },
+     "plain": "0467fc58cbea24d0",
+     "builtDocs": 3000
+    },
+    "killed": {
+     "fname_tri": {
+      "terms": 5153,
+      "hash": "1a3796e845d4ea23",
+      "integrity": "ok"
+     },
+     "fname_uni": {
+      "terms": 71,
+      "hash": "fe98a0253361467f",
+      "integrity": "ok"
+     },
+     "fname_bi": {
+      "terms": 1000,
+      "hash": "8d51aa8427900730",
+      "integrity": "ok"
+     },
+     "head_tri": {
+      "terms": 1949,
+      "hash": "b57f81ec9dc0c7c0",
+      "integrity": "ok"
+     },
+     "head_uni": {
+      "terms": 57,
+      "hash": "80f63f18022e754a",
+      "integrity": "ok"
+     },
+     "head_bi": {
+      "terms": 649,
+      "hash": "8da5a70446189362",
+      "integrity": "ok"
+     },
+     "plain": "0467fc58cbea24d0",
+     "builtDocs": 3000
+    },
+    "churn": {
+     "fname_tri": {
+      "terms": 5153,
+      "hash": "1a3796e845d4ea23",
+      "integrity": "ok"
+     },
+     "fname_uni": {
+      "terms": 71,
+      "hash": "fe98a0253361467f",
+      "integrity": "ok"
+     },
+     "fname_bi": {
+      "terms": 1000,
+      "hash": "8d51aa8427900730",
+      "integrity": "ok"
+     },
+     "head_tri": {
+      "terms": 1949,
+      "hash": "b57f81ec9dc0c7c0",
+      "integrity": "ok"
+     },
+     "head_uni": {
+      "terms": 57,
+      "hash": "80f63f18022e754a",
+      "integrity": "ok"
+     },
+     "head_bi": {
+      "terms": 649,
+      "hash": "8da5a70446189362",
+      "integrity": "ok"
+     },
+     "plain": "0467fc58cbea24d0",
+     "builtDocs": 3000
+    }
+   },
+   "B": {
+    "cleanMs": 29668.619199999997,
+    "doneAtKill": 650,
+    "resumeMs": 24529.69709999999,
+    "resumedEqualsClean": true,
+    "churnDocuments": 285,
+    "deleteMs": 3660.1698000000033,
+    "deleteMsPerDocument": 12.84270105263159,
+    "reinsertMs": 1973.5225999999966,
+    "churnEqualsClean": true,
+    "clean": {
+     "pay_tri": {
+      "terms": 163381,
+      "hash": "f5077845806761e2",
+      "integrity": "ok"
+     },
+     "pay_uni": {
+      "terms": 1049,
+      "hash": "0bb42b3135db8831",
+      "integrity": "ok"
+     },
+     "plain": "4334e217a463e19b",
+     "builtDocs": 3000
+    },
+    "killed": {
+     "pay_tri": {
+      "terms": 163381,
+      "hash": "f5077845806761e2",
+      "integrity": "ok"
+     },
+     "pay_uni": {
+      "terms": 1049,
+      "hash": "0bb42b3135db8831",
+      "integrity": "ok"
+     },
+     "plain": "4334e217a463e19b",
+     "builtDocs": 3000
+    },
+    "churn": {
+     "pay_tri": {
+      "terms": 163381,
+      "hash": "f5077845806761e2",
+      "integrity": "ok"
+     },
+     "pay_uni": {
+      "terms": 1049,
+      "hash": "0bb42b3135db8831",
+      "integrity": "ok"
+     },
+     "plain": "4334e217a463e19b",
+     "builtDocs": 3000
+    }
+   },
+   "C1": {
+    "cleanMs": 77322.9464,
+    "doneAtKill": 650,
+    "resumeMs": 84140.54210000002,
+    "resumedEqualsClean": true,
+    "churnDocuments": 285,
+    "deleteMs": 7628.7407999999705,
+    "deleteMsPerDocument": 26.767511578947264,
+    "reinsertMs": 7108.143299999996,
+    "churnEqualsClean": true,
+    "clean": {
+     "content_tri": {
+      "terms": 161571,
+      "hash": "1ec5b44f14bc023d",
+      "integrity": "ok"
+     },
+     "content_uni": {
+      "terms": 1049,
+      "hash": "5dbeda381e2f852f",
+      "integrity": "ok"
+     },
+     "content_bi": {
+      "terms": 8347,
+      "hash": "0a41aa454fcd1b4a",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    },
+    "killed": {
+     "content_tri": {
+      "terms": 161571,
+      "hash": "1ec5b44f14bc023d",
+      "integrity": "ok"
+     },
+     "content_uni": {
+      "terms": 1049,
+      "hash": "5dbeda381e2f852f",
+      "integrity": "ok"
+     },
+     "content_bi": {
+      "terms": 8347,
+      "hash": "0a41aa454fcd1b4a",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    },
+    "churn": {
+     "content_tri": {
+      "terms": 161571,
+      "hash": "1ec5b44f14bc023d",
+      "integrity": "ok"
+     },
+     "content_uni": {
+      "terms": 1049,
+      "hash": "5dbeda381e2f852f",
+      "integrity": "ok"
+     },
+     "content_bi": {
+      "terms": 8347,
+      "hash": "0a41aa454fcd1b4a",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    }
+   },
+   "C2": {
+    "cleanMs": 81346.35379999998,
+    "doneAtKill": 650,
+    "resumeMs": 72003.25469999999,
+    "resumedEqualsClean": true,
+    "churnDocuments": 285,
+    "deleteMs": 11921.027300000074,
+    "deleteMsPerDocument": 41.82816596491254,
+    "reinsertMs": 6796.747399999993,
+    "churnEqualsClean": true,
+    "clean": {
+     "content_tri_full": {
+      "terms": 161571,
+      "hash": "576645b7f48ab75f",
+      "integrity": "ok"
+     },
+     "content_uni_full": {
+      "terms": 1049,
+      "hash": "bc640d2cdee50fff",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    },
+    "killed": {
+     "content_tri_full": {
+      "terms": 161571,
+      "hash": "576645b7f48ab75f",
+      "integrity": "ok"
+     },
+     "content_uni_full": {
+      "terms": 1049,
+      "hash": "bc640d2cdee50fff",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    },
+    "churn": {
+     "content_tri_full": {
+      "terms": 161571,
+      "hash": "576645b7f48ab75f",
+      "integrity": "ok"
+     },
+     "content_uni_full": {
+      "terms": 1049,
+      "hash": "bc640d2cdee50fff",
+      "integrity": "ok"
+     },
+     "builtDocs": 3000
+    }
+   }
+  }
+ },
+ "correctness": {
+  "A": {
+   "answered": 2000,
+   "errors": 1,
+   "resultEqualTruth": 1999,
+   "resultMismatch": 0,
+   "snippetEqualTruth": 1999,
+   "snippetMismatch": 0,
+   "mismatchByKind": {},
+   "mismatches": [],
+   "errorKinds": [
+    {
+     "id": 1603,
+     "kind": "synthetic-spliced",
+     "error": "Error: unterminated string"
+    }
+   ]
+  },
+  "B": {
+   "answered": 2000,
+   "errors": 0,
+   "resultEqualTruth": 2000,
+   "resultMismatch": 0,
+   "snippetEqualTruth": 2000,
+   "snippetMismatch": 0,
+   "mismatchByKind": {},
+   "mismatches": [],
+   "errorKinds": []
+  },
+  "C1": {
+   "answered": 2000,
+   "errors": 0,
+   "resultEqualTruth": 2000,
+   "resultMismatch": 0,
+   "snippetEqualTruth": 2000,
+   "snippetMismatch": 0,
+   "mismatchByKind": {},
+   "mismatches": [],
+   "errorKinds": []
+  },
+  "C2": {
+   "answered": 2000,
+   "errors": 0,
+   "resultEqualTruth": 2000,
+   "resultMismatch": 0,
+   "snippetEqualTruth": 2000,
+   "snippetMismatch": 0,
+   "mismatchByKind": {},
+   "mismatches": [],
+   "errorKinds": []
+  },
+  "D": {
+   "answered": 2000,
+   "errors": 0,
+   "resultEqualTruth": 2000,
+   "resultMismatch": 0,
+   "snippetEqualTruth": 2000,
+   "snippetMismatch": 0,
+   "mismatchByKind": {},
+   "mismatches": [],
+   "errorKinds": []
+  }
+ },
+ "differentialStructure": {
+  "A": {
+   "len1": {
+    "queries": 80,
+    "payloadReads": 756317,
+    "decompressedBytes": 26290676243,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 2687515
+   },
+   "len2": {
+    "queries": 140,
+    "payloadReads": 1590401,
+    "decompressedBytes": 58345881085,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 71579,
+    "falsePositiveBlocks": 0,
+    "results": 1263034
+   },
+   "len3-6": {
+    "queries": 400,
+    "payloadReads": 1900555,
+    "decompressedBytes": 87973543349,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 136181,
+    "falsePositiveBlocks": 0,
+    "results": 588391
+   },
+   "len7-12": {
+    "queries": 280,
+    "payloadReads": 781982,
+    "decompressedBytes": 43246049572,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 85141,
+    "falsePositiveBlocks": 0,
+    "results": 38158
+   },
+   "normalization": {
+    "queries": 100,
+    "payloadReads": 656965,
+    "decompressedBytes": 33456701197,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 52805,
+    "falsePositiveBlocks": 0,
+    "results": 374948
+   },
+   "synthetic": {
+    "queries": 999,
+    "payloadReads": 1719407,
+    "decompressedBytes": 104613176108,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 72853,
+    "falsePositiveBlocks": 0,
+    "results": 7223
+   }
+  },
+  "B": {
+   "len1": {
+    "queries": 80,
+    "payloadReads": 413082,
+    "decompressedBytes": 5558403021,
+    "verifiedBlocks": 122497043,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 2687515
+   },
+   "len2": {
+    "queries": 140,
+    "payloadReads": 1153101,
+    "decompressedBytes": 15770701461,
+    "verifiedBlocks": 332250013,
+    "falsePositiveDocs": 351094,
+    "falsePositiveBlocks": 0,
+    "results": 1263034
+   },
+   "len3-6": {
+    "queries": 400,
+    "payloadReads": 832019,
+    "decompressedBytes": 23319201431,
+    "verifiedBlocks": 328403826,
+    "falsePositiveDocs": 134476,
+    "falsePositiveBlocks": 0,
+    "results": 588391
+   },
+   "len7-12": {
+    "queries": 280,
+    "payloadReads": 261432,
+    "decompressedBytes": 11821966357,
+    "verifiedBlocks": 65805337,
+    "falsePositiveDocs": 82210,
+    "falsePositiveBlocks": 0,
+    "results": 38158
+   },
+   "normalization": {
+    "queries": 100,
+    "payloadReads": 255133,
+    "decompressedBytes": 8391842418,
+    "verifiedBlocks": 81672108,
+    "falsePositiveDocs": 62816,
+    "falsePositiveBlocks": 0,
+    "results": 374948
+   },
+   "synthetic": {
+    "queries": 1000,
+    "payloadReads": 344946,
+    "decompressedBytes": 20620078829,
+    "verifiedBlocks": 68309942,
+    "falsePositiveDocs": 63726,
+    "falsePositiveBlocks": 0,
+    "results": 7223
+   }
+  },
+  "C1": {
+   "len1": {
+    "queries": 80,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 2687515
+   },
+   "len2": {
+    "queries": 140,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 1263034
+   },
+   "len3-6": {
+    "queries": 400,
+    "payloadReads": 687285,
+    "decompressedBytes": 20183067678,
+    "verifiedBlocks": 600375,
+    "falsePositiveDocs": 58968,
+    "falsePositiveBlocks": 141174,
+    "results": 588391
+   },
+   "len7-12": {
+    "queries": 280,
+    "payloadReads": 202240,
+    "decompressedBytes": 10488053645,
+    "verifiedBlocks": 272142,
+    "falsePositiveDocs": 28631,
+    "falsePositiveBlocks": 236593,
+    "results": 38158
+   },
+   "normalization": {
+    "queries": 100,
+    "payloadReads": 141505,
+    "decompressedBytes": 6358507899,
+    "verifiedBlocks": 92015,
+    "falsePositiveDocs": 14436,
+    "falsePositiveBlocks": 40389,
+    "results": 374948
+   },
+   "synthetic": {
+    "queries": 1000,
+    "payloadReads": 354808,
+    "decompressedBytes": 23246511611,
+    "verifiedBlocks": 71860,
+    "falsePositiveDocs": 23018,
+    "falsePositiveBlocks": 65955,
+    "results": 7223
+   }
+  },
+  "C2": {
+   "len1": {
+    "queries": 80,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 2687515
+   },
+   "len2": {
+    "queries": 140,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 1263034
+   },
+   "len3-6": {
+    "queries": 400,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 588391
+   },
+   "len7-12": {
+    "queries": 280,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 38158
+   },
+   "normalization": {
+    "queries": 100,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 374948
+   },
+   "synthetic": {
+    "queries": 1000,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 7223
+   }
+  },
+  "D": {
+   "len1": {
+    "queries": 80,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 2687515
+   },
+   "len2": {
+    "queries": 140,
+    "payloadReads": 0,
+    "decompressedBytes": 0,
+    "verifiedBlocks": 0,
+    "falsePositiveDocs": 0,
+    "falsePositiveBlocks": 0,
+    "results": 1263034
+   },
+   "len3-6": {
+    "queries": 400,
+    "payloadReads": 30084,
+    "decompressedBytes": 779292150,
+    "verifiedBlocks": 57641,
+    "falsePositiveDocs": 9163,
+    "falsePositiveBlocks": 42396,
+    "results": 588391
+   },
+   "len7-12": {
+    "queries": 280,
+    "payloadReads": 73488,
+    "decompressedBytes": 2666502467,
+    "verifiedBlocks": 64288,
+    "falsePositiveDocs": 11020,
+    "falsePositiveBlocks": 28739,
+    "results": 38158
+   },
+   "normalization": {
+    "queries": 100,
+    "payloadReads": 17240,
+    "decompressedBytes": 777686387,
+    "verifiedBlocks": 18223,
+    "falsePositiveDocs": 2665,
+    "falsePositiveBlocks": 11821,
+    "results": 374948
+   },
+   "synthetic": {
+    "queries": 1000,
+    "payloadReads": 22147,
+    "decompressedBytes": 1239552773,
+    "verifiedBlocks": 13068,
+    "falsePositiveDocs": 3665,
+    "falsePositiveBlocks": 9635,
+    "results": 7223
+   }
+  }
+ },
+ "bench": {
+  "A": {
+   "protocol": "first run + warm-up to 3 runs + 10 measured (3 when first run > 20 s); fresh process per engine",
+   "maxRSSKiB": 1733228,
+   "queries": {
+    "spec": {
+     "raw": "SPEC.md",
+     "total": 85,
+     "hash": "bf3fba1ac43e44ff4d332c2c06a120c6ed58cf883d8e623efdd22e58ad29495b",
+     "firstRunMs": 13517.9821,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 12783.939500000008,
+      "p95": 13034.002200000003,
+      "min": 12521.74459999999,
+      "max": 13034.002200000003
+     },
+     "p50": {
+      "postingMs": 2.9144999999989523,
+      "verificationMs": 12707.138600000006,
+      "decompressMs": 2533.0884999994887,
+      "rankingMs": 12783.444199999998,
+      "snippetMs": 0.4495000000024447
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 144,
+      "candidateBlocks": 0,
+      "candidatePayloads": 4640,
+      "payloadReads": 4638,
+      "compressedBytes": 61846570,
+      "decompressedBytes": 285103909,
+      "verifiedDocs": 144,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 59,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 85
+     }
+    },
+    "cjk2-tests": {
+     "raw": "測試",
+     "total": 96,
+     "hash": "7174d8980a98c5bb0552cde25b99f90306d9a758b3b39a10434f4686940aee61",
+     "firstRunMs": 5673.066900000005,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 5166.986000000004,
+      "p95": 5315.986800000013,
+      "min": 5072.142299999978,
+      "max": 5315.986800000013
+     },
+     "p50": {
+      "postingMs": 0.5018000000272878,
+      "verificationMs": 5099.3944999998785,
+      "decompressMs": 1474.966499999311,
+      "rankingMs": 5152.864900000015,
+      "snippetMs": 13.253999999986263
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 111,
+      "candidateBlocks": 0,
+      "candidatePayloads": 2601,
+      "payloadReads": 2601,
+      "compressedBytes": 31806280,
+      "decompressedBytes": 154125816,
+      "verifiedDocs": 109,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 13,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 18,
+      "results": 96
+     }
+    },
+    "cjk1-common": {
+     "raw": "的",
+     "total": 586,
+     "hash": "61831d14e77c1c120adccbd4ee408a4803e06d3e89c60cfed75bd5220803be14",
+     "firstRunMs": 9924.222699999984,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 9239.04389999999,
+      "p95": 9668.076499999966,
+      "min": 9210.834900000016,
+      "max": 9668.076499999966
+     },
+     "p50": {
+      "postingMs": 0.8592000000062399,
+      "verificationMs": 9152.002599999658,
+      "decompressMs": 2059.1184999997495,
+      "rankingMs": 9225.79310000001,
+      "snippetMs": 12.842800000042189
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 586,
+      "candidateBlocks": 0,
+      "candidatePayloads": 3850,
+      "payloadReads": 3847,
+      "compressedBytes": 45814751,
+      "decompressedBytes": 209484352,
+      "verifiedDocs": 586,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 13,
+      "results": 586
+     }
+    },
+    "cjk1-rare": {
+     "raw": "仙",
+     "total": 1,
+     "hash": "15d58b1cd260a6ca4e3f48a25cb6a9c1a03b7343e93ddc44580be97db069da0e",
+     "firstRunMs": 43.74930000002496,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 40.80849999998463,
+      "p95": 42.62410000001546,
+      "min": 39.63719999999739,
+      "max": 42.62410000001546
+     },
+     "p50": {
+      "postingMs": 0.2343000000109896,
+      "verificationMs": 1.473699999973178,
+      "decompressMs": 1.0561000000452623,
+      "rankingMs": 38.882800000021234,
+      "snippetMs": 1.8413999999756925
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 1,
+      "candidateBlocks": 0,
+      "candidatePayloads": 1,
+      "payloadReads": 1,
+      "compressedBytes": 11033,
+      "decompressedBytes": 27337,
+      "verifiedDocs": 1,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "tri-common-latin": {
+     "raw": "ing",
+     "total": 20296,
+     "hash": "6ecef08f2cea5248e8ccee6e699ef9504f57fca382df8c22a51c14f2d31dc2a7",
+     "firstRunMs": 42911.044599999965,
+     "measuredCount": 3,
+     "totalMs": {
+      "p50": 39529.644900000014,
+      "p95": 39918.5797,
+      "min": 39402.91819999996,
+      "max": 39918.5797
+     },
+     "p50": {
+      "postingMs": 20.988799999991897,
+      "verificationMs": 38743.74379999749,
+      "decompressMs": 6907.477899998194,
+      "rankingMs": 39529.3138,
+      "snippetMs": 0.3477000000420958
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 20296,
+      "candidateBlocks": 0,
+      "candidatePayloads": 23862,
+      "payloadReads": 22721,
+      "compressedBytes": 160315909,
+      "decompressedBytes": 697703735,
+      "verifiedDocs": 20296,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 20296
+     }
+    },
+    "tri-common-cjk": {
+     "raw": "下列何",
+     "total": 10,
+     "hash": "1ecbb0221585f339c86a47456b69670f5cff7f9cc651984f80e1d356b6956aa2",
+     "firstRunMs": 531.0198000000091,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 521.4633000000613,
+      "p95": 531.8784999999916,
+      "min": 516.2896999999648,
+      "max": 531.8784999999916
+     },
+     "p50": {
+      "postingMs": 0.3037000000476837,
+      "verificationMs": 389.02289999986533,
+      "decompressMs": 89.5301000000909,
+      "rankingMs": 426.9775999999838,
+      "snippetMs": 94.65200000000186
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 10,
+      "candidateBlocks": 0,
+      "candidatePayloads": 64,
+      "payloadReads": 67,
+      "compressedBytes": 1166137,
+      "decompressedBytes": 4761900,
+      "verifiedDocs": 10,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 22,
+      "results": 10
+     }
+    },
+    "tri-rare-latin": {
+     "raw": "qev",
+     "total": 14,
+     "hash": "dfc587708d07f16caba905783eae53899318c0a983e2bed85b74989664474842",
+     "firstRunMs": 1850.9775000000373,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1845.9263999999966,
+      "p95": 1869.2003999999724,
+      "min": 1832.983600000036,
+      "max": 1869.2003999999724
+     },
+     "p50": {
+      "postingMs": 0.2619999999878928,
+      "verificationMs": 1295.4300999998813,
+      "decompressMs": 408.6426000021165,
+      "rankingMs": 1341.1619000000646,
+      "snippetMs": 499.204800000065
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 14,
+      "candidateBlocks": 0,
+      "candidatePayloads": 428,
+      "payloadReads": 704,
+      "compressedBytes": 11237866,
+      "decompressedBytes": 45793862,
+      "verifiedDocs": 14,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 166,
+      "results": 14
+     }
+    },
+    "snipaste": {
+     "raw": "Snipaste-2.11.3-x64",
+     "total": 1,
+     "hash": "6b53cb599cf2f56ba4fb36f04a1cc2d81c561ffd66f9ed9aaf36c1fe321f1c00",
+     "firstRunMs": 590.8212000000058,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 582.6759000000311,
+      "p95": 613.7900000000373,
+      "min": 567.9605999999912,
+      "max": 613.7900000000373
+     },
+     "p50": {
+      "postingMs": 4.948800000012852,
+      "verificationMs": 535.139899999951,
+      "decompressMs": 179.75429999933112,
+      "rankingMs": 578.2177000000374,
+      "snippetMs": 4.466099999961443
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 2,
+      "candidateBlocks": 0,
+      "candidatePayloads": 460,
+      "payloadReads": 461,
+      "compressedBytes": 5687561,
+      "decompressedBytes": 29293470,
+      "verifiedDocs": 2,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 1,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "absent": {
+     "raw": "seekah_absent_20260927_f391a7",
+     "total": 0,
+     "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "firstRunMs": 53.53839999996126,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 42.048200000077486,
+      "p95": 44.95579999999609,
+      "min": 41.03749999997672,
+      "max": 44.95579999999609
+     },
+     "p50": {
+      "postingMs": 5.845500000054017,
+      "verificationMs": 0,
+      "decompressMs": 0,
+      "rankingMs": 42.04000000003725,
+      "snippetMs": 0.007400000002235174
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 0,
+      "candidateBlocks": 0,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 0
+     }
+    },
+    "ascii1-common": {
+     "raw": "e",
+     "total": 156218,
+     "hash": "9a63f1ade4bba31877a1d77380298fbb610e4ff94d7b10b130eb6aa95636c66e",
+     "firstRunMs": 12581.136400000076,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 10828.127000000095,
+      "p95": 11297.024600000004,
+      "min": 10604.46279999998,
+      "max": 11297.024600000004
+     },
+     "p50": {
+      "postingMs": 148.37999999988824,
+      "verificationMs": 8118.199600016815,
+      "decompressMs": 2053.7983000018867,
+      "rankingMs": 10827.884400000097,
+      "snippetMs": 0.24719999998342246
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 156218,
+      "candidateBlocks": 0,
+      "candidatePayloads": 27442,
+      "payloadReads": 7601,
+      "compressedBytes": 52391482,
+      "decompressedBytes": 209148978,
+      "verifiedDocs": 156218,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 156218
+     }
+    }
+   }
+  },
+  "B": {
+   "protocol": "first run + warm-up to 3 runs + 10 measured (3 when first run > 20 s); fresh process per engine",
+   "maxRSSKiB": 941956,
+   "queries": {
+    "spec": {
+     "raw": "SPEC.md",
+     "total": 85,
+     "hash": "bf3fba1ac43e44ff4d332c2c06a120c6ed58cf883d8e623efdd22e58ad29495b",
+     "firstRunMs": 1840.0937999999999,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1762.1050999999998,
+      "p95": 1804.0151999999998,
+      "min": 1728.4146,
+      "max": 1804.0151999999998
+     },
+     "p50": {
+      "postingMs": 32.5041999999994,
+      "verificationMs": 1727.2267000000002,
+      "decompressMs": 249.22869999997147,
+      "rankingMs": 1.5401999999994587,
+      "snippetMs": 0.37929999999869324
+     },
+     "structure": {
+      "postingRows": 34892,
+      "candidateDocs": 75,
+      "candidateBlocks": 0,
+      "candidatePayloads": 96,
+      "payloadReads": 366,
+      "compressedBytes": 3999367,
+      "decompressedBytes": 23498543,
+      "verifiedDocs": 71,
+      "verifiedBlocks": 31795,
+      "falsePositiveDocs": 24,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 85
+     }
+    },
+    "cjk2-tests": {
+     "raw": "測試",
+     "total": 96,
+     "hash": "7174d8980a98c5bb0552cde25b99f90306d9a758b3b39a10434f4686940aee61",
+     "firstRunMs": 974.9078999999983,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 959.0482999999986,
+      "p95": 979.4303,
+      "min": 948.379700000005,
+      "max": 979.4303
+     },
+     "p50": {
+      "postingMs": 4.357200000005832,
+      "verificationMs": 950.5777999999991,
+      "decompressMs": 117.53240000004007,
+      "rankingMs": 1.8000000000029104,
+      "snippetMs": 0.22950000000128057
+     },
+     "structure": {
+      "postingRows": 514,
+      "candidateDocs": 109,
+      "candidateBlocks": 0,
+      "candidatePayloads": 178,
+      "payloadReads": 175,
+      "compressedBytes": 1930374,
+      "decompressedBytes": 8116735,
+      "verifiedDocs": 109,
+      "verifiedBlocks": 29703,
+      "falsePositiveDocs": 15,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 96
+     }
+    },
+    "cjk1-common": {
+     "raw": "的",
+     "total": 586,
+     "hash": "61831d14e77c1c120adccbd4ee408a4803e06d3e89c60cfed75bd5220803be14",
+     "firstRunMs": 1337.3960999999981,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1346.5455000000002,
+      "p95": 1361.9065000000046,
+      "min": 1333.8387000000002,
+      "max": 1361.9065000000046
+     },
+     "p50": {
+      "postingMs": 7.3717000000033295,
+      "verificationMs": 1330.164699999994,
+      "decompressMs": 317.41909999988275,
+      "rankingMs": 8.473800000007031,
+      "snippetMs": 0.35869999999704305
+     },
+     "structure": {
+      "postingRows": 890,
+      "candidateDocs": 582,
+      "candidateBlocks": 0,
+      "candidatePayloads": 929,
+      "payloadReads": 713,
+      "compressedBytes": 5830159,
+      "decompressedBytes": 20296863,
+      "verifiedDocs": 579,
+      "verifiedBlocks": 119375,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 586
+     }
+    },
+    "cjk1-rare": {
+     "raw": "仙",
+     "total": 1,
+     "hash": "15d58b1cd260a6ca4e3f48a25cb6a9c1a03b7343e93ddc44580be97db069da0e",
+     "firstRunMs": 8.46190000000206,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 5.351699999999255,
+      "p95": 6.362399999998161,
+      "min": 5.282399999996414,
+      "max": 6.362399999998161
+     },
+     "p50": {
+      "postingMs": 1.809399999998277,
+      "verificationMs": 2.721799999999348,
+      "decompressMs": 1.1713999999992666,
+      "rankingMs": 0.1264000000010128,
+      "snippetMs": 0.7001000000018394
+     },
+     "structure": {
+      "postingRows": 1,
+      "candidateDocs": 1,
+      "candidateBlocks": 0,
+      "candidatePayloads": 1,
+      "payloadReads": 1,
+      "compressedBytes": 11033,
+      "decompressedBytes": 27337,
+      "verifiedDocs": 1,
+      "verifiedBlocks": 181,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "tri-common-latin": {
+     "raw": "ing",
+     "total": 20296,
+     "hash": "6ecef08f2cea5248e8ccee6e699ef9504f57fca382df8c22a51c14f2d31dc2a7",
+     "firstRunMs": 22865.90980000001,
+     "measuredCount": 3,
+     "totalMs": {
+      "p50": 22071.1676,
+      "p95": 22101.92910000001,
+      "min": 22005.6434,
+      "max": 22101.92910000001
+     },
+     "p50": {
+      "postingMs": 38.08640000000014,
+      "verificationMs": 21857.512799999997,
+      "decompressMs": 2911.8935999997484,
+      "rankingMs": 183.67309999999998,
+      "snippetMs": 0.28229999999166466
+     },
+     "structure": {
+      "postingRows": 30407,
+      "candidateDocs": 14826,
+      "candidateBlocks": 0,
+      "candidatePayloads": 22471,
+      "payloadReads": 14192,
+      "compressedBytes": 53386364,
+      "decompressedBytes": 182189227,
+      "verifiedDocs": 13700,
+      "verifiedBlocks": 4864024,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 20296
+     }
+    },
+    "tri-common-cjk": {
+     "raw": "下列何",
+     "total": 10,
+     "hash": "1ecbb0221585f339c86a47456b69670f5cff7f9cc651984f80e1d356b6956aa2",
+     "firstRunMs": 250.18049999998766,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 244.44879999998375,
+      "p95": 249.0836999999883,
+      "min": 240.92319999999017,
+      "max": 249.0836999999883
+     },
+     "p50": {
+      "postingMs": 2.799200000008568,
+      "verificationMs": 179.1880999999994,
+      "decompressMs": 51.76310000009835,
+      "rankingMs": 0.4684000000124797,
+      "snippetMs": 59.9256999999925
+     },
+     "structure": {
+      "postingRows": 63,
+      "candidateDocs": 10,
+      "candidateBlocks": 0,
+      "candidatePayloads": 66,
+      "payloadReads": 22,
+      "compressedBytes": 527079,
+      "decompressedBytes": 1913288,
+      "verifiedDocs": 10,
+      "verifiedBlocks": 62272,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 22,
+      "results": 10
+     }
+    },
+    "tri-rare-latin": {
+     "raw": "qev",
+     "total": 14,
+     "hash": "dfc587708d07f16caba905783eae53899318c0a983e2bed85b74989664474842",
+     "firstRunMs": 667.4954000000143,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 665.9994000000006,
+      "p95": 676.6435000000056,
+      "min": 649.8519000000088,
+      "max": 676.6435000000056
+     },
+     "p50": {
+      "postingMs": 2.654099999985192,
+      "verificationMs": 291.70449999999255,
+      "decompressMs": 196.24329999968177,
+      "rankingMs": 0.3219000000099186,
+      "snippetMs": 364.7841999999946
+     },
+     "structure": {
+      "postingRows": 79,
+      "candidateDocs": 14,
+      "candidateBlocks": 0,
+      "candidatePayloads": 111,
+      "payloadReads": 166,
+      "compressedBytes": 4884216,
+      "decompressedBytes": 10691484,
+      "verifiedDocs": 14,
+      "verifiedBlocks": 9862,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 166,
+      "results": 14
+     }
+    },
+    "snipaste": {
+     "raw": "Snipaste-2.11.3-x64",
+     "total": 1,
+     "hash": "6b53cb599cf2f56ba4fb36f04a1cc2d81c561ffd66f9ed9aaf36c1fe321f1c00",
+     "firstRunMs": 90.69479999999749,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 74.56529999998747,
+      "p95": 82.60169999999925,
+      "min": 73.84150000000955,
+      "max": 82.60169999999925
+     },
+     "p50": {
+      "postingMs": 53.24039999998058,
+      "verificationMs": 20.091099999990547,
+      "decompressMs": 1.0763000000151806,
+      "rankingMs": 0.17970000000786968,
+      "snippetMs": 0.6489000000001397
+     },
+     "structure": {
+      "postingRows": 72678,
+      "candidateDocs": 1,
+      "candidateBlocks": 0,
+      "candidatePayloads": 11,
+      "payloadReads": 1,
+      "compressedBytes": 7238,
+      "decompressedBytes": 65517,
+      "verifiedDocs": 1,
+      "verifiedBlocks": 9454,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "absent": {
+     "raw": "seekah_absent_20260927_f391a7",
+     "total": 0,
+     "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "firstRunMs": 79.94800000000396,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 68.66419999999925,
+      "p95": 76.41889999998966,
+      "min": 67.41830000001937,
+      "max": 76.41889999998966
+     },
+     "p50": {
+      "postingMs": 68.50809999997728,
+      "verificationMs": 0.09570000000530854,
+      "decompressMs": 0,
+      "rankingMs": 0.007799999992130324,
+      "snippetMs": 0.006400000012945384
+     },
+     "structure": {
+      "postingRows": 93282,
+      "candidateDocs": 0,
+      "candidateBlocks": 0,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 0
+     }
+    },
+    "ascii1-common": {
+     "raw": "e",
+     "total": 156218,
+     "hash": "9a63f1ade4bba31877a1d77380298fbb610e4ff94d7b10b130eb6aa95636c66e",
+     "firstRunMs": 5533.845700000005,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 5521.571200000006,
+      "p95": 5878.278499999986,
+      "min": 5360.698600000003,
+      "max": 5878.278499999986
+     },
+     "p50": {
+      "postingMs": 200.13840000002529,
+      "verificationMs": 5022.366299999994,
+      "decompressMs": 957.5406000011135,
+      "rankingMs": 300.5689999999886,
+      "snippetMs": 0.1904000000213273
+     },
+     "structure": {
+      "postingRows": 180744,
+      "candidateDocs": 17865,
+      "candidateBlocks": 0,
+      "candidatePayloads": 7601,
+      "payloadReads": 5143,
+      "compressedBytes": 17109771,
+      "decompressedBytes": 54374317,
+      "verifiedDocs": 5071,
+      "verifiedBlocks": 1139037,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 156218
+     }
+    }
+   }
+  },
+  "C1": {
+   "protocol": "first run + warm-up to 3 runs + 10 measured (3 when first run > 20 s); fresh process per engine",
+   "maxRSSKiB": 1539412,
+   "queries": {
+    "spec": {
+     "raw": "SPEC.md",
+     "total": 85,
+     "hash": "bf3fba1ac43e44ff4d332c2c06a120c6ed58cf883d8e623efdd22e58ad29495b",
+     "firstRunMs": 885.9401,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 743.8829999999998,
+      "p95": 783.9175000000005,
+      "min": 725.5123000000003,
+      "max": 783.9175000000005
+     },
+     "p50": {
+      "postingMs": 3.5509000000001834,
+      "verificationMs": 738.2228999999998,
+      "decompressMs": 402.12300000000596,
+      "rankingMs": 1.4867999999996755,
+      "snippetMs": 0.37550000000010186
+     },
+     "structure": {
+      "postingRows": 136,
+      "candidateDocs": 59,
+      "candidateBlocks": 97,
+      "candidatePayloads": 0,
+      "payloadReads": 673,
+      "compressedBytes": 7843839,
+      "decompressedBytes": 46788498,
+      "verifiedDocs": 54,
+      "verifiedBlocks": 58,
+      "falsePositiveDocs": 8,
+      "falsePositiveBlocks": 12,
+      "snippetPayloadReads": 0,
+      "results": 85
+     }
+    },
+    "cjk2-tests": {
+     "raw": "測試",
+     "total": 96,
+     "hash": "7174d8980a98c5bb0552cde25b99f90306d9a758b3b39a10434f4686940aee61",
+     "firstRunMs": 5.2237999999997555,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 2.053200000000288,
+      "p95": 2.1599999999998545,
+      "min": 2.010200000000623,
+      "max": 2.1599999999998545
+     },
+     "p50": {
+      "postingMs": 0.6119999999991705,
+      "verificationMs": 0.2513999999991938,
+      "decompressMs": 0,
+      "rankingMs": 0.880300000000716,
+      "snippetMs": 0.20390000000043074
+     },
+     "structure": {
+      "postingRows": 304,
+      "candidateDocs": 94,
+      "candidateBlocks": 274,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 96
+     }
+    },
+    "cjk1-common": {
+     "raw": "的",
+     "total": 586,
+     "hash": "61831d14e77c1c120adccbd4ee408a4803e06d3e89c60cfed75bd5220803be14",
+     "firstRunMs": 24.611500000000888,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 22.12590000000091,
+      "p95": 24.080299999999625,
+      "min": 21.849899999999252,
+      "max": 24.080299999999625
+     },
+     "p50": {
+      "postingMs": 10.732099999997445,
+      "verificationMs": 2.76549999999952,
+      "decompressMs": 0,
+      "rankingMs": 7.72190000000046,
+      "snippetMs": 0.2662000000000262
+     },
+     "structure": {
+      "postingRows": 12357,
+      "candidateDocs": 582,
+      "candidateBlocks": 11548,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 586
+     }
+    },
+    "cjk1-rare": {
+     "raw": "仙",
+     "total": 1,
+     "hash": "15d58b1cd260a6ca4e3f48a25cb6a9c1a03b7343e93ddc44580be97db069da0e",
+     "firstRunMs": 1.8197000000000116,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1.3067000000010012,
+      "p95": 1.7489999999997963,
+      "min": 1.2466000000003987,
+      "max": 1.7489999999997963
+     },
+     "p50": {
+      "postingMs": 0.3002999999989697,
+      "verificationMs": 0.13260000000082073,
+      "decompressMs": 0.6123999999999796,
+      "rankingMs": 0.11889999999948486,
+      "snippetMs": 0.7335000000002765
+     },
+     "structure": {
+      "postingRows": 2,
+      "candidateDocs": 1,
+      "candidateBlocks": 2,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "tri-common-latin": {
+     "raw": "ing",
+     "total": 20296,
+     "hash": "6ecef08f2cea5248e8ccee6e699ef9504f57fca382df8c22a51c14f2d31dc2a7",
+     "firstRunMs": 6266.7984,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 5899.0799999999945,
+      "p95": 6063.066700000003,
+      "min": 5763.722099999999,
+      "max": 6063.066700000003
+     },
+     "p50": {
+      "postingMs": 2620.4031000000105,
+      "verificationMs": 2996.304499999991,
+      "decompressMs": 2106.5361000006087,
+      "rankingMs": 177.90669999999955,
+      "snippetMs": 0.2770999999920605
+     },
+     "structure": {
+      "postingRows": 740421,
+      "candidateDocs": 14826,
+      "candidateBlocks": 719077,
+      "candidatePayloads": 0,
+      "payloadReads": 10389,
+      "compressedBytes": 38747840,
+      "decompressedBytes": 139892560,
+      "verifiedDocs": 9897,
+      "verifiedBlocks": 9897,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 20296
+     }
+    },
+    "tri-common-cjk": {
+     "raw": "下列何",
+     "total": 10,
+     "hash": "1ecbb0221585f339c86a47456b69670f5cff7f9cc651984f80e1d356b6956aa2",
+     "firstRunMs": 135.4030999999959,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 107.01309999999648,
+      "p95": 115.45669999999518,
+      "min": 101.14599999999336,
+      "max": 115.45669999999518
+     },
+     "p50": {
+      "postingMs": 6.917200000025332,
+      "verificationMs": 35.564100000003236,
+      "decompressMs": 53.86570000005304,
+      "rankingMs": 0.4501999999920372,
+      "snippetMs": 64.71729999998934
+     },
+     "structure": {
+      "postingRows": 1909,
+      "candidateDocs": 10,
+      "candidateBlocks": 1909,
+      "candidatePayloads": 0,
+      "payloadReads": 22,
+      "compressedBytes": 527079,
+      "decompressedBytes": 1913288,
+      "verifiedDocs": 10,
+      "verifiedBlocks": 10,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 22,
+      "results": 10
+     }
+    },
+    "tri-rare-latin": {
+     "raw": "qev",
+     "total": 14,
+     "hash": "dfc587708d07f16caba905783eae53899318c0a983e2bed85b74989664474842",
+     "firstRunMs": 582.7350000000006,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 570.6854999999923,
+      "p95": 606.142399999997,
+      "min": 556.9081000000006,
+      "max": 606.142399999997
+     },
+     "p50": {
+      "postingMs": 0.6246999999857508,
+      "verificationMs": 183.37829999999667,
+      "decompressMs": 200.30500000009488,
+      "rankingMs": 0.364000000001397,
+      "snippetMs": 384.0430000000051
+     },
+     "structure": {
+      "postingRows": 19,
+      "candidateDocs": 14,
+      "candidateBlocks": 19,
+      "candidatePayloads": 0,
+      "payloadReads": 166,
+      "compressedBytes": 4884216,
+      "decompressedBytes": 10691484,
+      "verifiedDocs": 14,
+      "verifiedBlocks": 14,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 166,
+      "results": 14
+     }
+    },
+    "snipaste": {
+     "raw": "Snipaste-2.11.3-x64",
+     "total": 1,
+     "hash": "6b53cb599cf2f56ba4fb36f04a1cc2d81c561ffd66f9ed9aaf36c1fe321f1c00",
+     "firstRunMs": 82.574099999998,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 7.3399999999965075,
+      "p95": 7.585500000001048,
+      "min": 7.269099999990431,
+      "max": 7.585500000001048
+     },
+     "p50": {
+      "postingMs": 5.683199999999488,
+      "verificationMs": 0.7619999999878928,
+      "decompressMs": 1.0123999999923399,
+      "rankingMs": 0.15619999999762513,
+      "snippetMs": 0.6095000000059372
+     },
+     "structure": {
+      "postingRows": 345,
+      "candidateDocs": 1,
+      "candidateBlocks": 345,
+      "candidatePayloads": 0,
+      "payloadReads": 1,
+      "compressedBytes": 7238,
+      "decompressedBytes": 65517,
+      "verifiedDocs": 1,
+      "verifiedBlocks": 1,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "absent": {
+     "raw": "seekah_absent_20260927_f391a7",
+     "total": 0,
+     "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "firstRunMs": 74.87129999999888,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 4.390200000008917,
+      "p95": 4.749199999991106,
+      "min": 4.325799999991432,
+      "max": 4.749199999991106
+     },
+     "p50": {
+      "postingMs": 4.138100000011036,
+      "verificationMs": 0.1551000000035856,
+      "decompressMs": 0,
+      "rankingMs": 0.003599999996367842,
+      "snippetMs": 0.003899999996065162
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 0,
+      "candidateBlocks": 0,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 0
+     }
+    },
+    "ascii1-common": {
+     "raw": "e",
+     "total": 156218,
+     "hash": "9a63f1ade4bba31877a1d77380298fbb610e4ff94d7b10b130eb6aa95636c66e",
+     "firstRunMs": 3439.7464000000036,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 3350.259299999976,
+      "p95": 3437.664499999999,
+      "min": 3177.8977999999915,
+      "max": 3437.664499999999
+     },
+     "p50": {
+      "postingMs": 2196.3990999999805,
+      "verificationMs": 765.586500000034,
+      "decompressMs": 0,
+      "rankingMs": 246.09969999999157,
+      "snippetMs": 0.1698000000033062
+     },
+     "structure": {
+      "postingRows": 4045731,
+      "candidateDocs": 17865,
+      "candidateBlocks": 3799754,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 156218
+     }
+    }
+   }
+  },
+  "C2": {
+   "protocol": "first run + warm-up to 3 runs + 10 measured (3 when first run > 20 s); fresh process per engine",
+   "maxRSSKiB": 1043624,
+   "queries": {
+    "spec": {
+     "raw": "SPEC.md",
+     "total": 85,
+     "hash": "bf3fba1ac43e44ff4d332c2c06a120c6ed58cf883d8e623efdd22e58ad29495b",
+     "firstRunMs": 154.28810000000001,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 4.1573999999999955,
+      "p95": 4.761400000000037,
+      "min": 4.0405999999999835,
+      "max": 4.761400000000037
+     },
+     "p50": {
+      "postingMs": 2.685199999999952,
+      "verificationMs": 0.32289999999994734,
+      "decompressMs": 0,
+      "rankingMs": 0.6766999999999825,
+      "snippetMs": 0.35180000000002565
+     },
+     "structure": {
+      "postingRows": 124,
+      "candidateDocs": 51,
+      "candidateBlocks": 85,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 85
+     }
+    },
+    "cjk2-tests": {
+     "raw": "測試",
+     "total": 96,
+     "hash": "7174d8980a98c5bb0552cde25b99f90306d9a758b3b39a10434f4686940aee61",
+     "firstRunMs": 45.616300000000024,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 2.338099999999997,
+      "p95": 2.8717999999999506,
+      "min": 2.210800000000006,
+      "max": 2.8717999999999506
+     },
+     "p50": {
+      "postingMs": 0.807200000000023,
+      "verificationMs": 0.2716000000000349,
+      "decompressMs": 0,
+      "rankingMs": 0.9272000000000276,
+      "snippetMs": 0.20909999999997808
+     },
+     "structure": {
+      "postingRows": 304,
+      "candidateDocs": 94,
+      "candidateBlocks": 274,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 96
+     }
+    },
+    "cjk1-common": {
+     "raw": "的",
+     "total": 586,
+     "hash": "61831d14e77c1c120adccbd4ee408a4803e06d3e89c60cfed75bd5220803be14",
+     "firstRunMs": 82.99770000000001,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 23.192199999999957,
+      "p95": 23.783899999999903,
+      "min": 22.649999999999977,
+      "max": 23.783899999999903
+     },
+     "p50": {
+      "postingMs": 11.199799999999982,
+      "verificationMs": 2.805200000000127,
+      "decompressMs": 0,
+      "rankingMs": 8.050299999999993,
+      "snippetMs": 0.2717999999999847
+     },
+     "structure": {
+      "postingRows": 12357,
+      "candidateDocs": 582,
+      "candidateBlocks": 11548,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 586
+     }
+    },
+    "cjk1-rare": {
+     "raw": "仙",
+     "total": 1,
+     "hash": "15d58b1cd260a6ca4e3f48a25cb6a9c1a03b7343e93ddc44580be97db069da0e",
+     "firstRunMs": 18.547500000000014,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1.596300000000042,
+      "p95": 2.119199999999978,
+      "min": 1.3701999999999543,
+      "max": 2.119199999999978
+     },
+     "p50": {
+      "postingMs": 0.3389999999999418,
+      "verificationMs": 0.1994999999999436,
+      "decompressMs": 0.7060999999999922,
+      "rankingMs": 0.1449000000000069,
+      "snippetMs": 0.835399999999936
+     },
+     "structure": {
+      "postingRows": 2,
+      "candidateDocs": 1,
+      "candidateBlocks": 2,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "tri-common-latin": {
+     "raw": "ing",
+     "total": 20296,
+     "hash": "6ecef08f2cea5248e8ccee6e699ef9504f57fca382df8c22a51c14f2d31dc2a7",
+     "firstRunMs": 1413.7175,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 854.5030999999999,
+      "p95": 880.803100000001,
+      "min": 838.3604999999989,
+      "max": 880.803100000001
+     },
+     "p50": {
+      "postingMs": 583.3916000000008,
+      "verificationMs": 73.70779999999831,
+      "decompressMs": 0,
+      "rankingMs": 183.11189999999988,
+      "snippetMs": 0.2725000000000364
+     },
+     "structure": {
+      "postingRows": 740421,
+      "candidateDocs": 14826,
+      "candidateBlocks": 719077,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 20296
+     }
+    },
+    "tri-common-cjk": {
+     "raw": "下列何",
+     "total": 10,
+     "hash": "1ecbb0221585f339c86a47456b69670f5cff7f9cc651984f80e1d356b6956aa2",
+     "firstRunMs": 96.00010000000111,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 70.38979999999901,
+      "p95": 71.44570000000022,
+      "min": 65.15190000000075,
+      "max": 71.44570000000022
+     },
+     "p50": {
+      "postingMs": 3.711200000001554,
+      "verificationMs": 0.1867999999994936,
+      "decompressMs": 28.197499999987485,
+      "rankingMs": 0.44620000000031723,
+      "snippetMs": 65.97719999999936
+     },
+     "structure": {
+      "postingRows": 1909,
+      "candidateDocs": 10,
+      "candidateBlocks": 1909,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 22,
+      "results": 10
+     }
+    },
+    "tri-rare-latin": {
+     "raw": "qev",
+     "total": 14,
+     "hash": "dfc587708d07f16caba905783eae53899318c0a983e2bed85b74989664474842",
+     "firstRunMs": 408.78900000000067,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 378.0413000000008,
+      "p95": 392.64559999999983,
+      "min": 363.49329999999827,
+      "max": 392.64559999999983
+     },
+     "p50": {
+      "postingMs": 0.5651000000034401,
+      "verificationMs": 0.17150000000037835,
+      "decompressMs": 104.59740000000238,
+      "rankingMs": 0.30279999999766005,
+      "snippetMs": 376.8126000000011
+     },
+     "structure": {
+      "postingRows": 19,
+      "candidateDocs": 14,
+      "candidateBlocks": 19,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 166,
+      "results": 14
+     }
+    },
+    "snipaste": {
+     "raw": "Snipaste-2.11.3-x64",
+     "total": 1,
+     "hash": "6b53cb599cf2f56ba4fb36f04a1cc2d81c561ffd66f9ed9aaf36c1fe321f1c00",
+     "firstRunMs": 202.27319999999963,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 7.387699999999313,
+      "p95": 10.280199999997421,
+      "min": 7.187200000000303,
+      "max": 10.280199999997421
+     },
+     "p50": {
+      "postingMs": 6.321499999998196,
+      "verificationMs": 0.1569999999992433,
+      "decompressMs": 0.5750999999982014,
+      "rankingMs": 0.1731999999974505,
+      "snippetMs": 0.7108000000007451
+     },
+     "structure": {
+      "postingRows": 345,
+      "candidateDocs": 1,
+      "candidateBlocks": 345,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "absent": {
+     "raw": "seekah_absent_20260927_f391a7",
+     "total": 0,
+     "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "firstRunMs": 245.84679999999935,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 7.071200000002136,
+      "p95": 7.279299999998329,
+      "min": 6.963299999999435,
+      "max": 7.279299999998329
+     },
+     "p50": {
+      "postingMs": 6.835999999999331,
+      "verificationMs": 0.1588000000010652,
+      "decompressMs": 0,
+      "rankingMs": 0.006300000000919681,
+      "snippetMs": 0.0051000000021304
+     },
+     "structure": {
+      "postingRows": 0,
+      "candidateDocs": 0,
+      "candidateBlocks": 0,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 0
+     }
+    },
+    "ascii1-common": {
+     "raw": "e",
+     "total": 156218,
+     "hash": "9a63f1ade4bba31877a1d77380298fbb610e4ff94d7b10b130eb6aa95636c66e",
+     "firstRunMs": 4563.792099999999,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 3394.451399999998,
+      "p95": 3570.5610000000015,
+      "min": 3301.445400000004,
+      "max": 3570.5610000000015
+     },
+     "p50": {
+      "postingMs": 2260.6288000000022,
+      "verificationMs": 761.7482000000018,
+      "decompressMs": 0,
+      "rankingMs": 296.0234999999957,
+      "snippetMs": 0.16990000000077998
+     },
+     "structure": {
+      "postingRows": 4045731,
+      "candidateDocs": 17865,
+      "candidateBlocks": 3799754,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 156218
+     }
+    }
+   }
+  },
+  "D": {
+   "protocol": "first run + warm-up to 3 runs + 10 measured (3 when first run > 20 s); fresh process per engine",
+   "maxRSSKiB": 3097744,
+   "queries": {
+    "spec": {
+     "raw": "SPEC.md",
+     "total": 85,
+     "hash": "bf3fba1ac43e44ff4d332c2c06a120c6ed58cf883d8e623efdd22e58ad29495b",
+     "firstRunMs": 153.25599999999997,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 70.13390000000004,
+      "p95": 72.02449999999999,
+      "min": 69.46320000000003,
+      "max": 72.02449999999999
+     },
+     "p50": {
+      "postingMs": 52.33770000000004,
+      "verificationMs": 16.389999999999986,
+      "decompressMs": 13.131800000000453,
+      "rankingMs": 0.685799999999972,
+      "snippetMs": 0.36620000000004893
+     },
+     "structure": {
+      "postingRows": 39350,
+      "candidateDocs": 52,
+      "candidateBlocks": 86,
+      "candidatePayloads": 0,
+      "payloadReads": 47,
+      "compressedBytes": 253160,
+      "decompressedBytes": 802650,
+      "verifiedDocs": 47,
+      "verifiedBlocks": 47,
+      "falsePositiveDocs": 1,
+      "falsePositiveBlocks": 1,
+      "snippetPayloadReads": 0,
+      "results": 85
+     }
+    },
+    "cjk2-tests": {
+     "raw": "測試",
+     "total": 96,
+     "hash": "7174d8980a98c5bb0552cde25b99f90306d9a758b3b39a10434f4686940aee61",
+     "firstRunMs": 25.2512999999999,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 2.1979999999998654,
+      "p95": 3.40969999999993,
+      "min": 2.1165000000000873,
+      "max": 3.40969999999993
+     },
+     "p50": {
+      "postingMs": 0.6730999999999767,
+      "verificationMs": 0.2882999999999356,
+      "decompressMs": 0,
+      "rankingMs": 0.8988999999999123,
+      "snippetMs": 0.21199999999998909
+     },
+     "structure": {
+      "postingRows": 304,
+      "candidateDocs": 94,
+      "candidateBlocks": 274,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 96
+     }
+    },
+    "cjk1-common": {
+     "raw": "的",
+     "total": 586,
+     "hash": "61831d14e77c1c120adccbd4ee408a4803e06d3e89c60cfed75bd5220803be14",
+     "firstRunMs": 38.56660000000011,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 22.726100000000088,
+      "p95": 24.85329999999999,
+      "min": 22.557000000000016,
+      "max": 24.85329999999999
+     },
+     "p50": {
+      "postingMs": 10.906200000000126,
+      "verificationMs": 2.898400000000038,
+      "decompressMs": 0,
+      "rankingMs": 7.892499999999927,
+      "snippetMs": 0.2748999999998887
+     },
+     "structure": {
+      "postingRows": 12357,
+      "candidateDocs": 582,
+      "candidateBlocks": 11548,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 586
+     }
+    },
+    "cjk1-rare": {
+     "raw": "仙",
+     "total": 1,
+     "hash": "15d58b1cd260a6ca4e3f48a25cb6a9c1a03b7343e93ddc44580be97db069da0e",
+     "firstRunMs": 10.892599999999902,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 1.4411999999999807,
+      "p95": 1.7834999999997763,
+      "min": 1.3134000000000015,
+      "max": 1.7834999999997763
+     },
+     "p50": {
+      "postingMs": 0.29619999999977153,
+      "verificationMs": 0.17280000000005202,
+      "decompressMs": 0.6589000000001306,
+      "rankingMs": 0.12259999999992033,
+      "snippetMs": 0.7826999999999771
+     },
+     "structure": {
+      "postingRows": 2,
+      "candidateDocs": 1,
+      "candidateBlocks": 2,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "tri-common-latin": {
+     "raw": "ing",
+     "total": 20296,
+     "hash": "6ecef08f2cea5248e8ccee6e699ef9504f57fca382df8c22a51c14f2d31dc2a7",
+     "firstRunMs": 6840.6767,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 6991.087700000004,
+      "p95": 14684.329300000005,
+      "min": 6109.032299999992,
+      "max": 14684.329300000005
+     },
+     "p50": {
+      "postingMs": 6720.891600000003,
+      "verificationMs": 74.09640000000218,
+      "decompressMs": 0,
+      "rankingMs": 188.41010000000097,
+      "snippetMs": 0.2927999999956228
+     },
+     "structure": {
+      "postingRows": 1992954,
+      "candidateDocs": 14826,
+      "candidateBlocks": 719077,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 20296
+     }
+    },
+    "tri-common-cjk": {
+     "raw": "下列何",
+     "total": 10,
+     "hash": "1ecbb0221585f339c86a47456b69670f5cff7f9cc651984f80e1d356b6956aa2",
+     "firstRunMs": 80.03820000000997,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 73.3176999999996,
+      "p95": 77.64719999999215,
+      "min": 71.76410000000033,
+      "max": 77.64719999999215
+     },
+     "p50": {
+      "postingMs": 10.243499999982305,
+      "verificationMs": 0.1481999999959953,
+      "decompressMs": 26.19079999999667,
+      "rankingMs": 0.4385000000038417,
+      "snippetMs": 62.134699999995064
+     },
+     "structure": {
+      "postingRows": 4117,
+      "candidateDocs": 10,
+      "candidateBlocks": 1909,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 22,
+      "results": 10
+     }
+    },
+    "tri-rare-latin": {
+     "raw": "qev",
+     "total": 14,
+     "hash": "dfc587708d07f16caba905783eae53899318c0a983e2bed85b74989664474842",
+     "firstRunMs": 382.6738000000041,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 376.6408000000083,
+      "p95": 394.18850000000384,
+      "min": 372.13200000001234,
+      "max": 394.18850000000384
+     },
+     "p50": {
+      "postingMs": 0.9219000000157394,
+      "verificationMs": 0.16640000000188593,
+      "decompressMs": 98.27940000005765,
+      "rankingMs": 0.28800000000046566,
+      "snippetMs": 375.2243000000017
+     },
+     "structure": {
+      "postingRows": 151,
+      "candidateDocs": 14,
+      "candidateBlocks": 19,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 166,
+      "results": 14
+     }
+    },
+    "snipaste": {
+     "raw": "Snipaste-2.11.3-x64",
+     "total": 1,
+     "hash": "6b53cb599cf2f56ba4fb36f04a1cc2d81c561ffd66f9ed9aaf36c1fe321f1c00",
+     "firstRunMs": 101.29180000000633,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 33.21459999999206,
+      "p95": 36.35710000000836,
+      "min": 31.66820000000007,
+      "max": 36.35710000000836
+     },
+     "p50": {
+      "postingMs": 30.76229999998759,
+      "verificationMs": 0.8122999999905005,
+      "decompressMs": 1.0666000000055647,
+      "rankingMs": 0.16700000000128057,
+      "snippetMs": 0.6423000000067987
+     },
+     "structure": {
+      "postingRows": 10919,
+      "candidateDocs": 1,
+      "candidateBlocks": 345,
+      "candidatePayloads": 0,
+      "payloadReads": 1,
+      "compressedBytes": 7238,
+      "decompressedBytes": 65517,
+      "verifiedDocs": 1,
+      "verifiedBlocks": 1,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 1,
+      "results": 1
+     }
+    },
+    "absent": {
+     "raw": "seekah_absent_20260927_f391a7",
+     "total": 0,
+     "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "firstRunMs": 148.49650000000838,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 32.08990000000631,
+      "p95": 32.9771999999939,
+      "min": 31.312799999999697,
+      "max": 32.9771999999939
+     },
+     "p50": {
+      "postingMs": 31.78279999998631,
+      "verificationMs": 0.16640000000188593,
+      "decompressMs": 0,
+      "rankingMs": 0.008000000001629815,
+      "snippetMs": 0.005900000003748573
+     },
+     "structure": {
+      "postingRows": 61,
+      "candidateDocs": 0,
+      "candidateBlocks": 0,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 0
+     }
+    },
+    "ascii1-common": {
+     "raw": "e",
+     "total": 156218,
+     "hash": "9a63f1ade4bba31877a1d77380298fbb610e4ff94d7b10b130eb6aa95636c66e",
+     "firstRunMs": 3377.536500000002,
+     "measuredCount": 10,
+     "totalMs": {
+      "p50": 3257.329399999988,
+      "p95": 3348.0269999999728,
+      "min": 3152.544599999994,
+      "max": 3348.0269999999728
+     },
+     "p50": {
+      "postingMs": 2149.630899999989,
+      "verificationMs": 730.6020999999892,
+      "decompressMs": 0,
+      "rankingMs": 236.18390000000363,
+      "snippetMs": 0.17339999999967404
+     },
+     "structure": {
+      "postingRows": 4045731,
+      "candidateDocs": 17865,
+      "candidateBlocks": 3799754,
+      "candidatePayloads": 0,
+      "payloadReads": 0,
+      "compressedBytes": 0,
+      "decompressedBytes": 0,
+      "verifiedDocs": 0,
+      "verifiedBlocks": 0,
+      "falsePositiveDocs": 0,
+      "falsePositiveBlocks": 0,
+      "snippetPayloadReads": 0,
+      "results": 156218
+     }
+    }
+   }
+  }
+ },
+ "costModel": {
+  "queries": {
+   "fits": {
+    "totalMs_vs_MB": {
+     "intercept": 346.87219071517956,
+     "decompressedMB": 43.35797501286039,
+     "r2": 0.9797153623086867,
+     "n": 83
+    },
+    "verificationMs_vs_MB": {
+     "intercept": 270.1844385453115,
+     "decompressedMB": 41.97984993543161,
+     "r2": 0.9817216535593427,
+     "n": 83
+    },
+    "totalMs_vs_MB_docs": {
+     "intercept": 386.66214433320044,
+     "decompressedMB": 41.26506494415803,
+     "candidateDocs": 0.027819029803427354,
+     "r2": 0.9824687884145067,
+     "n": 83
+    },
+    "largeOnly_totalMs_vs_MB": {
+     "intercept": 858.0648350996152,
+     "decompressedMB": 42.17995120938231,
+     "r2": 0.9701407046971876,
+     "n": 22
+    }
+   },
+   "rows": [
+    {
+     "id": 451,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000332,
+     "compressedMB": 0.000208,
+     "totalMs": 38.79230000000001,
+     "verificationMs": 0.9293999999999869,
+     "decompressMs": 0.2994000000000483,
+     "payloadLookupMs": 1.2904999999999518,
+     "postingMs": 0.46059999999999945,
+     "predictedMs": 0.00664,
+     "ratio": 38.79230000000001
+    },
+    {
+     "id": 275,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000255,
+     "compressedMB": 0.000134,
+     "totalMs": 40.686199999999985,
+     "verificationMs": 0.7043000000000461,
+     "decompressMs": 0.1937000000000353,
+     "payloadLookupMs": 1.3552999999999429,
+     "postingMs": 0.2874999999999659,
+     "predictedMs": 0.0051,
+     "ratio": 40.686199999999985
+    },
+    {
+     "id": 685,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000332,
+     "compressedMB": 0.000208,
+     "totalMs": 39.22889999999995,
+     "verificationMs": 0.6593000000000302,
+     "decompressMs": 0.19439999999997326,
+     "payloadLookupMs": 1.1800000000000637,
+     "postingMs": 0.6807999999999765,
+     "predictedMs": 0.00664,
+     "ratio": 39.22889999999995
+    },
+    {
+     "id": 555,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000255,
+     "compressedMB": 0.000134,
+     "totalMs": 39.495000000000005,
+     "verificationMs": 0.5580999999999676,
+     "decompressMs": 0.17999999999994998,
+     "payloadLookupMs": 0.8821000000000367,
+     "postingMs": 0.45899999999994634,
+     "predictedMs": 0.0051,
+     "ratio": 39.495000000000005
+    },
+    {
+     "id": 413,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000732,
+     "compressedMB": 0.000438,
+     "totalMs": 38.593599999999924,
+     "verificationMs": 0.6001999999999725,
+     "decompressMs": 0.21510000000000673,
+     "payloadLookupMs": 0.9236999999999398,
+     "postingMs": 0.3260999999999967,
+     "predictedMs": 0.01464,
+     "ratio": 38.593599999999924
+    },
+    {
+     "id": 701,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000677,
+     "compressedMB": 0.000456,
+     "totalMs": 43.11519999999996,
+     "verificationMs": 0.6261999999999261,
+     "decompressMs": 0.20879999999988286,
+     "payloadLookupMs": 1.034900000000107,
+     "postingMs": 3.363900000000058,
+     "predictedMs": 0.01354,
+     "ratio": 43.11519999999996
+    },
+    {
+     "id": 457,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000927,
+     "compressedMB": 0.000585,
+     "totalMs": 39.977300000000014,
+     "verificationMs": 0.5888999999999669,
+     "decompressMs": 0.21659999999997126,
+     "payloadLookupMs": 0.9385999999997239,
+     "postingMs": 0.315900000000056,
+     "predictedMs": 0.01854,
+     "ratio": 39.977300000000014
+    },
+    {
+     "id": 813,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.001393,
+     "compressedMB": 0.000817,
+     "totalMs": 41.109699999999975,
+     "verificationMs": 0.5750000000000455,
+     "decompressMs": 0.2380000000000564,
+     "payloadLookupMs": 0.9068999999997231,
+     "postingMs": 1.529399999999896,
+     "predictedMs": 0.02786,
+     "ratio": 41.109699999999975
+    },
+    {
+     "id": 789,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.000796,
+     "compressedMB": 0.000579,
+     "totalMs": 41.178499999999985,
+     "verificationMs": 0.7214999999998781,
+     "decompressMs": 0.20460000000002765,
+     "payloadLookupMs": 1.0333000000002812,
+     "postingMs": 2.7356999999999516,
+     "predictedMs": 0.01592,
+     "ratio": 41.178499999999985
+    },
+    {
+     "id": 599,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.001634,
+     "compressedMB": 0.000827,
+     "totalMs": 40.04600000000005,
+     "verificationMs": 0.6184000000000651,
+     "decompressMs": 0.2459000000001197,
+     "payloadLookupMs": 1.0188000000000557,
+     "postingMs": 0.8109000000001743,
+     "predictedMs": 0.03268,
+     "ratio": 40.04600000000005
+    },
+    {
+     "id": 815,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.002447,
+     "compressedMB": 0.001655,
+     "totalMs": 41.76729999999998,
+     "verificationMs": 0.7479000000000724,
+     "decompressMs": 0.29130000000009204,
+     "payloadLookupMs": 1.147399999999834,
+     "postingMs": 0.6026000000001659,
+     "predictedMs": 0.04894,
+     "ratio": 41.76729999999998
+    },
+    {
+     "id": 515,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.002447,
+     "compressedMB": 0.001655,
+     "totalMs": 40.200700000000325,
+     "verificationMs": 0.6980999999996129,
+     "decompressMs": 0.27999999999974534,
+     "payloadLookupMs": 1.1848000000004504,
+     "postingMs": 0.28749999999990905,
+     "predictedMs": 0.04894,
+     "ratio": 40.200700000000325
+    },
+    {
+     "id": 545,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.002447,
+     "compressedMB": 0.001655,
+     "totalMs": 41.02500000000009,
+     "verificationMs": 0.7170999999998457,
+     "decompressMs": 0.2628999999997177,
+     "payloadLookupMs": 1.2700999999997293,
+     "postingMs": 0.46079999999983556,
+     "predictedMs": 0.04894,
+     "ratio": 41.02500000000009
+    },
+    {
+     "id": 721,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.004944,
+     "compressedMB": 0.002535,
+     "totalMs": 39.87910000000011,
+     "verificationMs": 0.7030999999997221,
+     "decompressMs": 0.37039999999979045,
+     "payloadLookupMs": 1.1154999999998836,
+     "postingMs": 0.7544000000002598,
+     "predictedMs": 0.09888,
+     "ratio": 39.87910000000011
+    },
+    {
+     "id": 689,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.003441,
+     "compressedMB": 0.001758,
+     "totalMs": 39.30360000000019,
+     "verificationMs": 0.7190000000000509,
+     "decompressMs": 0.3287999999997737,
+     "payloadLookupMs": 0.9504000000001724,
+     "postingMs": 0.6136999999998807,
+     "predictedMs": 0.06882,
+     "ratio": 39.30360000000019
+    },
+    {
+     "id": 841,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.003691,
+     "compressedMB": 0.001995,
+     "totalMs": 38.82190000000037,
+     "verificationMs": 0.6968999999999141,
+     "decompressMs": 0.3706999999999425,
+     "payloadLookupMs": 0.9279999999998836,
+     "postingMs": 0.7237999999997555,
+     "predictedMs": 0.07382,
+     "ratio": 38.82190000000037
+    },
+    {
+     "id": 615,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.005906,
+     "compressedMB": 0.002415,
+     "totalMs": 39.5607,
+     "verificationMs": 0.94399999999996,
+     "decompressMs": 0.4194999999999709,
+     "payloadLookupMs": 1.2130999999994856,
+     "postingMs": 0.440900000000056,
+     "predictedMs": 0.11812,
+     "ratio": 39.5607
+    },
+    {
+     "id": 723,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.008593,
+     "compressedMB": 0.00349,
+     "totalMs": 41.80759999999964,
+     "verificationMs": 0.9528999999997723,
+     "decompressMs": 0.4853000000002794,
+     "payloadLookupMs": 1.1672000000003209,
+     "postingMs": 0.5722999999998137,
+     "predictedMs": 0.17186,
+     "ratio": 41.80759999999964
+    },
+    {
+     "id": 477,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.006531,
+     "compressedMB": 0.002941,
+     "totalMs": 40.9409999999998,
+     "verificationMs": 0.8377000000000407,
+     "decompressMs": 0.45549999999957436,
+     "payloadLookupMs": 1.055899999999383,
+     "postingMs": 0.7137000000002445,
+     "predictedMs": 0.13062,
+     "ratio": 40.9409999999998
+    },
+    {
+     "id": 797,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.010578,
+     "compressedMB": 0.004794,
+     "totalMs": 39.03870000000006,
+     "verificationMs": 0.9848999999999251,
+     "decompressMs": 0.5649999999995998,
+     "payloadLookupMs": 1.055300000000443,
+     "postingMs": 0.5691000000001623,
+     "predictedMs": 0.21156000000000003,
+     "ratio": 39.03870000000006
+    },
+    {
+     "id": 497,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.008862,
+     "compressedMB": 0.00392,
+     "totalMs": 40.44029999999975,
+     "verificationMs": 0.962500000000091,
+     "decompressMs": 0.5442000000002736,
+     "payloadLookupMs": 1.2809000000002015,
+     "postingMs": 0.5063999999997577,
+     "predictedMs": 0.17724,
+     "ratio": 40.44029999999975
+    },
+    {
+     "id": 805,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.019571,
+     "compressedMB": 0.008298,
+     "totalMs": 45.61250000000018,
+     "verificationMs": 1.3377000000000407,
+     "decompressMs": 0.970600000000104,
+     "payloadLookupMs": 1.1659000000004198,
+     "postingMs": 3.7444000000000415,
+     "predictedMs": 0.39142000000000005,
+     "ratio": 45.61250000000018
+    },
+    {
+     "id": 387,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.018179,
+     "compressedMB": 0.007312,
+     "totalMs": 75.16900000000032,
+     "verificationMs": 1.2726999999999862,
+     "decompressMs": 1.189300000000003,
+     "payloadLookupMs": 2.4442000000003645,
+     "postingMs": 0.5877000000000407,
+     "predictedMs": 0.36358,
+     "ratio": 75.16900000000032
+    },
+    {
+     "id": 727,
+     "results": 1,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 1,
+     "decompressedMB": 0.013666,
+     "compressedMB": 0.005278,
+     "totalMs": 84.25979999999981,
+     "verificationMs": 1.7682000000004336,
+     "decompressMs": 0.9575999999997293,
+     "payloadLookupMs": 1.90559999999914,
+     "postingMs": 7.479699999999866,
+     "predictedMs": 0.27332,
+     "ratio": 84.25979999999981
+    },
+    {
+     "id": 587,
+     "results": 1,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 2,
+     "decompressedMB": 0.013413,
+     "compressedMB": 0.005665,
+     "totalMs": 81.47259999999915,
+     "verificationMs": 3.357100000000173,
+     "decompressMs": 1.1091000000005806,
+     "payloadLookupMs": 3.331000000000131,
+     "postingMs": 1.5915999999997439,
+     "predictedMs": 0.26826,
+     "ratio": 81.47259999999915
+    },
+    {
+     "id": 673,
+     "results": 1,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 2,
+     "decompressedMB": 0.032449,
+     "compressedMB": 0.012332,
+     "totalMs": 94.17289999999957,
+     "verificationMs": 4.893299999999726,
+     "decompressMs": 2.1147000000000844,
+     "payloadLookupMs": 3.6965999999993073,
+     "postingMs": 9.581000000000131,
+     "predictedMs": 0.64898,
+     "ratio": 94.17289999999957
+    },
+    {
+     "id": 465,
+     "results": 3,
+     "candidateDocs": 3,
+     "verifiedDocs": 3,
+     "payloadReads": 3,
+     "decompressedMB": 0.02876,
+     "compressedMB": 0.012091,
+     "totalMs": 98.6920999999993,
+     "verificationMs": 5.041599999999562,
+     "decompressMs": 2.3358999999991283,
+     "payloadLookupMs": 6.491699999999582,
+     "postingMs": 0.9986000000008062,
+     "predictedMs": 0.5752,
+     "ratio": 98.6920999999993
+    },
+    {
+     "id": 683,
+     "results": 1,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 4,
+     "decompressedMB": 0.04616,
+     "compressedMB": 0.017321,
+     "totalMs": 98.08819999999923,
+     "verificationMs": 9.197400000000016,
+     "decompressMs": 2.7427999999999884,
+     "payloadLookupMs": 6.183600000000297,
+     "postingMs": 2.065099999999802,
+     "predictedMs": 0.9232,
+     "ratio": 98.08819999999923
+    },
+    {
+     "id": 503,
+     "results": 2,
+     "candidateDocs": 3,
+     "verifiedDocs": 3,
+     "payloadReads": 3,
+     "decompressedMB": 0.04196,
+     "compressedMB": 0.016384,
+     "totalMs": 86.85930000000008,
+     "verificationMs": 5.9947000000001935,
+     "decompressMs": 5.09270000000015,
+     "payloadLookupMs": 5.624300000000403,
+     "postingMs": 1.2935999999999694,
+     "predictedMs": 0.8392,
+     "ratio": 86.85930000000008
+    },
+    {
+     "id": 619,
+     "results": 1,
+     "candidateDocs": 3,
+     "verifiedDocs": 3,
+     "payloadReads": 3,
+     "decompressedMB": 0.05842,
+     "compressedMB": 0.023161,
+     "totalMs": 83.38749999999982,
+     "verificationMs": 6.746799999998984,
+     "decompressMs": 2.6222999999999956,
+     "payloadLookupMs": 4.275800000000345,
+     "postingMs": 0.8512000000000626,
+     "predictedMs": 1.1684,
+     "ratio": 71.36896610749727
+    },
+    {
+     "id": 285,
+     "results": 4,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 4,
+     "decompressedMB": 0.061269,
+     "compressedMB": 0.009884,
+     "totalMs": 112.23890000000029,
+     "verificationMs": 19.185700000000907,
+     "decompressMs": 3.71100000000024,
+     "payloadLookupMs": 21.5662999999995,
+     "postingMs": 0.580300000000534,
+     "predictedMs": 1.22538,
+     "ratio": 91.59517863846341
+    },
+    {
+     "id": 671,
+     "results": 3,
+     "candidateDocs": 3,
+     "verifiedDocs": 3,
+     "payloadReads": 3,
+     "decompressedMB": 0.056923,
+     "compressedMB": 0.020988,
+     "totalMs": 103.48349999999937,
+     "verificationMs": 5.731799999999566,
+     "decompressMs": 4.040600000001177,
+     "payloadLookupMs": 6.516000000000531,
+     "postingMs": 0.8820000000005166,
+     "predictedMs": 1.13846,
+     "ratio": 90.89779175377208
+    },
+    {
+     "id": 559,
+     "results": 1,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 3,
+     "decompressedMB": 0.082234,
+     "compressedMB": 0.035632,
+     "totalMs": 87.46070000000054,
+     "verificationMs": 6.102699999999459,
+     "decompressMs": 2.89009999999962,
+     "payloadLookupMs": 3.0964999999996508,
+     "postingMs": 0.9053999999996449,
+     "predictedMs": 1.6446800000000001,
+     "ratio": 53.177943429725254
+    },
+    {
+     "id": 323,
+     "results": 8,
+     "candidateDocs": 8,
+     "verifiedDocs": 8,
+     "payloadReads": 8,
+     "decompressedMB": 0.117374,
+     "compressedMB": 0.045793,
+     "totalMs": 114.61949999999979,
+     "verificationMs": 17.509600000002138,
+     "decompressMs": 8.999100000004546,
+     "payloadLookupMs": 19.91319999999905,
+     "postingMs": 0.8239000000003216,
+     "predictedMs": 2.34748,
+     "ratio": 48.8266140712593
+    },
+    {
+     "id": 369,
+     "results": 2,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 4,
+     "decompressedMB": 0.113048,
+     "compressedMB": 0.042432,
+     "totalMs": 97.4344000000001,
+     "verificationMs": 11.401400000002468,
+     "decompressMs": 5.270800000002055,
+     "payloadLookupMs": 7.294099999999162,
+     "postingMs": 0.8996000000006461,
+     "predictedMs": 2.26096,
+     "ratio": 43.09426084495086
+    },
+    {
+     "id": 423,
+     "results": 7,
+     "candidateDocs": 7,
+     "verifiedDocs": 7,
+     "payloadReads": 8,
+     "decompressedMB": 0.1691,
+     "compressedMB": 0.072712,
+     "totalMs": 111.29579999999987,
+     "verificationMs": 13.663800000000265,
+     "decompressMs": 11.07039999999688,
+     "payloadLookupMs": 14.684399999994639,
+     "postingMs": 0.7067000000006374,
+     "predictedMs": 3.382,
+     "ratio": 32.9082791247782
+    },
+    {
+     "id": 565,
+     "results": 2,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 3,
+     "decompressedMB": 0.116779,
+     "compressedMB": 0.042694,
+     "totalMs": 93.21689999999944,
+     "verificationMs": 8.021499999998923,
+     "decompressMs": 5.9452000000001135,
+     "payloadLookupMs": 5.449300000003859,
+     "postingMs": 0.8369999999995343,
+     "predictedMs": 2.3355799999999998,
+     "ratio": 39.911670762722515
+    },
+    {
+     "id": 695,
+     "results": 1,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 5,
+     "decompressedMB": 0.200536,
+     "compressedMB": 0.081255,
+     "totalMs": 98.92139999999927,
+     "verificationMs": 12.644000000000233,
+     "decompressMs": 5.7871999999988475,
+     "payloadLookupMs": 4.287499999998545,
+     "postingMs": 6.619399999999587,
+     "predictedMs": 4.01072,
+     "ratio": 24.664249810507656
+    },
+    {
+     "id": 511,
+     "results": 6,
+     "candidateDocs": 6,
+     "verifiedDocs": 6,
+     "payloadReads": 10,
+     "decompressedMB": 0.367638,
+     "compressedMB": 0.152603,
+     "totalMs": 122.3082000000013,
+     "verificationMs": 24.20180000000073,
+     "decompressMs": 16.732099999999264,
+     "payloadLookupMs": 15.975900000001275,
+     "postingMs": 0.6452000000008411,
+     "predictedMs": 7.35276,
+     "ratio": 16.634325069769897
+    },
+    {
+     "id": 535,
+     "results": 13,
+     "candidateDocs": 14,
+     "verifiedDocs": 14,
+     "payloadReads": 14,
+     "decompressedMB": 0.287979,
+     "compressedMB": 0.108034,
+     "totalMs": 115.70200000000114,
+     "verificationMs": 28.74779999999737,
+     "decompressMs": 18.75060000000485,
+     "payloadLookupMs": 29.38090000000011,
+     "postingMs": 2.485099999999875,
+     "predictedMs": 5.75958,
+     "ratio": 20.088617572809326
+    },
+    {
+     "id": 687,
+     "results": 1,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 5,
+     "decompressedMB": 0.200536,
+     "compressedMB": 0.081255,
+     "totalMs": 91.4276000000009,
+     "verificationMs": 10.95850000000246,
+     "decompressMs": 5.427799999995841,
+     "payloadLookupMs": 3.6216999999996915,
+     "postingMs": 2.9557999999997264,
+     "predictedMs": 4.01072,
+     "ratio": 22.79580723660612
+    },
+    {
+     "id": 253,
+     "results": 30,
+     "candidateDocs": 30,
+     "verifiedDocs": 30,
+     "payloadReads": 32,
+     "decompressedMB": 0.701352,
+     "compressedMB": 0.261178,
+     "totalMs": 200.0666000000001,
+     "verificationMs": 66.79320000000553,
+     "decompressMs": 38.79090000000542,
+     "payloadLookupMs": 54.59060000000318,
+     "postingMs": 0.6093000000000757,
+     "predictedMs": 14.02704,
+     "ratio": 14.26292361039821
+    },
+    {
+     "id": 807,
+     "results": 17,
+     "candidateDocs": 17,
+     "verifiedDocs": 17,
+     "payloadReads": 17,
+     "decompressedMB": 0.465804,
+     "compressedMB": 0.154125,
+     "totalMs": 169.6900000000005,
+     "verificationMs": 33.00589999999647,
+     "decompressMs": 29.411999999998443,
+     "payloadLookupMs": 36.43139999999403,
+     "postingMs": 4.350900000001275,
+     "predictedMs": 9.31608,
+     "ratio": 18.214742681471233
+    },
+    {
+     "id": 355,
+     "results": 16,
+     "candidateDocs": 16,
+     "verifiedDocs": 16,
+     "payloadReads": 18,
+     "decompressedMB": 0.503896,
+     "compressedMB": 0.199869,
+     "totalMs": 188.21479999999974,
+     "verificationMs": 51.86199999999917,
+     "decompressMs": 28.560599999997066,
+     "payloadLookupMs": 51.25120000000243,
+     "postingMs": 0.6604999999999563,
+     "predictedMs": 10.07792,
+     "ratio": 18.67595694349625
+    },
+    {
+     "id": 553,
+     "results": 1,
+     "candidateDocs": 24,
+     "verifiedDocs": 24,
+     "payloadReads": 25,
+     "decompressedMB": 0.499855,
+     "compressedMB": 0.189165,
+     "totalMs": 135.27990000000136,
+     "verificationMs": 50.03349999999591,
+     "decompressMs": 17.966499999993175,
+     "payloadLookupMs": 22.630400000005466,
+     "postingMs": 1.809000000001106,
+     "predictedMs": 9.9971,
+     "ratio": 13.531914255134126
+    },
+    {
+     "id": 401,
+     "results": 8,
+     "candidateDocs": 8,
+     "verifiedDocs": 8,
+     "payloadReads": 26,
+     "decompressedMB": 1.509012,
+     "compressedMB": 0.338131,
+     "totalMs": 328.8329999999987,
+     "verificationMs": 202.4976000000006,
+     "decompressMs": 50.16229999999268,
+     "payloadLookupMs": 105.04030000000421,
+     "postingMs": 0.7965999999996711,
+     "predictedMs": 30.18024,
+     "ratio": 10.895639000882653
+    },
+    {
+     "id": 223,
+     "results": 47,
+     "candidateDocs": 47,
+     "verifiedDocs": 47,
+     "payloadReads": 50,
+     "decompressedMB": 1.238359,
+     "compressedMB": 0.468683,
+     "totalMs": 272.3190000000013,
+     "verificationMs": 112.84939999999187,
+     "decompressMs": 56.74799999998504,
+     "payloadLookupMs": 74.64329999998881,
+     "postingMs": 0.8780000000006112,
+     "predictedMs": 24.76718,
+     "ratio": 10.995155685871437
+    },
+    {
+     "id": 773,
+     "results": 2,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 25,
+     "decompressedMB": 1.556022,
+     "compressedMB": 0.335345,
+     "totalMs": 538.1731999999975,
+     "verificationMs": 433.6713000000018,
+     "decompressMs": 54.17910000001939,
+     "payloadLookupMs": 228.8840000000091,
+     "postingMs": 1.1212000000014086,
+     "predictedMs": 31.120440000000002,
+     "ratio": 17.293238784541522
+    },
+    {
+     "id": 239,
+     "results": 2,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 16,
+     "decompressedMB": 1.188382,
+     "compressedMB": 0.283785,
+     "totalMs": 351.71810000000187,
+     "verificationMs": 221.58810000000085,
+     "decompressMs": 39.5296000000053,
+     "payloadLookupMs": 113.97360000000117,
+     "postingMs": 0.6026999999994587,
+     "predictedMs": 23.76764,
+     "ratio": 14.798191995503208
+    },
+    {
+     "id": 655,
+     "results": 4,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 46,
+     "decompressedMB": 2.984395,
+     "compressedMB": 0.644613,
+     "totalMs": 1003.9583999999995,
+     "verificationMs": 862.6571000000004,
+     "decompressMs": 101.25610000000961,
+     "payloadLookupMs": 443.7689000000064,
+     "postingMs": 1.310300000001007,
+     "predictedMs": 59.6879,
+     "ratio": 16.820132723717865
+    },
+    {
+     "id": 699,
+     "results": 4,
+     "candidateDocs": 6,
+     "verifiedDocs": 6,
+     "payloadReads": 48,
+     "decompressedMB": 2.952596,
+     "compressedMB": 0.645643,
+     "totalMs": 458.73479999999836,
+     "verificationMs": 349.3657999999996,
+     "decompressMs": 73.36410000000251,
+     "payloadLookupMs": 157.83069999999861,
+     "postingMs": 1.5698999999985972,
+     "predictedMs": 59.05192,
+     "ratio": 7.768329971320125
+    },
+    {
+     "id": 577,
+     "results": 4,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 45,
+     "decompressedMB": 2.946056,
+     "compressedMB": 0.6382,
+     "totalMs": 985.4886999999981,
+     "verificationMs": 847.6952000000019,
+     "decompressMs": 88.62299999999595,
+     "payloadLookupMs": 468.62409999999727,
+     "postingMs": 0.8673000000017055,
+     "predictedMs": 58.92112,
+     "ratio": 16.725559527721096
+    },
+    {
+     "id": 637,
+     "results": 4,
+     "candidateDocs": 4,
+     "verifiedDocs": 4,
+     "payloadReads": 48,
+     "decompressedMB": 3.011913,
+     "compressedMB": 0.650355,
+     "totalMs": 1001.0121000000036,
+     "verificationMs": 865.6195999999982,
+     "decompressMs": 98.12099999998827,
+     "payloadLookupMs": 447.97149999998874,
+     "postingMs": 1.6489000000001397,
+     "predictedMs": 60.23826,
+     "ratio": 16.61754672196713
+    },
+    {
+     "id": 303,
+     "results": 10,
+     "candidateDocs": 10,
+     "verifiedDocs": 10,
+     "payloadReads": 58,
+     "decompressedMB": 4.10551,
+     "compressedMB": 1.00115,
+     "totalMs": 1018.4411000000036,
+     "verificationMs": 752.7269999999844,
+     "decompressMs": 147.52460000001884,
+     "payloadLookupMs": 401.036500000002,
+     "postingMs": 0.7228000000031898,
+     "predictedMs": 82.11019999999999,
+     "ratio": 12.403344529668711
+    },
+    {
+     "id": 373,
+     "results": 9,
+     "candidateDocs": 9,
+     "verifiedDocs": 9,
+     "payloadReads": 63,
+     "decompressedMB": 4.570007,
+     "compressedMB": 1.099142,
+     "totalMs": 1182.724500000004,
+     "verificationMs": 911.0098000000144,
+     "decompressMs": 167.27299999996467,
+     "payloadLookupMs": 496.0305000000226,
+     "postingMs": 0.9156999999977415,
+     "predictedMs": 91.40014000000001,
+     "ratio": 12.940073177130843
+    },
+    {
+     "id": 1307,
+     "results": 0,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 68,
+     "decompressedMB": 4.471008,
+     "compressedMB": 1.611671,
+     "totalMs": 266.02449999999953,
+     "verificationMs": 183.00089999999182,
+     "decompressMs": 70.1056999999928,
+     "payloadLookupMs": 8.367800000007264,
+     "postingMs": 1.6517000000021653,
+     "predictedMs": 89.42016000000001,
+     "ratio": 2.974994676815603
+    },
+    {
+     "id": 547,
+     "results": 9,
+     "candidateDocs": 9,
+     "verifiedDocs": 9,
+     "payloadReads": 67,
+     "decompressedMB": 4.714539,
+     "compressedMB": 1.135881,
+     "totalMs": 1178.521400000005,
+     "verificationMs": 886.5908999999883,
+     "decompressMs": 164.15330000005633,
+     "payloadLookupMs": 445.4407999999821,
+     "postingMs": 0.9894999999960419,
+     "predictedMs": 94.29078000000001,
+     "ratio": 12.49879786761765
+    },
+    {
+     "id": 1067,
+     "results": 0,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 104,
+     "decompressedMB": 6.739208,
+     "compressedMB": 1.933239,
+     "totalMs": 1932.6865000000034,
+     "verificationMs": 1857.5936999999976,
+     "decompressMs": 136.92100000001665,
+     "payloadLookupMs": 983.8861000000034,
+     "postingMs": 1.5331999999980326,
+     "predictedMs": 134.78415999999999,
+     "ratio": 14.339121896816389
+    },
+    {
+     "id": 1369,
+     "results": 0,
+     "candidateDocs": 2,
+     "verifiedDocs": 2,
+     "payloadReads": 144,
+     "decompressedMB": 9.356771,
+     "compressedMB": 3.001928,
+     "totalMs": 1872.3556000000026,
+     "verificationMs": 1793.7998000000007,
+     "decompressMs": 163.67840000006981,
+     "payloadLookupMs": 887.3331000000035,
+     "postingMs": 1.2652999999991152,
+     "predictedMs": 187.13542,
+     "ratio": 10.005351205025764
+    },
+    {
+     "id": 1253,
+     "results": 0,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 104,
+     "decompressedMB": 6.739208,
+     "compressedMB": 1.933239,
+     "totalMs": 833.9089999999924,
+     "verificationMs": 795.8210999999937,
+     "decompressMs": 69.68400000006659,
+     "payloadLookupMs": 440.77569999999105,
+     "postingMs": 0.6809999999968568,
+     "predictedMs": 134.78415999999999,
+     "ratio": 6.186995563870357
+    },
+    {
+     "id": 1065,
+     "results": 0,
+     "candidateDocs": 1,
+     "verifiedDocs": 1,
+     "payloadReads": 104,
+     "decompressedMB": 6.739208,
+     "compressedMB": 1.933239,
+     "totalMs": 1924.8094000000128,
+     "verificationMs": 1841.6858999999968,
+     "decompressMs": 131.32639999999083,
+     "payloadLookupMs": 986.0905999999959,
+     "postingMs": 1.5700999999971827,
+     "predictedMs": 134.78415999999999,
+     "ratio": 14.280679569468793
+    },
+    {
+     "id": 7,
+     "results": 62,
+     "candidateDocs": 62,
+     "verifiedDocs": 62,
+     "payloadReads": 329,
+     "decompressedMB": 18.337617,
+     "compressedMB": 4.898289,
+     "totalMs": 1917.236699999994,
+     "verificationMs": 1663.4274000000441,
+     "decompressMs": 540.8119999999035,
+     "payloadLookupMs": 425.0390999999363,
+     "postingMs": 0.866199999989476,
+     "predictedMs": 366.75234,
+     "ratio": 5.227605909753688
+    },
+    {
+     "id": 951,
+     "results": 1,
+     "candidateDocs": 3,
+     "verifiedDocs": 3,
+     "payloadReads": 212,
+     "decompressedMB": 12.854903,
+     "compressedMB": 3.555448,
+     "totalMs": 3126.129099999991,
+     "verificationMs": 3001.3311000000103,
+     "decompressMs": 258.9829000001482,
+     "payloadLookupMs": 1468.6227999999974,
+     "postingMs": 3.438299999994342,
+     "predictedMs": 257.09806000000003,
+     "ratio": 12.159287005121667
+    },
+    {
+     "id": 1817,
+     "results": 0,
+     "candidateDocs": 5,
+     "verifiedDocs": 5,
+     "payloadReads": 538,
+     "decompressedMB": 34.425873,
+     "compressedMB": 8.052767,
+     "totalMs": 1508.288400000005,
+     "verificationMs": 1404.9059999999881,
+     "decompressMs": 475.0806000000448,
+     "payloadLookupMs": 359.34559999997145,
+     "postingMs": 2.157900000005611,
+     "predictedMs": 688.51746,
+     "ratio": 2.1906320284165415
+    },
+    {
+     "id": 1857,
+     "results": 0,
+     "candidateDocs": 6,
+     "verifiedDocs": 6,
+     "payloadReads": 633,
+     "decompressedMB": 40.493441,
+     "compressedMB": 10.31124,
+     "totalMs": 2984.766300000003,
+     "verificationMs": 2902.4145000000135,
+     "decompressMs": 514.1098000001803,
+     "payloadLookupMs": 1217.3855000000185,
+     "postingMs": 2.486400000008871,
+     "predictedMs": 809.8688199999999,
+     "ratio": 3.6854935346195985
+    },
+    {
+     "id": 1893,
+     "results": 0,
+     "candidateDocs": 6,
+     "verifiedDocs": 6,
+     "payloadReads": 632,
+     "decompressedMB": 40.435739,
+     "compressedMB": 10.292741,
+     "totalMs": 2886.3099999999977,
+     "verificationMs": 2775.2261000000144,
+     "decompressMs": 511.66140000011364,
+     "payloadLookupMs": 1155.7565999999933,
+     "postingMs": 2.448999999993248,
+     "predictedMs": 808.71478,
+     "ratio": 3.5690085941053256
+    },
+    {
+     "id": 1989,
+     "results": 0,
+     "candidateDocs": 5,
+     "verifiedDocs": 5,
+     "payloadReads": 592,
+     "decompressedMB": 37.818125,
+     "compressedMB": 9.214784,
+     "totalMs": 2934.682799999995,
+     "verificationMs": 2851.241400000028,
+     "decompressMs": 470.4409999998752,
+     "payloadLookupMs": 1207.8112999999867,
+     "postingMs": 2.3742999999958556,
+     "predictedMs": 756.3625000000001,
+     "ratio": 3.8799951081657205
+    },
+    {
+     "id": 1901,
+     "results": 0,
+     "candidateDocs": 9,
+     "verifiedDocs": 9,
+     "payloadReads": 1243,
+     "decompressedMB": 85.15532,
+     "compressedMB": 17.576009,
+     "totalMs": 5150.651099999988,
+     "verificationMs": 4976.079300000041,
+     "decompressMs": 1322.3402999997197,
+     "payloadLookupMs": 1584.3101000000024,
+     "postingMs": 2.6647999999986496,
+     "predictedMs": 1703.1064000000001,
+     "ratio": 3.0242685365987634
+    },
+    {
+     "id": 1831,
+     "results": 0,
+     "candidateDocs": 8,
+     "verifiedDocs": 8,
+     "payloadReads": 1217,
+     "decompressedMB": 83.495127,
+     "compressedMB": 17.085182,
+     "totalMs": 4915.293300000019,
+     "verificationMs": 4767.352299999999,
+     "decompressMs": 1253.884800000582,
+     "payloadLookupMs": 1537.472700000013,
+     "postingMs": 2.32050000000163,
+     "predictedMs": 1669.90254,
+     "ratio": 2.9434611794769885
+    },
+    {
+     "id": 1707,
+     "results": 0,
+     "candidateDocs": 14,
+     "verifiedDocs": 14,
+     "payloadReads": 1320,
+     "decompressedMB": 89.548062,
+     "compressedMB": 18.838814,
+     "totalMs": 4357.491500000004,
+     "verificationMs": 4249.713700000051,
+     "decompressMs": 1191.4635000002454,
+     "payloadLookupMs": 1257.952200000087,
+     "postingMs": 2.894400000019232,
+     "predictedMs": 1790.96124,
+     "ratio": 2.433046233876063
+    },
+    {
+     "id": 1273,
+     "results": 20,
+     "candidateDocs": 20,
+     "verifiedDocs": 20,
+     "payloadReads": 1154,
+     "decompressedMB": 74.158233,
+     "compressedMB": 20.349372,
+     "totalMs": 4310.550400000007,
+     "verificationMs": 3337.3579999999492,
+     "decompressMs": 1270.7350000003062,
+     "payloadLookupMs": 893.4035999999032,
+     "postingMs": 0.5431999999855179,
+     "predictedMs": 1483.16466,
+     "ratio": 2.906319518157888
+    },
+    {
+     "id": 1999,
+     "results": 0,
+     "candidateDocs": 14,
+     "verifiedDocs": 14,
+     "payloadReads": 2100,
+     "decompressedMB": 124.692443,
+     "compressedMB": 32.931638,
+     "totalMs": 5186.192099999986,
+     "verificationMs": 5086.6602000001,
+     "decompressMs": 1921.9886999997252,
+     "payloadLookupMs": 1117.174699999974,
+     "postingMs": 2.111799999984214,
+     "predictedMs": 2493.84886,
+     "ratio": 2.0795935885224357
+    },
+    {
+     "id": 419,
+     "results": 24,
+     "candidateDocs": 24,
+     "verifiedDocs": 24,
+     "payloadReads": 1862,
+     "decompressedMB": 114.06937,
+     "compressedMB": 25.955191,
+     "totalMs": 7423.438699999999,
+     "verificationMs": 7162.134300000005,
+     "decompressMs": 1880.4289000001445,
+     "payloadLookupMs": 2579.125399999961,
+     "postingMs": 0.7811999999976251,
+     "predictedMs": 2281.3874,
+     "ratio": 3.2539141313746183
+    },
+    {
+     "id": 1643,
+     "results": 0,
+     "candidateDocs": 24,
+     "verifiedDocs": 24,
+     "payloadReads": 2882,
+     "decompressedMB": 180.344497,
+     "compressedMB": 43.407363,
+     "totalMs": 4459.881500000018,
+     "verificationMs": 4387.366999999969,
+     "decompressMs": 1523.70739999949,
+     "payloadLookupMs": 1145.673499999859,
+     "postingMs": 1.4228000000002794,
+     "predictedMs": 3606.88994,
+     "ratio": 1.236489489335518
+    },
+    {
+     "id": 1949,
+     "results": 0,
+     "candidateDocs": 14,
+     "verifiedDocs": 14,
+     "payloadReads": 2189,
+     "decompressedMB": 130.287243,
+     "compressedMB": 34.526533,
+     "totalMs": 3259.7399999999907,
+     "verificationMs": 3211.39109999995,
+     "decompressMs": 1127.2891000008094,
+     "payloadLookupMs": 880.5165999999153,
+     "postingMs": 1.4283000000286847,
+     "predictedMs": 2605.74486,
+     "ratio": 1.250982032062798
+    },
+    {
+     "id": 1557,
+     "results": 0,
+     "candidateDocs": 71,
+     "verifiedDocs": 71,
+     "payloadReads": 5863,
+     "decompressedMB": 356.129828,
+     "compressedMB": 74.335074,
+     "totalMs": 16891.76059999998,
+     "verificationMs": 16818.219999999972,
+     "decompressMs": 2971.0647000037716,
+     "payloadLookupMs": 7542.472200000077,
+     "postingMs": 2.0450000000419095,
+     "predictedMs": 7122.59656,
+     "ratio": 2.371573408335791
+    },
+    {
+     "id": 1451,
+     "results": 0,
+     "candidateDocs": 99,
+     "verifiedDocs": 99,
+     "payloadReads": 5512,
+     "decompressedMB": 341.047108,
+     "compressedMB": 72.257648,
+     "totalMs": 15719.98490000004,
+     "verificationMs": 15635.195000000007,
+     "decompressMs": 3091.482100000838,
+     "payloadLookupMs": 6914.1428999998025,
+     "postingMs": 3.9020000000018626,
+     "predictedMs": 6820.94216,
+     "ratio": 2.304664741505452
+    },
+    {
+     "id": 943,
+     "results": 3,
+     "candidateDocs": 78,
+     "verifiedDocs": 78,
+     "payloadReads": 4341,
+     "decompressedMB": 265.673796,
+     "compressedMB": 57.89003,
+     "totalMs": 13980.800599999959,
+     "verificationMs": 13909.946599999676,
+     "decompressMs": 2452.5535000006785,
+     "payloadLookupMs": 6446.346200000087,
+     "postingMs": 0.9984000000404194,
+     "predictedMs": 5313.47592,
+     "ratio": 2.6311967552870663
+    },
+    {
+     "id": 45,
+     "results": 494,
+     "candidateDocs": 494,
+     "verifiedDocs": 494,
+     "payloadReads": 4133,
+     "decompressedMB": 237.621876,
+     "compressedMB": 48.506134,
+     "totalMs": 9257.98999999999,
+     "verificationMs": 9158.968399998557,
+     "decompressMs": 2299.463900003524,
+     "payloadLookupMs": 3244.258200000273,
+     "postingMs": 0.7747999999555759,
+     "predictedMs": 4752.4375199999995,
+     "ratio": 1.9480508604350872
+    },
+    {
+     "id": 142,
+     "results": 3236,
+     "candidateDocs": 17910,
+     "verifiedDocs": 7308,
+     "payloadReads": 16256,
+     "decompressedMB": 676.886519,
+     "compressedMB": 154.811256,
+     "totalMs": 28422.55249999999,
+     "verificationMs": 27927.52579999366,
+     "decompressMs": 6121.393199997605,
+     "payloadLookupMs": 9319.492100009113,
+     "postingMs": 17.829600000055507,
+     "predictedMs": 13537.73038,
+     "ratio": 2.0995064683804103
+    },
+    {
+     "id": 977,
+     "results": 22510,
+     "candidateDocs": 107573,
+     "verifiedDocs": 24273,
+     "payloadReads": 18112,
+     "decompressedMB": 684.510671,
+     "compressedMB": 155.309859,
+     "totalMs": 31563.878000000026,
+     "verificationMs": 29730.558999998728,
+     "decompressMs": 6552.56619999418,
+     "payloadLookupMs": 9885.99899999483,
+     "postingMs": 100.53099999995902,
+     "predictedMs": 13690.21342,
+     "ratio": 2.305579689056449
+    },
+    {
+     "id": 30,
+     "results": 107573,
+     "candidateDocs": 107573,
+     "verifiedDocs": 107573,
+     "payloadReads": 20611,
+     "decompressedMB": 532.359411,
+     "compressedMB": 118.053625,
+     "totalMs": 25719.31150000007,
+     "verificationMs": 23638.004700009595,
+     "decompressMs": 5091.26699999359,
+     "payloadLookupMs": 7940.640500012436,
+     "postingMs": 95.61270000005607,
+     "predictedMs": 10647.18822,
+     "ratio": 2.4155965846164094
+    },
+    {
+     "id": 192,
+     "results": 4760,
+     "candidateDocs": 14573,
+     "verifiedDocs": 7122,
+     "payloadReads": 16082,
+     "decompressedMB": 656.634427,
+     "compressedMB": 147.821776,
+     "totalMs": 26080.462100000004,
+     "verificationMs": 25614.24990000215,
+     "decompressMs": 5809.1841000040295,
+     "payloadLookupMs": 8415.480699998094,
+     "postingMs": 12.987400000100024,
+     "predictedMs": 13132.68854,
+     "ratio": 1.985919487891853
+    }
+   ]
+  },
+  "documents": {
+   "fits": {
+    "totalMs_vs_MB": {
+     "intercept": -10.554999581398206,
+     "decompressedMB": 39.66764326192864,
+     "r2": 0.6364202795961298,
+     "n": 192
+    },
+    "totalMs_vs_MB_blocks": {
+     "intercept": -7.043823108184852,
+     "decompressedMB": 13.219377214901542,
+     "blocks": 0.004364152942194042,
+     "r2": 0.9947585316545553,
+     "n": 192
+    },
+    "decodeMs_vs_MB": {
+     "intercept": -11.097755763079746,
+     "decompressedMB": 34.21324504062483,
+     "r2": 0.5820778964628888,
+     "n": 192
+    },
+    "verifyMs_vs_MB_blocks": {
+     "intercept": 0.523829455886522,
+     "decompressedMB": 4.597664927324958,
+     "blocks": 0.0001439434503030323,
+     "r2": 0.9520147524961466,
+     "n": 192
+    }
+   },
+   "buckets": {
+    "1": {
+     "documents": 40,
+     "medianMB": 0.004401,
+     "medianBlocks": 24,
+     "medianMs": 0.4992000000002008,
+     "msPerMB": 102.68019776218637
+    },
+    "11-50": {
+     "documents": 40,
+     "medianMB": 0.975549,
+     "medianBlocks": 11839,
+     "medianMs": 41.56970000000001,
+     "msPerMB": 33.8570155068625
+    },
+    "2-3": {
+     "documents": 40,
+     "medianMB": 0.101324,
+     "medianBlocks": 158,
+     "medianMs": 3.0693000000010215,
+     "msPerMB": 27.622928231170913
+    },
+    "4-10": {
+     "documents": 40,
+     "medianMB": 0.374657,
+     "medianBlocks": 2433,
+     "medianMs": 11.082000000002154,
+     "msPerMB": 23.49300209823399
+    },
+    "201+": {
+     "documents": 8,
+     "medianMB": 21.431444,
+     "medianBlocks": 1493,
+     "medianMs": 305.0052999999971,
+     "msPerMB": 14.231672863480272
+    },
+    "51-200": {
+     "documents": 24,
+     "medianMB": 6.491726,
+     "medianBlocks": 13164,
+     "medianMs": 123.41010000000097,
+     "msPerMB": 18.070132981555776
+    }
+   }
+  }
+ }
+}

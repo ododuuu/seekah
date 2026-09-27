@@ -1,8 +1,8 @@
 {
   "name": "seekah",
-  "version": "0.36.2",
+  "version": "0.38.0",
   "private": true,
-  "description": "Local-first document search, context selection, MCP and optional AI workbench",
+  "description": "Local-first document search, context selection, MCP and desktop workbench",
   "type": "module",
   "bin": {
     "seekah": "dist/src/cli.js",
@@ -18,6 +18,7 @@
     "test": "npm run build && node --test --test-concurrency=1 dist/test/*.test.js",
     "check": "npm run test",
     "benchmark": "npm run build && node scripts/benchmark.mjs",
+    "benchmark:ngram": "npm run build && node scripts/benchmark-ngram.mjs",
     "benchmark:m24": "npm run build && node scripts/benchmark-m24.mjs",
     "benchmark:m27": "npm run build && node scripts/benchmark-m27.mjs",
     "package": "npm run build && node scripts/package.mjs",

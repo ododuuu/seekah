@@ -3,99 +3,2253 @@ export function workbenchHtml(nonce: string): string {
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Seekah 本機工作台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>seekah 本機文件工作台</title>
 <style nonce="${nonce}">
-:root{color-scheme:light;--bg:#f2f0eb;--paper:#fffefa;--panel:#f8f7f3;--text:#202521;--muted:#69716c;--line:#d8d5cb;--accent:#0d776d;--accent-strong:#075c55;--accent-soft:#d9eee9;--amber:#a65b16;--amber-soft:#fff0d9;--danger:#a33f37;--shadow:0 14px 38px rgba(32,37,33,.08)}
-:root[data-theme="dark"]{color-scheme:dark;--bg:#171b1a;--paper:#202625;--panel:#252c2a;--text:#edf3ef;--muted:#a9b7b0;--line:#3b4742;--accent:#75d2c4;--accent-strong:#9be4d9;--accent-soft:#1d403c;--amber:#f3b46a;--amber-soft:#4d351d;--danger:#ff9a91;--shadow:0 14px 38px rgba(0,0,0,.24)}
-*{box-sizing:border-box}html,body{min-height:100%;margin:0}body{background:var(--bg);color:var(--text);font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex="0"]:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 70%,transparent);outline-offset:2px}.app-shell{min-height:100vh;display:grid;grid-template-columns:232px minmax(0,1fr) 348px}.sidebar{display:flex;flex-direction:column;gap:20px;padding:26px 18px;background:#202522;color:#eef4f0}.brand{display:flex;align-items:center;gap:11px}.brand-mark{width:36px;height:36px;display:grid;place-items:center;border:1px solid #75d2c4;border-radius:10px;color:#75d2c4;font-weight:800;font-size:20px}.brand-name{font-weight:800;letter-spacing:.08em}.brand-version{color:#b5c1bb;font-size:11px}.nav-label,.eyebrow,.section-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.sidebar .nav-label{color:#91a099}.nav-list{display:grid;gap:5px}.nav-item{min-height:44px;display:flex;align-items:center;gap:11px;padding:0 13px;border:1px solid transparent;border-radius:8px;background:transparent;color:#dce7e1;text-align:left}.nav-item:hover,.nav-item.active{background:#33413b;border-color:#45554e;color:#fff}.nav-item .count{margin-left:auto;color:#75d2c4}.sidebar-spacer{flex:1}.privacy-note{padding:12px;border:1px solid #43524b;border-radius:8px;color:#b9c7bf;font-size:12px}.privacy-note strong{display:block;margin-bottom:4px;color:#edf4ef}.status-dot{display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:#75d2c4}.workspace{min-width:0;background:var(--paper)}.topbar{min-height:76px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 28px;border-bottom:1px solid var(--line)}.page-title{font-size:20px;font-weight:750}.top-actions{display:flex;align-items:center;gap:8px}.status-inline{max-width:42vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}.icon-btn,.quiet-btn,.primary-btn,.danger-btn{min-height:44px;border:1px solid var(--line);border-radius:7px;padding:8px 13px;background:transparent;color:var(--text)}.icon-btn{width:44px;padding:0}.quiet-btn:hover,.icon-btn:hover{background:var(--panel)}.primary-btn{border-color:var(--accent);background:var(--accent);color:#fff;font-weight:700}.primary-btn:hover{background:var(--accent-strong)}.danger-btn{color:var(--danger);border-color:transparent;padding:3px 6px;min-height:32px}.view{padding:28px;max-width:960px;margin:0 auto}.search-stack{display:grid;gap:20px}.search-box{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.search-entry{min-height:52px;display:flex;align-items:center;gap:10px;padding:0 15px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.search-entry input{width:100%;border:0;outline:0;background:transparent;color:var(--text);font-size:17px}.search-options,.results-head,.pagination,.simple-head,.section-label{display:flex;align-items:center;justify-content:space-between;gap:12px}.mode-switch{display:flex;gap:4px}.mode-switch select,.mode-switch button{min-height:38px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text);padding:6px 10px}.scope{display:flex;flex-wrap:wrap;gap:10px;color:var(--muted);font-size:12px}.results-head{align-items:end;border-bottom:1px solid var(--line);padding-bottom:10px}.results-head h1,.simple-head h1{margin:0;font-size:19px}.results-head p,.simple-head p{margin:4px 0 0;color:var(--muted)}.sort-note{color:var(--muted);font-size:12px}.result-list{display:grid}.result-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;align-items:start;gap:10px;padding:16px 4px;border-bottom:1px solid var(--line)}.result-row:hover,.result-row.selected{background:color-mix(in srgb,var(--accent-soft) 45%,transparent)}.result-check{width:22px;height:22px;margin:4px 0}.result-main{min-width:0;display:grid;gap:3px;border:0;background:transparent;color:var(--text);text-align:left;padding:0}.file-line{display:flex;align-items:center;gap:8px;min-width:0}.file-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:750}.file-type{flex:none;padding:1px 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:10px}.result-path,.result-meta,.snippet{color:var(--muted);font-size:12px}.result-path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.snippet{color:var(--text);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.result-meta{display:grid;justify-items:end;gap:3px;white-space:nowrap}.result-meta strong{color:var(--accent-strong);font-size:12px}.status{min-height:24px;color:var(--muted)}.status.ok{color:var(--accent-strong)}.status.error{color:var(--danger)}.status.warn{color:var(--amber)}.pagination{padding-top:8px;color:var(--muted);font-size:12px}.pager{display:flex;gap:6px}.empty-state{padding:48px 15px;text-align:center;color:var(--muted);border-bottom:1px solid var(--line)}.empty-state strong{display:block;margin-bottom:5px;color:var(--text)}.answer-panel{margin-top:20px;padding:16px;border-top:2px solid var(--accent);background:var(--panel)}.answer-panel h2{margin:0 0 8px;font-size:15px}.answer-meta{color:var(--muted);font-size:12px}.answer{white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0 0}.simple-view{max-width:900px}.simple-inner{display:grid;gap:20px}.drop-zone{min-height:180px;display:grid;place-items:center;border:1px dashed var(--accent);border-radius:10px;background:var(--accent-soft);text-align:center}.drop-zone.dragging{outline:3px solid var(--accent)}.drop-zone p{margin:8px 0 2px;font-size:17px;font-weight:700}.drop-zone small{color:var(--muted)}.file-table,.selection-list{display:grid}.file-row,.selection-item{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid var(--line)}.file-row-main,.selection-main{min-width:0;flex:1}.file-row-title,.selection-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}.file-row-meta,.selection-source{color:var(--muted);font-size:12px}.file-row-status{color:var(--muted);font-size:12px}.remove-btn{flex:none;min-width:38px;min-height:38px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--danger)}.status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.status-cell{padding:15px;border:1px solid var(--line);background:var(--panel)}.status-cell .label{color:var(--muted);font-size:12px}.status-cell .value{margin-top:5px;font-size:24px;font-weight:800}.status-cell .detail{color:var(--muted);font-size:12px}.root-card{padding:16px;border:1px solid var(--line);background:var(--panel)}.root-card h2{margin:0;font-size:15px;overflow-wrap:anywhere}.root-card p{margin:5px 0;color:var(--muted);font-size:12px}.root-card ul{margin:8px 0 0;padding-left:20px;color:var(--muted);font-size:12px}.context-panel{min-width:0;display:flex;flex-direction:column;background:var(--panel);border-left:1px solid var(--line)}.context-head{display:flex;align-items:center;justify-content:space-between;padding:22px 20px;border-bottom:1px solid var(--line)}.context-title{font-size:17px;font-weight:800}.context-count{color:var(--muted);font-size:12px}.context-scroll{flex:1;overflow:auto;padding:18px 20px}.context-section{margin-bottom:25px}.context-section>.section-label{margin-bottom:9px}.selection-empty{padding:14px 0;color:var(--muted);font-size:12px}.context-meter{height:8px;overflow:hidden;border-radius:99px;background:var(--line)}.context-meter-fill{height:100%;width:0;background:var(--accent);transition:width .2s}.context-foot{padding:18px 20px;border-top:1px solid var(--line)}.context-foot .primary-btn{width:100%}.context-foot p{margin:9px 0 0;color:var(--muted);font-size:12px}.context-foot .primary-btn:disabled{opacity:.45}.scrim{display:none}.mobile-nav{display:none}.dialog{width:min(960px,calc(100vw - 30px));max-height:calc(100vh - 30px);padding:0;border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--text);box-shadow:var(--shadow)}.dialog::backdrop{background:rgba(12,17,14,.58)}.dialog-head{display:flex;align-items:start;justify-content:space-between;gap:16px;padding:18px 20px;border-bottom:1px solid var(--line)}.dialog-head h2{margin:0;font-size:18px}.dialog-head p{margin:4px 0 0;color:var(--muted);font-size:12px}.dialog-body{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:20px;padding:20px;overflow:auto}.preview-pane{min-height:280px;max-height:58vh;overflow:auto;padding:16px;border:1px solid var(--line);background:var(--panel)}.preview-pane pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}.send-pane{display:grid;align-content:start;gap:13px}.field{display:grid;gap:5px}.field label,.consent{font-weight:700}.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--text);padding:9px}.field textarea{min-height:110px;resize:vertical}.provider-note,.notice{padding:10px;background:var(--amber-soft);color:var(--amber);font-size:12px}.consent{display:flex;align-items:start;gap:8px;font-size:12px;font-weight:400}.consent input{width:18px;height:18px;flex:none}.dialog-actions{display:flex;flex-wrap:wrap;gap:8px}.document-content{padding:20px;overflow:auto;max-height:70vh}.document-kicker{color:var(--accent-strong);font-size:12px}.document-content h3{margin:5px 0;font-size:18px;overflow-wrap:anywhere}.document-path{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.document-copy{margin-top:18px;white-space:pre-wrap;overflow-wrap:anywhere}.settings-body{display:grid;gap:15px;padding:20px}.toast{position:fixed;right:20px;bottom:20px;max-width:min(420px,calc(100vw - 40px));padding:12px 15px;border:1px solid var(--line);border-radius:7px;background:var(--text);color:var(--paper);opacity:0;pointer-events:none;transform:translateY(8px);transition:opacity .2s,transform .2s}.toast.show{opacity:1;transform:none}
-@media(max-width:1120px){.app-shell{grid-template-columns:220px minmax(0,1fr)}.context-panel{position:fixed;z-index:4;inset:0 0 0 auto;width:min(348px,calc(100vw - 22px));box-shadow:var(--shadow);transform:translateX(105%);transition:transform .2s}.context-panel.open{transform:none}.scrim{position:fixed;z-index:3;inset:0;border:0;background:rgba(12,17,14,.42)}body.context-open .scrim{display:block}}
-@media(max-width:760px){body{padding-bottom:66px}.app-shell{display:block}.sidebar{display:none}.topbar{min-height:66px;padding:12px 15px}.page-title{font-size:17px}.status-inline{max-width:36vw}.view{padding:20px 15px}.search-box{grid-template-columns:1fr}.search-box .primary-btn{width:100%}.search-options,.results-head{align-items:start;flex-direction:column}.result-row{grid-template-columns:28px minmax(0,1fr)}.result-meta{grid-column:2;display:flex;justify-items:start;justify-content:space-between}.mobile-nav{position:fixed;z-index:5;inset:auto 0 0;display:grid;grid-template-columns:repeat(4,1fr);padding:5px max(5px,env(safe-area-inset-left)) max(5px,env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--paper)}.mobile-nav button{min-height:52px;border:0;background:transparent;color:var(--muted);font-size:11px}.mobile-nav button.active{color:var(--accent-strong);font-weight:750}.status-grid{grid-template-columns:1fr}.dialog{width:calc(100vw - 18px);max-height:calc(100vh - 18px)}.dialog-body{grid-template-columns:1fr;padding:14px}.preview-pane{max-height:38vh}.context-head{padding:16px}.context-scroll{padding:15px}.context-foot{padding:15px}.simple-head{align-items:start;flex-direction:column}}
-@media(max-width:360px){.topbar{padding-left:10px;padding-right:10px}.view{padding-left:10px;padding-right:10px}.result-row{padding-left:0;padding-right:0}.context-panel{width:100%}.status-inline{display:none}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
-.app-shell.context-closed{grid-template-columns:232px minmax(0,1fr)}.context-panel[hidden]{display:none}#settings-toggle,[data-action="settings"],#settings-dialog,#answer-panel,#destination,#review-provider,#review-model,#question,#consent,#ask,.provider-note,label[for="destination"],label[for="review-provider"],label[for="review-model"],label[for="question"]{display:none!important}.document-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}.document-action-status{margin:12px 0 0;color:var(--muted);min-height:1.55em}
+/* tokens/base */
+:root {
+  color-scheme: light;
+  --brand: #145c4f;
+  --brand-2: #0f493f;
+  --brand-soft: #dcebe6;
+  --canvas: #f2f4f3;
+  --paper: #ffffff;
+  --sidebar: #f7f8f8;
+  --ink: #202825;
+  --muted: #68756f;
+  --muted-strong: #56635d;
+  --line: #d7ddda;
+  --line-strong: #bac5bf;
+  --danger: #b34239;
+  --warning: #ad6b20;
+  --shadow: 0 2px 9px rgba(25, 41, 35, 0.09);
+  --sidebar-width: 246px;
+  --focus: #e1a42a;
+}
+/* tokens/base */
+* { box-sizing: border-box; }
+html, body { min-width: 1180px; width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font: 14px/1.45 "Segoe UI", "Noto Sans TC", sans-serif;
+}
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .52; }
+button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:focus-visible {
+  outline: 3px solid #e5ae36;
+  outline-offset: 1px;
+}
+[hidden] { display: none !important; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+#app { width: 100%; height: 100%; }
+
+/* app shell/topbar/sidebar */
+.app-shell {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: 58px minmax(0, 1fr);
+  overflow: hidden;
+}
+.topbar {
+  grid-column: 1 / -1;
+  min-width: 0;
+  height: 58px;
+  display: grid;
+  grid-template-columns: 230px minmax(360px, 760px) minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 0 18px;
+  background: var(--brand);
+  color: #fff;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  font: 700 21px/1 Georgia, serif;
+  letter-spacing: .02em;
+}
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255,255,255,.6);
+  border-radius: 50%;
+  font: 700 16px/1 Georgia, serif;
+}
+.brand-subtitle {
+  margin-left: 8px;
+  color: rgba(255,255,255,.7);
+  font-size: 11px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.global-search {
+  position: relative;
+  min-width: 0;
+}
+.global-search span {
+  position: absolute;
+  z-index: 1;
+  left: 12px;
+  top: 9px;
+  color: #b9d1c9;
+  font-size: 18px;
+  line-height: 1;
+}
+.global-search input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 36px;
+  border: 1px solid rgba(255,255,255,.32);
+  border-radius: 5px;
+  outline: 0;
+  background: rgba(0,0,0,.09);
+  color: #fff;
+}
+.global-search input::placeholder { color: #b9d1c9; }
+.top-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.top-actions .top-button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #e6f0ec;
+}
+.top-actions .top-button:hover { background: rgba(255,255,255,.1); color: #fff; }
+.top-actions .theme-button { min-width: auto; }
+.local-status {
+  min-width: 0;
+  max-width: 230px;
+  margin-left: 2px;
+  overflow: hidden;
+  color: #c5d9d2;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #9de0a8;
+  vertical-align: 1px;
+}
+.sidebar {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 10px 24px;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+}
+.nav-group {
+  margin: 17px 10px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.nav-group:first-child { margin-top: 2px; }
+.nav-list, .root-nav-list { display: grid; }
+.nav-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border: 0;
+  border-radius: 5px;
+  padding: 9px 11px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+.nav-button:hover { background: #ebefed; }
+.nav-button[aria-current="page"] {
+  background: var(--brand-soft);
+  color: var(--brand-2);
+  font-weight: 700;
+}
+.nav-icon {
+  width: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+.nav-button[aria-current="page"] .nav-icon { color: var(--brand); }
+.nav-count {
+  margin-left: auto;
+  border-radius: 99px;
+  padding: 1px 7px;
+  background: #e6eae8;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.nav-count:empty { display: none; }
+.nav-button[aria-current="page"] .nav-count { background: #c7dfd6; color: var(--brand-2); }
+.root-nav-list .root-path-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-empty {
+  padding: 9px 11px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sidebar-footer {
+  margin: 24px 10px 0;
+  padding: 15px 0 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.sidebar-footer strong { color: var(--ink); }
+.sidebar-footer strong::before, .local-status::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #6ed3a4;
+  vertical-align: 1px;
+}
+
+/* common controls */
+.main {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 26px 55px;
+  background: var(--canvas);
+}
+.page { width: 100%; max-width: none; margin: 0; }
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+.page-header h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1.45;
+  letter-spacing: -.025em;
+}
+.detail-header h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: -.025em;
+}
+.page-header p { margin: 3px 0 0; color: var(--muted); }
+.page-header-actions, .button-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.button-label { color: var(--muted); font-size: 12px; }
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: #f3f6f4; color: var(--ink); }
+.btn.primary { border-color: var(--brand); background: var(--brand); color: #fff; font-weight: 700; }
+.btn.primary:hover:not(:disabled) { background: var(--brand-2); color: #fff; }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger-fill { border-color: var(--danger); background: var(--danger); color: #fff; font-weight: 700; }
+.btn.subtle { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.small { min-height: 30px; padding: 4px 8px; font-size: 11px; }
+.segmented { display: inline-flex; }
+.segmented .btn { border-radius: 0; margin-left: -1px; }
+.segmented .btn:first-child { margin-left: 0; border-radius: 4px 0 0 4px; }
+.segmented .btn:last-child { border-radius: 0 4px 4px 0; }
+.segmented .btn[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-2); font-weight: 700; }
+.status {
+  min-height: 24px;
+  margin: 10px 0;
+  color: var(--muted-strong);
+}
+.status.ok { color: var(--brand-2); }
+.status.warn { color: var(--warning); }
+.status.error { color: var(--danger); }
+.status[role="status"] { overflow-wrap: anywhere; }
+#search-status:not(.error) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.panel-head h2 { margin: 0; font-size: 16px; }
+.panel-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.empty-state {
+  padding: 34px 20px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--muted);
+  text-align: center;
+}
+.empty-state strong { display: block; margin-bottom: 5px; color: var(--ink); }
+.path-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "Cascadia Mono", Consolas, monospace;
+}
+
+/* documents/list/table */
+.scope-bar {
+  position: sticky;
+  z-index: 4;
+  top: -24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -6px 18px;
+  padding: 13px 6px;
+  border: 0;
+  background: var(--canvas);
+  box-shadow: 0 8px 10px -12px rgba(36,55,47,.8);
+}
+.document-query {
+  min-width: 0;
+  flex: 0 1 auto;
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr);
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  overflow: hidden;
+}
+.document-query select {
+  border: 0;
+  border-right: 1px solid var(--line);
+  padding: 0 8px;
+  background: #f8faf9;
+  color: var(--ink);
+}
+.document-query input {
+  width: 100%;
+  min-width: 200px;
+  border: 0;
+  padding: 0 10px;
+  outline: 0;
+  background: var(--paper);
+  color: var(--ink);
+}
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.mode-switch .btn[aria-pressed="false"] { display: none; }
+.mode-switch .btn[aria-pressed="true"] {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand-2);
+}
+.scope-summaries {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin: 0;
+}
+.scope-summary {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+}
+.scope-summary strong { display: none; }
+.scope-summary select {
+  max-width: 150px;
+  height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 0 24px 0 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+}
+.filter-reset {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--muted-strong);
+  text-decoration: underline;
+}
+.search-submit { display: inline-flex; flex: 0 0 auto; }
+.results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.results-toolbar > div:first-child { display: flex; align-items: baseline; gap: 8px; }
+.results-toolbar strong { font-size: 12px; font-weight: 400; }
+.results-toolbar span { color: var(--muted); font-size: 12px; }
+.pagination { display: inline-flex; align-items: center; gap: 0; margin-left: auto; }
+.pagination .btn { min-width: 30px; min-height: 28px; height: 28px; border-color: var(--line); border-radius: 0; margin-left: -1px; }
+.pagination-label { display: grid; min-width: 30px; height: 28px; margin: 0; place-items: center; border: 1px solid var(--brand); background: var(--brand); color: #fff !important; font-size: 12px; }
+.result-list { display: grid; gap: 10px; }
+.document-row {
+  min-width: 0;
+  min-height: 128px;
+  display: grid;
+  grid-template-columns: 28px 120px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.document-row.is-selected { border-color: #72a99a; box-shadow: 0 0 0 2px #bcd8d0; }
+.row-check { width: 17px; height: 17px; margin: 18px 0 0 9px; accent-color: var(--brand); }
+.file-visual {
+  position: relative;
+  width: 120px;
+  min-height: 126px;
+  display: grid;
+  place-items: center;
+  margin: 10px 0;
+  border: 1px solid #d5dbd7;
+  background: #e7ebe8;
+}
+.file-paper {
+  width: 72px;
+  height: 94px;
+  padding: 9px 7px;
+  border: 0;
+  background: var(--paper);
+  box-shadow: 0 2px 5px rgba(0,0,0,.14);
+}
+.file-line { height: 3px; margin-bottom: 5px; background: #d8dedb; }
+.file-line.strong { width: 62%; height: 5px; background: #5c756b; }
+.file-line.short { width: 68%; }
+.file-extension {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 5px;
+  border: 0;
+  background: var(--brand);
+  color: #fff;
+  font: 800 9px/1 "Cascadia Mono", Consolas, monospace;
+}
+.document-main { min-width: 0; padding: 14px 0; }
+.document-title-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.document-title {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-size: 17px;
+  display: inline-block;
+  min-height: 0;
+  line-height: normal;
+  font-weight: 750;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.document-title:hover { color: var(--brand-2); text-decoration: underline; }
+.format-badge, .reason-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 3px;
+  background: #e8eeeb;
+  color: #54635d;
+  font: 700 10px/1.2 "Segoe UI", sans-serif;
+}
+.reason-badge { display: none; }
+.snippet {
+  margin: 0 0 8px;
+  overflow: hidden;
+  color: #45514c;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snippet mark { padding: 1px 2px; background: #f3d889; color: inherit; }
+.document-path {
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px/1.4 "Cascadia Mono", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.document-location { display: none; }
+.document-actions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 5px;
+  margin-top: 11px;
+}
+.document-actions .btn { min-height: 29px; padding: 4px 8px; font-size: 11px; }
+.document-meta {
+  min-width: 279px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.document-meta .meta-value { color: var(--brand-2); font-weight: 650; }
+.table-wrap {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.documents-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.documents-table th {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  background: #edf1ef;
+  color: #59665f;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+}
+.documents-table td { padding: 10px; border-bottom: 1px solid #e7ebe9; overflow: hidden; text-align: left; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
+.documents-table tr:last-child td { border-bottom: 0; }
+.documents-table tbody tr:hover, .documents-table tbody tr.is-selected { background: #e8f2ee; }
+.documents-table td:first-child, .documents-table th:first-child { width: 42px; text-align: center; }
+.documents-table th:first-child { font-size: 0; }
+.documents-table th:nth-child(2) { width: 29%; }
+.documents-table th:nth-child(4) { width: 11%; }
+.documents-table th:nth-child(5) { width: 15%; }
+.documents-table th:nth-child(6) { width: 12%; }
+.table-title {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-weight: 700;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.table-title:hover { color: var(--brand-2); text-decoration: underline; }
+.table-empty { height: 96px; color: var(--muted); text-align: center !important; }
+.table-check { width: 18px; height: 18px; accent-color: var(--brand); }
+.bulk-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid #7fa89c;
+  background: #eff8f4;
+  box-shadow: 0 -5px 20px rgba(31,62,51,.12);
+}
+.bulk-bar strong { margin-right: auto; color: var(--brand-2); }
+
+/* temporary files */
+.drop-zone {
+  display: block;
+  min-height: 0;
+  margin-bottom: 14px;
+  padding: 70px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--muted);
+  text-align: center;
+}
+.drop-zone.is-dragging { border-color: var(--brand); background: var(--brand-soft); }
+.drop-zone strong { display: block; margin-bottom: 5px; color: var(--ink); font-size: 14px; }
+.drop-zone small { display: block; max-width: 720px; margin: 0 auto; font-size: 14px; }
+.file-list { display: grid; gap: 8px; }
+.file-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.file-row input { width: 18px; height: 18px; accent-color: var(--brand); }
+.file-name { font-weight: 700; overflow-wrap: anywhere; }
+.file-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.file-status { max-width: 300px; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.file-status.indexed { color: var(--brand-2); }
+.file-status.error, .file-status.encrypted { color: var(--danger); }
+.file-status.warn { color: var(--warning); }
+
+/* document detail */
+#detail-page { margin: -24px -26px -55px; width: auto; }
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--canvas);
+}
+.detail-header h1 { min-width: 220px; margin: 0 18px 0 0; font-size: 22px; overflow-wrap: anywhere; }
+.detail-spacer { flex: 1 1 auto; }
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 43%) minmax(560px, 57%);
+  min-height: calc(100vh - 133px);
+}
+.detail-panel { min-width: 0; border: 0; background: var(--paper); box-shadow: none; }
+.detail-fields {
+  min-width: 0;
+  overflow: auto;
+  padding: 20px 24px 60px;
+  border-right: 1px solid var(--line);
+  background: #f8faf9;
+}
+.detail-tabs { display: flex; gap: 21px; margin: 0; border-bottom: 1px solid var(--line); }
+.detail-tab {
+  min-height: 40px;
+  padding: 8px 1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.detail-tab[aria-selected="true"] { border-bottom-color: var(--brand); color: var(--brand); font-weight: 700; }
+.detail-metadata { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 13px 10px; margin: 20px 0 0; }
+.detail-metadata dt { padding-top: 8px; color: #4f5b55; font-size: 13px; }
+.detail-metadata dd { min-width: 0; min-height: 36px; margin: 0; padding: 7px 9px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); text-overflow: ellipsis; white-space: nowrap; }
+.detail-metadata dd.path-value { font: 12px/1.45 "Cascadia Mono", Consolas, monospace; word-break: normal; }
+.detail-index-content { margin-top: 20px; padding: 18px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-family: Georgia, "Noto Serif TC", serif; line-height: 1.8; overflow-wrap: anywhere; }
+.detail-index-content mark { padding: 1px 2px; background: #f3d889; color: inherit; }
+.detail-preview {
+  min-width: 0;
+  min-height: 430px;
+  overflow: auto;
+  padding: 25px;
+  background: #cfd4d1;
+}
+.detail-preview-tools {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  margin: -10px 0 15px;
+}
+.detail-preview-tools .btn { background: #f8faf9; }
+.preview-paper {
+  width: min(760px, 92%);
+  min-height: 970px;
+  margin: auto;
+  padding: 64px 66px;
+  border: 0;
+  background: var(--paper);
+  box-shadow: 0 4px 15px rgba(0,0,0,.2);
+  transform-origin: top center;
+}
+.preview-paper h2 { margin: 0 0 5px; font: 600 28px Georgia, serif; overflow-wrap: anywhere; }
+.preview-paper .preview-sub { padding-bottom: 18px; border-bottom: 2px solid var(--brand); color: var(--muted); }
+.preview-paper h3 { margin-top: 35px; font: 600 18px Georgia, serif; }
+.preview-snippet { margin: 0; font: 15px/1.9 Georgia, "Noto Serif TC", serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.preview-snippet mark { padding: 1px 2px; background: #f3d889; color: inherit; }
+.preview-paper .preview-note { margin-top: 35px; padding: 16px; border-left: 4px solid var(--brand); background: #f1f5f3; color: var(--muted); font-size: 12px; }
+.preview-note p { margin: 8px 0 0; }
+.preview-note .path-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* roots and trash */
+.roots-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  box-shadow: var(--shadow);
+}
+.roots-table th, .roots-table td { padding: 12px 13px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.roots-table th { background: color-mix(in srgb, var(--sidebar) 80%, var(--line)); color: var(--muted-strong); font-size: 11px; font-weight: 700; }
+.roots-table tr:last-child td { border-bottom: 0; }
+.roots-table th:first-child, .roots-table td:first-child { display: none; }
+.roots-table th:nth-child(2) { width: 42%; }
+.root-path { font: 12px/1.45 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.root-focus-button { padding: 0; border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; overflow-wrap: anywhere; }
+.root-focus-button:hover { color: var(--brand-2); text-decoration: underline; }
+.root-state { color: var(--muted-strong); }
+.root-state.good { color: var(--brand); font-weight: 650; }
+.root-state.good::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #6ed3a4; vertical-align: 1px; }
+.root-state.bad { color: var(--danger); }
+.root-state.warn { color: var(--warning); }
+.root-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.root-selection-toolbar { display: none; }
+.root-add { display: none; margin-top: 16px; }
+.root-add.has-draft { display: block; }
+.root-add-body { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: end; padding: 16px 18px; }
+.root-add-field { min-width: 0; }
+.root-add-field label { display: block; margin-bottom: 5px; color: var(--muted-strong); font-size: 12px; }
+.root-add-field input { width: 100%; height: 38px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--sidebar); color: var(--ink); }
+.root-instructions { margin: 0; padding: 0 18px 14px; color: var(--muted-strong); font-size: 12px; }
+#index-status-message:not(.warn):not(.error), #trash-status-message {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+#trash-page .page-header { margin-bottom: 15px; }
+.trash-toolbar { display: none; }
+.trash-table, .trash-table tbody { display: block; width: 100%; }
+.trash-table thead { display: none; }
+.trash-table tr {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  background: var(--paper);
+}
+.trash-table tr:last-child { border-bottom: 1px solid var(--line); }
+.trash-table td { display: block; min-width: 0; padding: 0; border: 0; }
+.trash-table td:first-child { width: 28px; text-align: left; }
+.trash-path h2 { margin: 0; color: var(--ink); font: 600 14px/1.4 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.trash-path p { margin: 3px 0 0; color: var(--muted-strong); font-size: 12px; }
+.trash-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+.roots-table .root-empty-row td { display: table-cell; padding: 70px; color: var(--muted-strong); text-align: center; }
+.trash-table .trash-empty-row { display: block; padding: 70px; color: var(--muted-strong); text-align: center; }
+.trash-table .trash-empty-row td { width: auto; text-align: center; }
+
+/* context drawer/preview dialog */
+.scrim {
+  position: fixed;
+  z-index: 8;
+  inset: 58px 0 0;
+  width: 100%;
+  border: 0;
+  background: rgba(18, 26, 22, .42);
+}
+.context-drawer {
+  position: fixed;
+  z-index: 9;
+  top: 58px;
+  right: 0;
+  bottom: 0;
+  width: min(390px, calc(100vw - 30px));
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line-strong);
+  background: var(--paper);
+  box-shadow: -6px 0 22px rgba(25, 41, 35, .16);
+}
+.context-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+.context-drawer-head h2 { margin: 0; font-size: 17px; }
+.context-drawer-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.context-drawer-body { min-height: 0; overflow: auto; padding: 14px 16px; }
+.context-section + .context-section { margin-top: 20px; }
+.context-section h3 { margin: 0 0 7px; color: var(--muted); font-size: 12px; }
+.context-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.context-item:last-child { border-bottom: 0; }
+.context-item-name { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.context-item-meta { margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.context-item-actions { display: flex; gap: 5px; }
+.context-drawer-footer { padding: 14px 16px 18px; border-top: 1px solid var(--line); }
+.context-drawer-footer .btn { width: 100%; }
+.preview-dialog { width: min(920px, calc(100vw - 52px)); }
+.settings-dialog { width: min(540px, calc(100vw - 52px)); }
+.delete-dialog { width: min(540px, calc(100vw - 52px)); }
+dialog {
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid #66746d;
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 24px 70px rgba(0,0,0,.3);
+}
+dialog::backdrop { background: rgba(19,28,24,.55); }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 17px 19px; border-bottom: 1px solid var(--line); }
+.dialog-head h2 { margin: 0; font-size: 19px; }
+.dialog-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.dialog-body { padding: 20px; }
+.dialog-body > p:first-child { margin-top: 0; color: var(--muted); }
+.dialog-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; padding: 13px 19px; border-top: 1px solid var(--line); background: #f6f8f7; }
+.dialog-actions .setting-check { margin-right: auto; }
+.setting-check { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--ink); font-size: 13px; }
+.setting-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--brand); }
+.preview-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
+.preview-meta strong { color: var(--ink); }
+.preview-text {
+  max-height: min(58vh, 560px);
+  min-height: 210px;
+  overflow: auto;
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  background: var(--sidebar);
+  color: var(--ink);
+  font: 13px/1.55 "Cascadia Mono", Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-progress { width: 100%; height: 12px; accent-color: var(--brand); }
+.preview-status { min-height: 22px; margin: 9px 0 0; color: var(--muted); }
+.settings-section + .settings-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.settings-section h3 { margin: 0 0 8px; font-size: 14px; }
+.settings-section p { margin: 0 0 11px; color: var(--muted); font-size: 12px; }
+.delete-detail { padding: 12px; border: 1px solid var(--line); background: var(--sidebar); white-space: pre-wrap; overflow-wrap: anywhere; }
+.delete-warning { margin-top: 12px; color: var(--danger); font-weight: 700; }
+.toast {
+  position: fixed;
+  z-index: 20;
+  right: 20px;
+  bottom: 20px;
+  max-width: min(460px, calc(100vw - 40px));
+  padding: 10px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+}
+
+/* desktop width adjustments */
+@media (max-width: 1320px) {
+  :root { --sidebar-width: 220px; }
+  .topbar { grid-template-columns: 204px minmax(360px, 650px) 1fr; gap: 18px; }
+  .document-row { grid-template-columns: 28px 100px minmax(0, 1fr) auto; }
+  .file-visual { width: 100px; }
+  .document-meta { min-width: 240px; gap: 8px; padding: 0 10px; }
+  .detail-grid { grid-template-columns: minmax(410px, 46%) minmax(520px, 54%); }
+  .detail-header h1 { max-width: 32vw; }
+}
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}
 </style>
 </head>
 <body>
-<div class="app-shell">
-<aside class="sidebar" aria-label="主要導覽">
-  <div class="brand"><div class="brand-mark" aria-hidden="true">S</div><div><div class="brand-name">seekah</div><div class="brand-version">本機文件工作台</div></div></div>
-  <div class="nav-label">Workspace</div>
-  <nav class="nav-list"><button class="nav-item active" type="button" data-view="search">搜尋</button><button class="nav-item" type="button" data-view="temporary">臨時文件 <span class="count" id="nav-temp-count">0</span></button><button class="nav-item" type="button" data-view="activity">索引狀態</button></nav>
-  <div class="sidebar-spacer"></div>
-  <button class="nav-item" type="button" data-action="settings">連線設定</button>
-  <div class="privacy-note"><strong><span class="status-dot"></span>本機模式</strong>搜尋與臨時解析留在這台電腦。</div>
-</aside>
-<main class="workspace">
-  <header class="topbar"><div><div class="eyebrow" id="scope-label">本機索引</div><div class="page-title" id="page-title">搜尋文件</div></div><div class="top-actions"><span class="status-inline" id="top-status">讀取本機狀態…</span><button class="icon-btn" id="theme-toggle" type="button" aria-label="切換深淺色">☼</button><button class="icon-btn" id="settings-toggle" type="button" data-action="settings" aria-label="開啟連線設定">⚙</button><button class="quiet-btn" id="context-toggle" type="button">已選 0</button></div></header>
-  <section class="view" data-page="search">
-    <div class="search-stack">
-      <form class="search-box" id="search-form"><label class="search-entry" for="query"><span aria-hidden="true">⌕</span><input id="query" type="search" maxlength="1000" autocomplete="off" placeholder="搜尋本機文件" required></label><button class="primary-btn" type="submit">搜尋</button></form>
-      <div class="search-options"><label class="mode-switch" for="mode">搜尋模式 <select id="mode"><option value="phrase">完整片語</option><option value="all-terms">全部關鍵字</option></select></label><div class="scope" id="search-scope">讀取索引範圍…</div></div>
-      <div id="search-status" class="status" role="status" aria-live="polite">尚未搜尋。</div>
-      <div class="results-head"><div><h1 id="results-title">搜尋結果</h1><p id="results-subtitle">送出查詢後顯示實際索引片段。</p></div><div class="sort-note">依既有索引排序</div></div>
-      <div class="result-list" id="result-list" aria-live="polite"></div>
-      <div class="pagination"><span id="pagination-info">尚未搜尋</span><span class="pager"><button class="icon-btn" id="prev" type="button" aria-label="上一頁" disabled>‹</button><button class="icon-btn" id="next" type="button" aria-label="下一頁" disabled>›</button></span></div>
-      <section class="answer-panel" id="answer-panel" hidden><h2>AI 回答</h2><div class="answer-meta" id="answer-meta"></div><pre class="answer" id="answer"></pre></section>
-    </div>
-  </section>
-  <section class="view simple-view" data-page="temporary" hidden><div class="simple-inner"><div class="simple-head"><div><h1>臨時文件</h1><p>解析只存在本次工作階段；不加入永久索引。</p></div><button class="quiet-btn" type="button" data-action="add-file">選取文件</button></div><div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="拖曳或選取文件"><div><div aria-hidden="true">⇧</div><p>拖曳文件到這裡</p><small id="drop-help">讀取支援格式…</small></div></div><input id="file-input" type="file" multiple hidden><div id="file-status" class="status" role="status" aria-live="polite"></div><div class="file-table" id="temp-files"></div></div></section>
-  <section class="view simple-view" data-page="activity" hidden><div class="simple-inner"><div class="simple-head"><div><h1>索引狀態</h1><p>開啟工作台後會初始化既有索引；可在此手動更新。</p></div><button class="quiet-btn" id="refresh-status" type="button">更新索引</button></div><div id="index-status" class="status" role="status" aria-live="polite">讀取中…</div><div class="status-grid" id="status-grid"></div><div id="root-status"></div></div></section>
-</main>
-<aside class="context-panel" id="context-panel" aria-label="選取與上下文"><div class="context-head"><div><div class="context-title">上下文</div><div class="context-count" id="context-count">已選 0 / 20</div></div><button class="icon-btn" id="context-close" type="button" aria-label="關閉上下文面板">×</button></div><div class="context-scroll"><section class="context-section"><div class="section-label"><span>已索引文件</span><button class="danger-btn" id="clear-indexed" type="button">清除</button></div><div class="selection-list" id="selection-list"></div></section><section class="context-section"><div class="section-label"><span>本次臨時文件</span><span id="temp-selected-count">0 份</span></div><div class="selection-list" id="temp-selection-list"></div></section><section class="context-section"><div class="section-label"><span>精確容量</span><span id="meter-label">待產生精確預覽</span></div><div class="context-meter"><div class="context-meter-fill" id="meter-fill"></div></div><div class="context-count">只有預覽中的內容會被複製。</div></section></div><div class="context-foot"><button class="primary-btn" id="review" type="button" disabled>檢查精確上下文</button><p>來源會在複製前重新驗證。</p></div></aside>
-</div>
-<nav class="mobile-nav" aria-label="行動版導覽"><button class="active" type="button" data-view="search">搜尋</button><button type="button" data-view="temporary">臨時文件</button><button type="button" data-view="activity">狀態</button><button type="button" data-action="context">上下文</button></nav>
-<button class="scrim" id="scrim" type="button" aria-label="關閉上下文面板"></button>
-<dialog class="dialog" id="review-dialog" aria-labelledby="review-title"><div class="dialog-head"><div><h2 id="review-title">檢查精確上下文</h2><p id="review-meta">尚未產生預覽</p></div><button class="icon-btn" type="button" data-close="review-dialog" aria-label="關閉">×</button></div><div class="dialog-body"><div class="preview-pane"><pre id="context-preview">尚未產生預覽。</pre></div><div class="send-pane"><div id="preview-status" class="status" role="status" aria-live="polite">正在等待預覽。</div><div class="field"><label for="destination">目的地</label><select id="destination"><option value="copy">只複製，不送出</option><option value="ai">AI API</option></select></div><div class="field"><label for="review-provider">Provider</label><select id="review-provider"><option value="auto">auto（自動路由）</option><option value="openai">OpenAI API</option><option value="xai">xAI API</option></select></div><div class="field"><label for="review-model">model</label><input id="review-model" list="model-options" maxlength="128" autocomplete="off"><datalist id="model-options"></datalist></div><div class="provider-note">API Key 只留在本次本機程序記憶體；各平台 API 與消費訂閱分開計費。auto 的 fallback 只依預覽顯示的 quota 契約發生一次。</div><div class="field"><label for="question">問題（AI API 必填）</label><textarea id="question" maxlength="8000" placeholder="例如：比較這些文件的安裝步驟與風險。"></textarea></div><label class="consent" for="consent"><input id="consent" type="checkbox"><span>我已檢查精確內容，並確認公司政策允許把這些文字與問題送到所選 Provider；若使用 auto，也同意預覽列出的 fallback。</span></label><div class="dialog-actions"><button class="quiet-btn" id="copy" type="button" disabled>複製預覽</button><button class="primary-btn" id="ask" type="button" disabled>確認送出</button></div></div></div></dialog>
-<dialog class="dialog" id="settings-dialog" aria-labelledby="settings-title"><div class="dialog-head"><div><h2 id="settings-title">連線設定</h2><p>只設定本次工作階段；關閉本機程序後清除。</p></div><button class="icon-btn" type="button" data-close="settings-dialog" aria-label="關閉">×</button></div><div class="settings-body"><div class="field"><label for="settings-provider">Provider</label><select id="settings-provider"><option value="openai">OpenAI API</option><option value="xai">xAI API</option></select></div><div class="field"><label for="settings-model">model id 或安全 alias</label><input id="settings-model" list="model-options" maxlength="128" autocomplete="off"></div><div class="field"><label for="api-key">本次工作階段 API Key</label><input id="api-key" type="password" maxlength="4096" autocomplete="off" placeholder="輸入後套用，不會回傳或保存"></div><button class="primary-btn" id="save-key" type="button">套用 Key</button><div class="notice">不擷取 cookie、不代登入；OpenAI API／xAI API 需要各自的 API Key 與帳務。</div><div id="provider-status" class="status" role="status" aria-live="polite"></div></div></dialog>
-<dialog class="dialog" id="document-dialog" aria-labelledby="document-title"><div class="dialog-head"><div><h2 id="document-title">命中片段預覽</h2><p id="document-location"></p></div><button class="icon-btn" type="button" data-close="document-dialog" aria-label="關閉">×</button></div><div class="document-content"><div class="document-path" id="document-path"></div><div class="document-copy" id="document-copy"></div><div class="document-actions"><button class="primary-btn" id="document-open" type="button">開啟檔案</button><button class="quiet-btn" id="document-reveal" type="button">顯示所在位置</button></div><div class="document-action-status" id="document-action-status" role="status" aria-live="polite"></div></div></dialog>
-<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div id="app"></div>
 <script nonce="${nonce}">
-(()=>{
-'use strict';
-const MAX=20;
-const state={mode:'phrase',view:'search',submittedQuery:'',data:null,selected:new Map(),imported:new Map(),indexStatus:null,providers:{},modelChoices:[],provider:'auto',model:'auto',destination:'copy',question:'',preview:null,previewSeq:0,searchSeq:0,askBusy:false};
-const $=id=>document.getElementById(id);const query=$('query'),mode=$('mode'),resultList=$('result-list'),contextPanel=$('context-panel'),reviewDialog=$('review-dialog'),appShell=document.querySelector('.app-shell');
-function make(tag,className,text){const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node}
-function setStatus(id,text,kind){const node=$(id);node.textContent=text;node.className='status'+(kind?' '+kind:'')}
-function showToast(text){const node=$('toast');node.textContent=text;node.classList.add('show');clearTimeout(showToast.timer);showToast.timer=setTimeout(()=>node.classList.remove('show'),2600)}
-function selectedCount(){let count=state.selected.size;for(const item of state.imported.values())if(item.selected)count++;return count}
-function invalidate(message){state.preview=null;$('context-preview').textContent='尚未產生預覽。';$('meter-label').textContent='待產生精確預覽';$('meter-fill').style.width='0%';$('copy').disabled=true;$('consent').checked=false;$('consent').disabled=true;$('ask').disabled=true;if(message)setStatus('preview-status',message);renderContext()}
-function token(){return decodeURIComponent(location.hash.slice(1))}
-async function api(path,init={}){const headers=new Headers(init.headers||{});headers.set('X-LocalDocSearch-Token',token());if(init.body&&!(init.body instanceof Blob)&&typeof init.body!=='string'){headers.set('content-type','application/json');init={...init,body:JSON.stringify(init.body)}}const response=await fetch(path,{...init,headers});let data=null;try{data=await response.json()}catch{}if(!response.ok)throw new Error(data&&typeof data.error==='string'?data.error:'本機服務拒絕要求。');return data}
-function totalLabel(data){const limit=data.truncatedToFirst500?'；僅開放前 500 筆':' ';return '第 '+(((data.page-1)*data.pageSize)+1)+'–'+Math.min(data.page*data.pageSize,data.accessibleTotal)+' 筆，共 '+data.total+' 筆'+limit}
-function renderResults(data){resultList.replaceChildren();state.data=data;$('results-title').textContent=data.total?'找到 '+data.total+' 份文件':'沒有符合文件';$('results-subtitle').textContent=data.truncatedToFirst500?'命中超過 500 筆；工作台只開放前 500 筆。':'同一份文件只顯示一次；片段來自 server 回傳。';$('pagination-info').textContent=data.total?totalLabel(data):'沒有結果';$('prev').disabled=data.page<=1;$('next').disabled=data.page>=data.pageCount;if(!data.results.length){const empty=make('div','empty-state');empty.append(make('strong','',data.total?'目前頁面沒有結果':'沒有符合文件'));empty.append(make('div','',data.total?'請返回上一頁。':'請調整查詢或搜尋模式。'));resultList.append(empty);return}for(const item of data.results){const row=make('article','result-row'+(state.selected.has(item.reference)?' selected':''));const check=document.createElement('input');check.className='result-check';check.type='checkbox';check.checked=state.selected.has(item.reference);check.setAttribute('aria-label',(check.checked?'取消選取 ':'選取 ')+item.path);check.addEventListener('change',()=>toggleSelection(item,check.checked));const open=make('button','result-main');open.type='button';const line=make('div','file-line');line.append(make('span','file-name',item.path.split(/[\\/]/u).pop()||item.path),make('span','file-type',item.extension));open.append(line);open.append(make('div','result-path',item.path+(item.location?' · '+item.location:'')));open.append(make('div','snippet',item.snippet||'（僅檔名命中，沒有相關正文片段）'));open.addEventListener('click',()=>openDocument(item));const meta=make('div','result-meta');meta.append(make('strong','',item.reason+(item.filenameOnly?'（僅檔名）':'')));row.append(check,open,meta);resultList.append(row)}}
-function toggleSelection(item,checked){if(checked){if(state.selected.has(item.reference))return;if(selectedCount()>=MAX){showToast('索引與臨時文件合計最多選 20 份。');renderResults(state.data);return}state.selected.set(item.reference,{query:state.data.query,reference:item.reference,item});}else state.selected.delete(item.reference);invalidate('選取已變更，請重新產生精確預覽。');renderResults(state.data)}
-function renderContext(){const list=$('selection-list');list.replaceChildren();for(const selected of state.selected.values()){const row=make('div','selection-item');const main=make('div','selection-main');main.append(make('div','selection-name',selected.item.path),make('div','selection-source',selected.item.extension+' · '+selected.item.location));const remove=make('button','remove-btn','移除');remove.type='button';remove.addEventListener('click',()=>{state.selected.delete(selected.reference);invalidate('選取已變更，請重新產生精確預覽。');renderResults(state.data)});row.append(main,remove);list.append(row)}if(!state.selected.size)list.append(make('div','selection-empty','尚未選取索引文件。'));const tempList=$('temp-selection-list');tempList.replaceChildren();let tempSelected=0;for(const item of state.imported.values())if(item.selected){tempSelected++;const row=make('div','selection-item');const main=make('div','selection-main');main.append(make('div','selection-name',item.filename),make('div','selection-source',item.extension+' · 本次工作階段'));const remove=make('button','remove-btn','移除');remove.type='button';remove.addEventListener('click',()=>removeImported(item));row.append(main,remove);tempList.append(row)}if(!tempSelected)tempList.append(make('div','selection-empty','沒有選取臨時文件。'));$('context-count').textContent='已選 '+selectedCount()+' / '+MAX;$('context-toggle').textContent='已選 '+selectedCount();$('temp-selected-count').textContent=tempSelected+' 份';$('nav-temp-count').textContent=String(state.imported.size);$('review').disabled=selectedCount()===0;renderTempFiles()}
-function renderTempFiles(){const table=$('temp-files');table.replaceChildren();for(const item of state.imported.values()){const row=make('div','file-row');const box=document.createElement('input');box.type='checkbox';box.checked=Boolean(item.selected);box.disabled=item.status!=='indexed'||item.pending===true;box.setAttribute('aria-label','選取 '+item.filename);box.addEventListener('change',()=>{if(box.checked&&selectedCount()>=MAX){box.checked=false;showToast('索引與臨時文件合計最多選 20 份。');return}item.selected=box.checked;invalidate('選取已變更，請重新產生精確預覽。')});const main=make('div','file-row-main');main.append(make('div','file-row-title',item.filename),make('div','file-row-meta',item.extension+' · '+item.sizeBytes+' bytes'));const status=make('div','file-row-status',item.pending?'本機解析中…':item.status+(item.errorMessage?' · '+item.errorMessage:''));const remove=make('button','remove-btn','移除');remove.type='button';remove.addEventListener('click',()=>removeImported(item));row.append(box,main,status,remove);table.append(row)}}
-async function removeImported(item){if(item.pending)return;try{await api('/api/files/'+encodeURIComponent(item.id),{method:'DELETE'});state.imported.delete(item.id);invalidate('臨時文件已移除；請重新產生精確預覽。');showToast('臨時文件已從工作階段移除。')}catch(error){setStatus('file-status',error.message,'error')}}
-async function upload(files){for(const file of Array.from(files||[])){const pending={id:'pending-'+Math.random().toString(16).slice(2),filename:file.name,extension:'',sizeBytes:file.size,status:'pending',pending:true,selected:false};state.imported.set(pending.id,pending);renderContext();setStatus('file-status','本機解析 '+file.name+'…');try{const data=await api('/api/files',{method:'POST',headers:{'X-File-Name':encodeURIComponent(file.name),'content-type':'application/octet-stream'},body:file});state.imported.delete(pending.id);data.selected=data.status==='indexed'&&selectedCount()<MAX;state.imported.set(data.id,data);setStatus('file-status',file.name+' 已完成本機解析。',data.status==='indexed'?'ok':'warn');invalidate('臨時文件已加入；請重新產生精確預覽。')}catch(error){state.imported.delete(pending.id);renderContext();setStatus('file-status',file.name+'：'+error.message,'error')}}}
-function requestPayload(){return{provider:state.provider,model:state.model,question:state.question.trim(),mode:state.mode,selections:Array.from(state.selected.values()).map(item=>({query:item.query,reference:item.reference})),fileIds:Array.from(state.imported.values()).filter(item=>item.selected&&item.status==='indexed').map(item=>item.id)}}
-function fingerprint(){return JSON.stringify([state.mode,requestPayload().selections,requestPayload().fileIds,state.provider,state.model,state.question.trim(),state.destination])}
-function routeText(route){if(!route||!route.primary)return '';let text='主要路由：'+route.primary.provider+' / '+route.primary.model;if(route.fallback)text+='；quota fallback：'+route.fallback.provider+' / '+route.fallback.model;return text}
-async function makePreview(){if(selectedCount()===0){setStatus('preview-status','請先選取文件。','warn');return}const seq=++state.previewSeq;setStatus('preview-status','正在重新驗證來源並建立精確預覽…');$('copy').disabled=true;$('ask').disabled=true;try{const data=await api('/api/preview',{method:'POST',body:requestPayload()});if(seq!==state.previewSeq)return;state.preview={...data,fingerprint:fingerprint()};$('context-preview').textContent=data.context;$('review-meta').textContent=String(data.documentCount||selectedCount())+' 份文件 · '+data.bytes+' bytes'+(data.truncated?' · 內容已截短':'');$('meter-label').textContent=data.bytes+' bytes / 262144 bytes'+(data.truncated?' · 已截短':'');$('meter-fill').style.width=Math.min(100,data.bytes/2621.44)+'%';setStatus('preview-status','預覽完成。'+(routeText(data.route)?' '+routeText(data.route):''),'ok');$('copy').disabled=false;updateReviewControls()}catch(error){if(seq!==state.previewSeq)return;state.preview=null;$('context-preview').textContent='尚未產生預覽。';setStatus('preview-status',error.message,'error')}}
-function updateReviewControls(){const current=state.preview&&state.preview.fingerprint===fingerprint();const ai=state.destination==='ai';$('consent').disabled=!current||!ai;$('ask').disabled=!current||!ai||!$('consent').checked||!state.question.trim()||state.askBusy;$('copy').disabled=!current}
-function openReview(){if(selectedCount()===0)return;reviewDialog.showModal();void makePreview()}
-async function copyPreview(){if(!state.preview||state.preview.fingerprint!==fingerprint())return;try{await navigator.clipboard.writeText(state.preview.context);showToast('已複製目前 server 精確預覽。')}catch{showToast('瀏覽器拒絕剪貼簿權限；請手動複製。')}}
-async function askProvider(){if(!state.preview||state.preview.fingerprint!==fingerprint()||state.destination!=='ai'||!state.question.trim())return;state.askBusy=true;updateReviewControls();$('answer-panel').hidden=false;$('answer').textContent='等待 AI API 回覆…';$('answer-meta').textContent='本次要求已鎖定；關閉對話框不能撤回已送出要求。';try{const data=await api('/api/ask',{method:'POST',body:{...requestPayload(),previewId:state.preview.previewId,confirmed:true}});$('answer').textContent=data.answer;$('answer-meta').textContent='實際使用：'+data.provider+' / '+data.model+(data.fallbackUsed?'（quota fallback）':'');setStatus('preview-status','AI 回答完成。','ok');showToast('AI 回答已回傳。')}catch(error){$('answer').textContent='';$('answer-meta').textContent='';setStatus('preview-status',error.message,'error');state.preview=null;updateReviewControls()}finally{state.askBusy=false;updateReviewControls()}}
-function openDocument(item){$('document-title').textContent='命中片段預覽：'+(item.path.split(/[\\/]/u).pop()||item.path);$('document-location').textContent=(item.reason||'命中')+(item.location?' · '+item.location:'');$('document-path').textContent=item.path;$('document-copy').textContent=item.snippet||'（僅檔名命中，server 沒有正文片段。）';const status=$('document-action-status');const open=$('document-open'),reveal=$('document-reveal');const run=async action=>{open.disabled=true;reveal.disabled=true;status.textContent='正在送出'+(action==='open'?'開啟':'顯示位置')+'請求…';try{const data=await api('/api/document-action',{method:'POST',body:{reference:item.reference,action}});status.textContent=(action==='open'?'已送出開啟請求。':'已送出顯示位置請求。')+(data.changed?' 索引可能已過期，請重新索引。':'')}catch(error){status.textContent=error.message}finally{open.disabled=false;reveal.disabled=false}};open.onclick=()=>void run('open');reveal.onclick=()=>void run('reveal');status.textContent='只會操作這筆搜尋結果的來源檔案。';$('document-dialog').showModal()}
-function renderProviderStatus(){const stateItem=state.providers[$('settings-provider').value]||{};setStatus('provider-status',stateItem.configured?'已設定（'+(stateItem.source==='environment'?'環境變數':'本次工作階段')+'）。':'尚未設定 API Key。',stateItem.configured?'ok':'')}
-function syncSettings(){ $('review-provider').value=state.provider;$('review-model').value=state.model;$('settings-provider').value=state.provider==='auto'?'openai':state.provider;$('settings-model').value=state.model;renderProviderStatus() }
-function selectProvider(value){state.provider=value;state.model='auto';syncSettings();invalidate('Provider 已變更，請重新產生精確預覽。')}
-async function saveKey(){const provider=$('settings-provider').value;const key=$('api-key');try{const data=await api('/api/providers',{method:'POST',body:{provider,key:key.value}});key.value='';state.providers=data.providers;renderProviderStatus();showToast('API Key 已套用，只保留在本次本機程序記憶體。')}catch(error){key.value='';setStatus('provider-status',error.message,'error')}}
-function renderScope(){const roots=state.indexStatus&&state.indexStatus.state==='available'?state.indexStatus.roots:[];const scope=roots.length?roots.map(root=>root.path).join('、'):'尚無可用索引根目錄';$('scope-label').textContent=roots.length===1?roots[0].path:'本機索引';$('search-scope').textContent=scope+' · 全部格式';$('top-status').textContent=state.indexStatus&&state.indexStatus.indexing&&state.indexStatus.indexing.state==='running'?state.indexStatus.indexing.message:state.indexStatus&&state.indexStatus.state==='available'?'索引狀態已讀取':state.indexStatus&&state.indexStatus.state==='missing'?'尚無索引':'索引狀態未知'}
-function renderIndexStatus(){renderScope();const data=state.indexStatus;if(!data){setStatus('index-status','尚未讀取。');return}const index=data.indexing;if(data.state==='missing'){setStatus('index-status',index&&index.state==='running'?index.message:'尚無索引；請選擇第一個要建立索引的資料夾。',index&&index.state==='running'?'':'warn');$('status-grid').replaceChildren();const roots=$('root-status');roots.replaceChildren();if(!(index&&index.state==='running')){const setup=make('div','root-card');setup.append(make('h2','','建立第一個索引'));setup.append(make('p','','輸入要搜尋的資料夾完整路徑；Seekah 會在背景初始化，工作台保持可用。'));const input=document.createElement('input');input.type='text';input.placeholder='例如：C:\\Users\\你的帳號\\Documents';input.id='initial-root';const button=make('button','primary-btn','開始建立索引');button.type='button';button.addEventListener('click',()=>void startIndex(input.value));setup.append(input,button);roots.append(setup)}return}if(data.state==='unavailable'){setStatus('index-status',data.message||'索引狀態未知。','error');$('status-grid').replaceChildren();$('root-status').replaceChildren();return}setStatus('index-status',index&&index.state==='running'?index.message:index&&index.state==='failed'?index.message:index&&index.state==='complete'?index.message:'已讀取索引狀態。',index&&index.state==='failed'?'error':index&&index.state==='complete'?'ok':'');const counts=data.counts||{};const total=Object.values(counts).reduce((sum,value)=>sum+Number(value||0),0);const problems=Number(counts.error||0)+Number(counts.encrypted||0)+Number(counts.no_text||0)+Number(counts.unsupported||0)+Number(counts.too_large||0);const grid=$('status-grid');grid.replaceChildren();const cells=[['已登錄文件',String(total),String(data.roots.length)+' 個根目錄'],['目前問題',String(problems),'依文件解析狀態統計'],['讀取狀態',data.format&&data.format.needsUpgrade?'待既有升級':'可讀','不會由 GUI 自動升級']];for(const cell of cells){const node=make('div','status-cell');node.append(make('div','label',cell[0]),make('div','value',cell[1]),make('div','detail',cell[2]));grid.append(node)}const roots=$('root-status');roots.replaceChildren();for(const root of data.roots){const card=make('article','root-card');card.append(make('h2','',root.path));card.append(make('p','',String(root.documentCount)+' 份文件'));const list=document.createElement('ul');list.append(make('li','',root.lastSyncComplete===true?'最近同步完整':'最近同步不完整或未知'));if(root.errors&&root.errors.length)list.append(make('li','',root.errors.length+' 個同步錯誤'));if(root.diagnostics)list.append(make('li','',root.diagnostics+' 個已保存診斷'));card.append(list);roots.append(card)}}
-async function refreshStatus(){try{state.indexStatus=await api('/api/index-status');renderIndexStatus()}catch(error){setStatus('index-status',error.message,'error')}}
-async function startIndex(root){try{const data=await api('/api/index',{method:'POST',body:root&&root.trim()?{root:root.trim()}:{}});state.indexStatus={...(state.indexStatus||{}),indexing:data.indexing};renderIndexStatus();const poll=async()=>{await refreshStatus();if(state.indexStatus&&state.indexStatus.indexing&&state.indexStatus.indexing.state==='running')setTimeout(poll,1000)};setTimeout(poll,250)}catch(error){setStatus('index-status',error.message,'error')}}
-async function search(page){const submitted=page===1?query.value.trim():state.submittedQuery;if(!submitted){setStatus('search-status','查詢不可為空白。','error');return}state.submittedQuery=submitted;const seq=++state.searchSeq;setStatus('search-status','搜尋中…');try{const data=await api('/api/search',{method:'POST',body:{query:submitted,mode:state.mode,page,pageSize:20}});if(seq!==state.searchSeq)return;renderResults(data);setStatus('search-status',data.total?'搜尋完成；可點列預覽、勾選加入上下文。':'搜尋完成；沒有符合結果。',data.total?'ok':'warn')}catch(error){if(seq!==state.searchSeq)return;setStatus('search-status',error.message,'error')}}
-function setView(view){state.view=view;document.querySelectorAll('[data-page]').forEach(node=>{node.hidden=node.dataset.page!==view});document.querySelectorAll('[data-view]').forEach(node=>node.classList.toggle('active',node.dataset.view===view));$('page-title').textContent=view==='search'?'搜尋文件':view==='temporary'?'臨時文件':'索引狀態';if(view==='activity')void refreshStatus()}
-function openContext(){contextPanel.hidden=false;contextPanel.classList.add('open');appShell.classList.remove('context-closed');document.body.classList.add('context-open');$('context-close').focus()}
-function closeContext(){contextPanel.classList.remove('open');document.body.classList.remove('context-open');if(window.matchMedia('(min-width:1121px)').matches){contextPanel.hidden=true;appShell.classList.add('context-closed');$('context-toggle').focus()}}
-function populateModels(){const list=$('model-options');list.replaceChildren();for(const item of state.modelChoices){const option=make('option');option.value=item.id;option.label=item.label;list.append(option)}}
-async function loadState(){try{const data=await api('/api/state');state.providers=data.providers||{};state.modelChoices=data.modelChoices||[];populateModels();$('drop-help').textContent='支援 '+(data.supportedExtensions||[]).join('、')+'；單檔 100 MiB，最多 20 份';syncSettings();renderProviderStatus()}catch(error){setStatus('search-status',error.message,'error')}}
-$('search-form').addEventListener('submit',event=>{event.preventDefault();void search(1)});$('prev').addEventListener('click',()=>void search((state.data?.page||1)-1));$('next').addEventListener('click',()=>void search((state.data?.page||1)+1));mode.addEventListener('change',()=>{state.mode=mode.value;state.selected.clear();state.data=null;state.submittedQuery='';resultList.replaceChildren();$('pagination-info').textContent='尚未搜尋';invalidate('搜尋模式已切換；已清除索引選取與舊結果。')});$('review').addEventListener('click',openReview);$('clear-indexed').addEventListener('click',()=>{state.selected.clear();invalidate('索引選取已清除；請重新產生精確預覽。');if(state.data)renderResults(state.data)});$('copy').addEventListener('click',()=>void copyPreview());$('ask').addEventListener('click',()=>void askProvider());$('destination').addEventListener('change',()=>{state.destination=$('destination').value;invalidate('目的地已變更，請重新產生精確預覽。');updateReviewControls()});$('review-provider').addEventListener('change',()=>selectProvider($('review-provider').value));$('review-model').addEventListener('input',()=>{state.model=$('review-model').value;invalidate('model 已變更，請重新產生精確預覽。')});$('question').addEventListener('input',()=>{state.question=$('question').value;invalidate('問題已變更，請重新產生精確預覽。')});$('consent').addEventListener('change',updateReviewControls);$('save-key').addEventListener('click',()=>void saveKey());$('settings-provider').addEventListener('change',()=>{state.provider=$('settings-provider').value;syncSettings();invalidate('Provider 已變更，請重新產生精確預覽。')});$('settings-model').addEventListener('input',()=>{state.model=$('settings-model').value;syncSettings();invalidate('model 已變更，請重新產生精確預覽。')});$('refresh-status').addEventListener('click',()=>void refreshStatus());$('context-toggle').addEventListener('click',openContext);$('context-close').addEventListener('click',closeContext);$('scrim').addEventListener('click',closeContext);$('theme-toggle').addEventListener('click',()=>{document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'light':'dark'});document.querySelectorAll('[data-view]').forEach(node=>node.addEventListener('click',()=>setView(node.dataset.view)));document.querySelectorAll('[data-action="context"]').forEach(node=>node.addEventListener('click',openContext));document.querySelectorAll('[data-action="settings"]').forEach(node=>node.addEventListener('click',()=>{syncSettings();$('settings-dialog').showModal()}));document.querySelectorAll('[data-action="add-file"]').forEach(node=>node.addEventListener('click',()=>$('file-input').click()));document.querySelectorAll('[data-close]').forEach(node=>node.addEventListener('click',()=>$(node.dataset.close).close()));$('file-input').addEventListener('change',event=>{void upload(event.target.files);event.target.value=''});const drop=$('drop-zone');drop.addEventListener('click',()=>$('file-input').click());drop.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();$('file-input').click()}});for(const name of ['dragenter','dragover'])drop.addEventListener(name,event=>{event.preventDefault();drop.classList.add('dragging')});for(const name of ['dragleave','drop'])drop.addEventListener(name,event=>{event.preventDefault();drop.classList.remove('dragging')});drop.addEventListener('drop',event=>void upload(event.dataTransfer.files));
-$('refresh-status').addEventListener('click',()=>void startIndex());async function initialize(){await loadState();await refreshStatus();if(state.indexStatus&&state.indexStatus.state==='available')void startIndex()}void initialize();
-renderContext();
+(() => {
+  "use strict";
+  const MAX = 20;
+  const state = {
+    route: "documents",
+    mode: "phrase",
+    sortMode: "relevance",
+    searchField: "all",
+    rootFilter: "",
+    typeFilter: "",
+    statusFilter: "",
+    queryDraft: "",
+    submittedQuery: "",
+    data: null,
+    searchState: "idle",
+    searchMessage: "尚未搜尋。",
+    searchKind: "",
+    searchSeq: 0,
+    selected: new Map(),
+    imported: new Map(),
+    indexStatus: null,
+    indexNotice: "",
+    indexNoticeKind: "",
+    statusRefreshBusy: false,
+    supportedExtensions: [],
+    addRootDraft: "",
+    selectedRoots: new Set(),
+    selectedTrash: new Set(),
+    folderPickerBusy: false,
+    deleteConfirmation: true,
+    autoupdateEnabled: false,
+    preview: null,
+    previewSeq: 0,
+    detailItem: null,
+    detailIndex: -1,
+    detailTab: "details",
+    previewZoom: 100,
+    documentScrollTop: 0,
+    focusRoot: "",
+    focusAfterDrawer: null,
+    dialogTrigger: null,
+  };
+
+  const $ = id => document.getElementById(id);
+  function make(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+  function button(text, className, action) {
+    const node = make("button", "btn" + (className ? " " + className : ""), text);
+    node.type = "button";
+    if (action) node.addEventListener("click", action);
+    return node;
+  }
+  function navButton(action) {
+    const node = make("button", "nav-button", "");
+    node.type = "button";
+    if (action) node.addEventListener("click", action);
+    return node;
+  }
+  function iconButton(text, label, action) {
+    const node = make("button", "btn", text);
+    node.type = "button";
+    node.setAttribute("aria-label", label);
+    if (action) node.addEventListener("click", action);
+    return node;
+  }
+  function setStatus(id, text, kind) {
+    const node = $(id);
+    if (!node) return;
+    node.textContent = text || "";
+    node.className = "status" + (kind ? " " + kind : "");
+  }
+  function setNotice(text, kind) {
+    state.indexNotice = text || "";
+    state.indexNoticeKind = kind || "";
+    setStatus("index-status-message", state.indexNotice, state.indexNoticeKind);
+  }
+  function showToast(text) {
+    const node = $("toast");
+    node.textContent = text;
+    node.hidden = false;
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => { node.hidden = true; }, 2800);
+  }
+  function token() {
+    try { return decodeURIComponent(location.hash.slice(1)); }
+    catch { return ""; }
+  }
+  async function api(path, init) {
+    const options = init ? { ...init } : {};
+    const headers = new Headers(options.headers || {});
+    headers.set("X-LocalDocSearch-Token", token());
+    if (options.body && !(options.body instanceof Blob) && typeof options.body !== "string") {
+      headers.set("content-type", "application/json");
+      options.body = JSON.stringify(options.body);
+    }
+    options.headers = headers;
+    const response = await fetch(path, options);
+    let data = null;
+    try { data = await response.json(); } catch { data = null; }
+    if (!response.ok) {
+      const message = data && typeof data.error === "string" ? data.error : "本機服務拒絕要求。";
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  }
+  function selectedCount() {
+    let count = state.selected.size;
+    for (const item of state.imported.values()) if (item.selected) count++;
+    return count;
+  }
+  function selectedTemporaryCount() {
+    let count = 0;
+    for (const item of state.imported.values()) if (item.selected) count++;
+    return count;
+  }
+  function isIndexing() {
+    return Boolean(state.indexOperationBusy || state.indexStatus && state.indexStatus.indexing
+      && ["running", "stopping"].includes(state.indexStatus.indexing.state));
+  }
+  function documentTotal() {
+    const counts = state.indexStatus && state.indexStatus.counts;
+    if (!counts) return null;
+    return Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+  }
+  function syncQueryInputs() {
+    const global = $("global-query");
+    const page = $("document-query");
+    if (global && global.value !== state.queryDraft) global.value = state.queryDraft;
+    if (page && page.value !== state.queryDraft) page.value = state.queryDraft;
+  }
+  function updateNav() {
+    const currentRoute = state.route === "detail" ? "documents" : state.route;
+    document.querySelectorAll("[data-route]").forEach(node => {
+      if (node instanceof HTMLButtonElement) {
+        const rootItem = Boolean(node.dataset.rootPath);
+        const current = rootItem
+          ? currentRoute === "roots" && state.focusRoot === node.dataset.rootPath
+          : node.dataset.route === currentRoute;
+        if (current) node.setAttribute("aria-current", "page");
+        else node.removeAttribute("aria-current");
+      }
+    });
+    const title = $("main-title");
+    if (title) title.textContent = state.route === "documents" ? "文件" : state.route === "temporary" ? "臨時文件" : state.route === "roots" ? "根目錄" : state.route === "trash" ? "垃圾桶" : "文件詳細資料";
+  }
+  function switchPageVisibility() {
+    document.querySelectorAll("[data-page]").forEach(node => { node.hidden = node.dataset.page !== state.route; });
+    updateNav();
+  }
+  function navigate(route, focusRoot) {
+    if (route === "roots") state.focusRoot = focusRoot || "";
+    state.route = route;
+    switchPageVisibility();
+    if (route === "documents") renderDocuments();
+    if (route === "temporary") renderTemporary();
+    if (route === "roots") { renderRoots(); void refreshStatus(); }
+    if (route === "trash") { renderTrash(); void refreshStatus(); }
+    if (route === "documents") {
+      setTimeout(() => { if (state.route === "documents") $("document-query")?.focus(); }, 0);
+    }
+    if (route === "roots" && state.focusRoot) {
+      setTimeout(() => {
+        const target = document.querySelector("[data-root-row='" + CSS.escape(state.focusRoot) + "']");
+        if (target instanceof HTMLElement) target.focus();
+      }, 0);
+    }
+  }
+  function routeFromTopSearch() {
+    state.route = "documents";
+    switchPageVisibility();
+  }
+  function replaceOptions(select, options, value) {
+    if (!select) return;
+    select.replaceChildren(...options.map(option => new Option(option.label, option.value)));
+    select.value = options.some(option => option.value === value) ? value : "";
+  }
+  function renderScopeSummaries() {
+    const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
+    replaceOptions($("scope-root"), [{ label: "所有根目錄", value: "" }, ...roots.map(root => ({ label: root.path, value: root.path }))], state.rootFilter);
+    replaceOptions($("scope-format"), [{ label: "所有格式", value: "" }, ...state.supportedExtensions.map(value => ({ label: value.slice(1).toUpperCase(), value }))], state.typeFilter);
+    replaceOptions($("scope-parse"), [
+      { label: "所有解析狀態", value: "" }, { label: "可讀", value: "indexed" }, { label: "不支援", value: "unsupported" },
+      { label: "解析錯誤", value: "error" }, { label: "加密", value: "encrypted" }, { label: "無文字", value: "no_text" },
+      { label: "過大", value: "too_large" },
+    ], state.statusFilter);
+  }
+  function renderSidebar() {
+    const total = $("nav-doc-count");
+    const temp = $("nav-temp-count");
+    const rootCount = $("nav-root-count");
+    const trash = $("nav-trash-count");
+    const context = $("nav-context-count");
+    if (total) total.textContent = documentTotal() === null ? "" : String(documentTotal());
+    if (temp) temp.textContent = String(state.imported.size);
+    if (rootCount) rootCount.textContent = state.indexStatus && Array.isArray(state.indexStatus.roots) ? String(state.indexStatus.roots.length) : "";
+    if (trash) trash.textContent = state.indexStatus && Array.isArray(state.indexStatus.trash) ? String(state.indexStatus.trash.length) : "";
+    if (context) context.textContent = String(selectedCount());
+    const rootList = $("sidebar-roots");
+    rootList.replaceChildren();
+    const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
+    if (!roots.length) {
+      rootList.append(make("div", "sidebar-empty", "尚無根目錄"));
+    } else {
+      for (const root of roots) {
+        const item = navButton(() => navigate("roots", root.path));
+        item.dataset.route = "roots";
+        item.dataset.rootPath = root.path;
+        item.title = root.path;
+        const icon = make("span", "nav-icon", "⌁");
+        const label = make("span", "root-path-label", escapeText(root.path).split(/[\\\\/]/u).filter(Boolean).pop() || root.path);
+        const count = make("span", "nav-count", String(root.documentCount));
+        item.append(icon, label, count);
+        rootList.append(item);
+      }
+    }
+    updateNav();
+    const indexState = state.indexStatus && state.indexStatus.indexing;
+    const statusText = indexState && ["running", "stopping"].includes(indexState.state) ? indexState.message
+      : indexState && ["stopped", "failed"].includes(indexState.state) ? indexState.message
+      : state.indexStatus && state.indexStatus.state === "available" ? "索引可用"
+      : state.indexStatus && state.indexStatus.state === "missing" ? "尚無索引"
+      : state.indexStatus && state.indexStatus.state === "unavailable" ? "索引狀態暫時無法讀取"
+      : "索引狀態未知";
+    const sidebarStatus = $("sidebar-status");
+    if (sidebarStatus) sidebarStatus.textContent = statusText;
+  }
+  function escapeText(value) { return value === null || value === undefined ? "" : String(value); }
+  function documentRootLabel(item) {
+    let rootPath = escapeText(item && item.root);
+    if (!rootPath && item && item.path) {
+      const itemPath = escapeText(item.path).replaceAll("/", "\\\\").toLocaleLowerCase();
+      const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
+      for (const root of roots) {
+        const candidate = escapeText(root.path).replaceAll("/", "\\\\").replace(/\\\\+$/u, "");
+        const normalized = candidate.toLocaleLowerCase();
+        if (itemPath === normalized || itemPath.startsWith(normalized + "\\\\")) {
+          if (!rootPath || candidate.length > rootPath.length) rootPath = candidate;
+        }
+      }
+    }
+    return rootPath.split(/[\\\\/]/u).filter(Boolean).pop() || "";
+  }
+  const localDateTime = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  function formatLocalDateTime(value) {
+    if (!value) return "未提供移除時間";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "未提供移除時間" : localDateTime.format(date);
+  }
+  function termsForHighlight() {
+    const query = state.submittedQuery || state.queryDraft;
+    if (!query.trim()) return [];
+    if (state.mode === "phrase") return [query];
+    return query.trim().split(/\\s+/u).filter(Boolean);
+  }
+  function appendHighlighted(parent, value) {
+    const text = escapeText(value);
+    const terms = termsForHighlight().filter(term => term.length > 0);
+    if (!terms.length || !text) { parent.append(document.createTextNode(text)); return; }
+    const lower = text.toLocaleLowerCase();
+    const ranges = [];
+    for (const term of terms) {
+      const needle = term.toLocaleLowerCase();
+      let from = 0;
+      while (needle && from < lower.length) {
+        const found = lower.indexOf(needle, from);
+        if (found < 0) break;
+        ranges.push({ start: found, end: found + needle.length });
+        from = found + Math.max(needle.length, 1);
+      }
+    }
+    ranges.sort((a, b) => a.start - b.start || b.end - a.end);
+    let cursor = 0;
+    for (const range of ranges) {
+      if (range.start < cursor) continue;
+      if (range.start > cursor) parent.append(document.createTextNode(text.slice(cursor, range.start)));
+      const mark = make("mark", "", text.slice(range.start, range.end));
+      parent.append(mark);
+      cursor = range.end;
+    }
+    if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+  }
+  function fileVisual(extension) {
+    const visual = make("div", "file-visual");
+    visual.setAttribute("aria-hidden", "true");
+    const paper = make("div", "file-paper");
+    for (const className of ["file-line strong", "file-line", "file-line short", "file-line", "file-line short", "file-line"]) paper.append(make("div", className, ""));
+    const label = make("span", "file-extension", String(extension || "file").replace(".", "").toUpperCase());
+    visual.append(paper, label);
+    return visual;
+  }
+  function selectedReference(reference) {
+    const temporary = state.imported.get(reference);
+    return temporary ? Boolean(temporary.selected) : state.selected.has(reference);
+  }
+  function makeResultCheckbox(item, table) {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = table ? "table-check" : "row-check";
+    input.checked = selectedReference(item.temporary ? item.id : item.reference);
+    input.disabled = Boolean(item.temporary && item.status !== "indexed");
+    input.setAttribute("aria-label", "選取 " + escapeText(item.path));
+    input.addEventListener("click", event => event.stopPropagation());
+    input.addEventListener("change", () => item.temporary
+      ? toggleImported(state.imported.get(item.id), input.checked)
+      : toggleSelection(item, input.checked));
+    return input;
+  }
+  function resultActions(item) {
+    const actions = make("div", "document-actions");
+    if (item.temporary) {
+      const source = state.imported.get(item.id);
+      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "small",
+        () => source && toggleImported(source, !source.selected));
+      toggle.disabled = !source || source.status !== "indexed";
+      actions.append(toggle);
+      return actions;
+    }
+    const view = button("檢視", "small", () => openDetail(item));
+    const open = button("開啟檔案", "small", () => void documentAction(item, "open"));
+    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "small", () => toggleSelection(item, !selectedReference(item.reference)));
+    actions.append(view, open, toggle);
+    return actions;
+  }
+  function makeDocumentRow(item) {
+    const resultKey = item.temporary ? item.id : item.reference;
+    const row = make("article", "document-row" + (selectedReference(resultKey) ? " is-selected" : ""));
+    row.dataset.reference = resultKey;
+    const check = makeResultCheckbox(item, false);
+    const visual = fileVisual(item.extension);
+    const main = make("div", "document-main");
+    const titleLine = make("div", "document-title-line");
+    const title = item.temporary ? make("strong", "document-title", escapeText(item.path))
+      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "document-title", () => openDetail(item));
+    title.title = escapeText(item.path);
+    const extension = make("span", "format-badge", escapeText(item.extension).replace(".", "").toUpperCase());
+    const reason = make("span", "reason-badge", escapeText(item.reason || "命中"));
+    titleLine.append(title, extension, reason);
+    const snippet = make("p", "snippet");
+    if (item.snippet) appendHighlighted(snippet, item.snippet);
+    else snippet.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
+    const pathNode = make("div", "document-path", item.path);
+    pathNode.title = item.path;
+    const location = make("div", "document-location", escapeText(item.location || "未提供命中位置"));
+    main.append(titleLine, snippet, pathNode, location, resultActions(item));
+    const meta = make("div", "document-meta");
+    const rootLabel = documentRootLabel(item);
+    if (rootLabel) meta.append(make("span", "", rootLabel));
+    meta.append(make("span", "", escapeText(item.location || "未提供位置")), make("span", "meta-value", item.status === "indexed" ? "可讀" : escapeText(item.status || "未提供")));
+    row.append(check, visual, main, meta);
+    return row;
+  }
+  function makeTableRow(item) {
+    const resultKey = item.temporary ? item.id : item.reference;
+    const row = document.createElement("tr");
+    row.classList.toggle("is-selected", selectedReference(resultKey));
+    row.dataset.reference = resultKey;
+    const checkCell = document.createElement("td");
+    checkCell.append(makeResultCheckbox(item, true));
+    const titleCell = document.createElement("td");
+    const title = item.temporary ? make("strong", "table-title", escapeText(item.path))
+      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "table-title", () => openDetail(item));
+    title.title = item.path;
+    titleCell.append(title);
+    const rootCell = document.createElement("td");
+    rootCell.textContent = documentRootLabel(item) || "未提供";
+    rootCell.title = item.root || rootCell.textContent;
+    const formatCell = document.createElement("td");
+    formatCell.textContent = String(item.extension || "").replace(".", "").toUpperCase();
+    const locationCell = document.createElement("td");
+    locationCell.textContent = item.location || "未提供";
+    const statusCell = document.createElement("td");
+    statusCell.textContent = item.status === "indexed" ? "可讀" : (item.status || "未提供");
+    row.append(checkCell, titleCell, rootCell, formatCell, locationCell, statusCell);
+    return row;
+  }
+  function appendTableMessage(body, text) {
+    const row = document.createElement("tr");
+    const cell = make("td", "table-empty", text);
+    cell.colSpan = 6;
+    row.append(cell);
+    body.append(row);
+  }
+  function resultRange(data) {
+    if (!data || !data.total) return "沒有結果";
+    const start = (data.page - 1) * data.pageSize + 1;
+    const end = Math.min(data.page * data.pageSize, data.accessibleTotal);
+    return "第 " + start + "–" + end + " 筆，共 " + data.total + " 筆" + (data.truncatedToFirst500 ? "；僅開放前 500 筆" : "");
+  }
+  function renderDocuments() {
+    syncQueryInputs();
+    renderScopeSummaries();
+    const data = state.data;
+    const resultList = $("document-list");
+    const tableWrap = $("document-table-wrap");
+    const tableBody = $("document-table-body");
+    resultList.replaceChildren();
+    tableBody.replaceChildren();
+    const title = $("results-title");
+    const subtitle = $("results-subtitle");
+    const range = $("pagination-label");
+    const prev = $("documents-prev");
+    const next = $("documents-next");
+    if (state.searchState === "loading") {
+      title.textContent = "搜尋中";
+      subtitle.textContent = "";
+      resultList.append(make("div", "empty-state", "搜尋中…"));
+      appendTableMessage(tableBody, "搜尋中…");
+      range.textContent = "1";
+    } else if (state.searchState === "error") {
+      title.textContent = "查詢錯誤";
+      subtitle.textContent = "";
+      resultList.append(make("div", "empty-state", state.searchMessage));
+      appendTableMessage(tableBody, state.searchMessage);
+      range.textContent = "1";
+    } else if (!data) {
+      title.textContent = "尚未搜尋";
+      subtitle.textContent = "";
+      resultList.append(make("div", "empty-state", "尚未搜尋"));
+      appendTableMessage(tableBody, "尚未搜尋");
+      range.textContent = "1";
+    } else if ((!data.results || !data.results.length) && (!data.temporaryResults || !data.temporaryResults.length)) {
+      const emptyText = data.total ? "目前頁面沒有結果" : "沒有符合文件";
+      title.textContent = emptyText;
+      subtitle.textContent = "";
+      resultList.append(make("div", "empty-state", emptyText));
+      appendTableMessage(tableBody, emptyText);
+      range.textContent = String(data.page || 1);
+    } else {
+      const results = [...(data.temporaryResults || []), ...(data.results || [])];
+      if (state.sortMode === "filename") {
+        results.sort((left, right) => {
+          const leftName = (left.filename || left.path.split(/[\\/]/).pop() || left.path).normalize("NFKC");
+          const rightName = (right.filename || right.path.split(/[\\/]/).pop() || right.path).normalize("NFKC");
+          return leftName.localeCompare(rightName, "zh-Hant", { numeric: true, sensitivity: "base" });
+        });
+      } else if (state.sortMode === "modified") {
+        results.sort((left, right) => {
+          const leftTime = Date.parse(left.modifiedAt || "");
+          const rightTime = Date.parse(right.modifiedAt || "");
+          if (Number.isNaN(leftTime)) return Number.isNaN(rightTime) ? 0 : 1;
+          if (Number.isNaN(rightTime)) return -1;
+          return rightTime - leftTime;
+        });
+      }
+      const shownTotal = data.total + (data.temporaryResults || []).length;
+      title.textContent = shownTotal + " 份文件";
+      subtitle.textContent = (data.temporaryResults || []).length
+        ? "（含 " + data.temporaryResults.length + " 份本次拖曳文件；拖曳文件只以檔名搜尋）"
+        : data.truncatedToFirst500 ? "（只開放前 500 筆）" : "（已篩選）";
+      range.textContent = String(data.page || 1);
+      for (const item of results) {
+        resultList.append(makeDocumentRow(item));
+        tableBody.append(makeTableRow(item));
+      }
+    }
+    prev.disabled = !data || data.page <= 1 || state.searchState === "loading";
+    next.disabled = !data || data.page >= data.pageCount || state.searchState === "loading";
+    const sortSelect = $("document-sort");
+    if (sortSelect) sortSelect.value = state.sortMode;
+    const listMode = state.viewMode !== "table";
+    resultList.hidden = !listMode;
+    tableWrap.hidden = listMode;
+    $("view-list").setAttribute("aria-pressed", String(listMode));
+    $("view-table").setAttribute("aria-pressed", String(!listMode));
+    const selectPage = $("select-page");
+    const selectAll = $("select-all");
+    selectPage.disabled = !data || !data.results || !data.results.length;
+    selectAll.disabled = !data || !data.total;
+    const bulk = $("bulk-bar");
+    if (selectedCount() > 0) {
+      bulk.hidden = false;
+      $("selection-label").textContent = "已選取 " + selectedCount() + " 份文件";
+    } else bulk.hidden = true;
+    $("review-context").disabled = selectedCount() === 0;
+    setStatus("search-status", state.searchMessage, state.searchKind);
+    renderSidebar();
+    renderContextDrawer();
+  }
+  function clearIndexedSelection(message) {
+    state.selected.clear();
+    invalidatePreview(message || "索引選取已清除；請重新產生精確預覽。", true);
+  }
+  function toggleSelection(item, checked) {
+    if (checked) {
+      if (state.selected.has(item.reference)) return;
+      if (selectedCount() >= MAX) {
+        showToast("索引文件與臨時文件合計最多 20 份；未加入第 21 份。");
+        renderDocuments();
+        return;
+      }
+      state.selected.set(item.reference, { query: state.submittedQuery, reference: item.reference, item });
+    } else state.selected.delete(item.reference);
+    invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+  }
+  function toggleImported(item, checked) {
+    if (checked && selectedCount() >= MAX) {
+      showToast("索引文件與臨時文件合計最多 20 份；未加入第 21 份。");
+      renderTemporary();
+      return;
+    }
+    item.selected = checked;
+    invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+    renderTemporary();
+    if (state.route === "documents") renderDocuments();
+  }
+  async function selectAllAccessible() {
+    if (!state.data || !state.submittedQuery) return;
+    const seq = state.searchSeq;
+    const pageCount = state.data.pageCount;
+    const pageSize = state.data.pageSize;
+    let added = 0;
+    for (let page = 1; page <= pageCount && seq === state.searchSeq; page++) {
+      let data;
+      try {
+        data = page === state.data.page ? state.data : await api("/api/search", { method: "POST", body: { ...searchPayload(page), query: state.submittedQuery } });
+      } catch (error) {
+        showToast(error.message || "無法取得全部目前可瀏覽結果。");
+        return;
+      }
+      for (const item of data.results || []) {
+        if (state.selected.has(item.reference)) continue;
+        if (selectedCount() >= MAX) {
+          showToast("目前可瀏覽結果超過上下文上限；已保留前 20 份，未破壞既有集合。");
+          invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+          renderDocuments();
+          return;
+        }
+        state.selected.set(item.reference, { query: data.query, reference: item.reference, item });
+        added++;
+      }
+    }
+    if (seq !== state.searchSeq) return;
+    invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+    renderDocuments();
+    showToast(added ? "已選取目前可瀏覽結果中的可用項目。" : "目前可瀏覽結果已在選取集合中。");
+  }
+  function searchPayload(page) {
+    return {
+      query: state.submittedQuery || state.queryDraft.trim(), mode: state.mode, page, pageSize: 20,
+      field: state.searchField, root: state.rootFilter || undefined,
+      types: state.typeFilter ? [state.typeFilter] : undefined,
+      statuses: state.statusFilter ? [state.statusFilter] : undefined,
+    };
+  }
+  async function search(page) {
+    const submitted = page === 1 ? state.queryDraft.trim() : state.submittedQuery;
+    if (!submitted) {
+      state.searchState = "error";
+      state.searchMessage = "查詢不可為空白。";
+      state.searchKind = "error";
+      renderDocuments();
+      return;
+    }
+    state.submittedQuery = submitted;
+    state.queryDraft = submitted;
+    syncQueryInputs();
+    const seq = ++state.searchSeq;
+    state.searchState = "loading";
+    state.searchMessage = "搜尋中…";
+    state.searchKind = "";
+    renderDocuments();
+    try {
+      let data = await api("/api/search", { method: "POST", body: searchPayload(page) });
+      while (data.pendingUpgrade) {
+        if (seq !== state.searchSeq) return;
+        state.searchMessage = data.message || "正在建立 unigram／trigram 搜尋 postings…";
+        state.searchKind = "warn";
+        renderDocuments();
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const status = await api("/api/index-status");
+        if (["failed", "stopped"].includes(status.indexing?.state)) throw new Error(status.indexing.message);
+        data = await api("/api/search", { method: "POST", body: searchPayload(page) });
+      }
+      if (seq !== state.searchSeq) return;
+      state.data = data;
+      state.searchState = "success";
+      state.searchMessage = data.total ? "搜尋完成。" : "搜尋完成；沒有符合結果。";
+      state.searchKind = data.total ? "ok" : "warn";
+      renderDocuments();
+    } catch (error) {
+      if (seq !== state.searchSeq) return;
+      state.data = null;
+      state.searchState = "error";
+      state.searchMessage = error.message || "查詢失敗。";
+      state.searchKind = "error";
+      renderDocuments();
+    }
+  }
+  async function documentAction(item, action) {
+    try {
+      const data = await api("/api/document-action", { method: "POST", body: { reference: item.reference, action } });
+      const changed = data && data.changed ? "索引可能已過期，請重新搜尋。" : "";
+      showToast((action === "open" ? "已送出開啟檔案請求。" : "已送出顯示位置請求。") + (changed ? " " + changed : ""));
+    } catch (error) { showToast(error.message || "文件操作失敗。"); }
+  }
+  function currentDetailItem() { return state.detailItem; }
+  function renderDetail() {
+    const item = currentDetailItem();
+    if (!item) return;
+    $("detail-title").textContent = escapeText(item.path).split(/[\\\\/]/u).pop() || item.path;
+    $("detail-title").title = item.path;
+    $("detail-prev").disabled = !state.data || state.detailIndex <= 0;
+    $("detail-next").disabled = !state.data || state.detailIndex < 0 || state.detailIndex >= state.data.results.length - 1;
+    const values = [
+      ["標題", escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, false],
+      ["根目錄", documentRootLabel(item) || "未提供", false],
+      ["檔案格式", String(item.extension || "").replace(".", "").toUpperCase() || "未提供", false],
+      ["命中位置", item.location || "未提供", false],
+      ["來源路徑", item.path, true],
+      ["索引狀態", item.status === "indexed" ? "可讀" : (item.status || "未提供"), false],
+    ];
+    const details = $("detail-values");
+    details.replaceChildren();
+    for (const value of values) {
+      details.append(make("dt", "", value[0]));
+      details.append(make("dd", value[2] ? "path-value" : "", value[1]));
+    }
+    const content = $("detail-index-content");
+    content.replaceChildren();
+    if (item.snippet) appendHighlighted(content, item.snippet);
+    else content.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
+    $("detail-tab-details").setAttribute("aria-selected", String(state.detailTab === "details"));
+    $("detail-tab-content").setAttribute("aria-selected", String(state.detailTab === "content"));
+    $("detail-details-panel").hidden = state.detailTab !== "details";
+    $("detail-content-panel").hidden = state.detailTab !== "content";
+    const paper = $("detail-preview-paper");
+    paper.replaceChildren();
+    paper.style.zoom = String(state.previewZoom / 100);
+    $("detail-zoom").textContent = String(state.previewZoom) + "%";
+    paper.append(make("h2", "", escapeText(item.path).split(/[\\\\/]/u).pop() || item.path));
+    paper.append(make("div", "preview-sub", String(item.extension || "").replace(".", "").toUpperCase() + " · " + (item.location || "未提供命中位置") + " · " + (item.status === "indexed" ? "可讀" : (item.status || "未提供"))));
+    paper.append(make("h3", "", "命中內容"));
+    const snippet = make("p", "preview-snippet");
+    if (item.snippet) appendHighlighted(snippet, item.snippet);
+    else snippet.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
+    paper.append(snippet);
+    const note = make("div", "preview-note");
+    note.append(make("strong", "", "來源路徑"), make("br"), make("span", "path-text", item.path), make("p", "", "命中片段預覽，不是完整文件。"));
+    paper.append(note);
+    const toggle = $("detail-context-toggle");
+    toggle.textContent = selectedReference(item.reference) ? "移出上下文" : "加入上下文";
+  }
+  function openDetail(item) {
+    if (!item) return;
+    state.documentScrollTop = $("main").scrollTop;
+    state.detailItem = item;
+    state.detailIndex = state.data && Array.isArray(state.data.results) ? state.data.results.findIndex(result => result.reference === item.reference) : -1;
+    state.detailTab = "details";
+    state.route = "detail";
+    switchPageVisibility();
+    renderDetail();
+    $("main").scrollTop = 0;
+    $("detail-close").focus();
+  }
+  function closeDetail() {
+    state.route = "documents";
+    switchPageVisibility();
+    renderDocuments();
+    $("main").scrollTop = state.documentScrollTop;
+    $("document-query").focus();
+  }
+  function moveDetail(direction) {
+    if (!state.data || state.detailIndex < 0) return;
+    const next = state.detailIndex + direction;
+    if (next < 0 || next >= state.data.results.length) return;
+    state.detailIndex = next;
+    state.detailItem = state.data.results[next];
+    renderDetail();
+    $("main").scrollTop = 0;
+  }
+  function renderTemporary() {
+    const list = $("file-list");
+    list.replaceChildren();
+    $("temporary-count").textContent = String(state.imported.size) + " / " + MAX + " 份";
+    const searchableOnly = [...state.imported.values()].filter(item => item.status !== "indexed").length;
+    $("drop-help").textContent = "目前有 " + String(state.imported.size) + " 份臨時文件；" + searchableOnly + " 份只能搜尋檔名。";
+    $("drop-help").title = state.supportedExtensions.length ? "支援內容解析：" + state.supportedExtensions.join("、") + "；其他格式仍會保留並可搜尋檔名。" : "";
+    if (state.imported.size) {
+      for (const item of state.imported.values()) {
+        const row = make("article", "file-row");
+        const check = document.createElement("input");
+        check.type = "checkbox";
+        check.checked = Boolean(item.selected);
+        check.disabled = item.pending || item.status !== "indexed";
+        check.setAttribute("aria-label", "選取 " + item.filename);
+        check.addEventListener("change", () => toggleImported(item, check.checked));
+        const body = make("div", "", "");
+        body.append(make("div", "file-name", item.filename));
+        body.append(make("div", "file-meta", (item.extension || "未知格式") + " · " + String(item.sizeBytes || 0) + " bytes"));
+        const statusText = item.pending ? "pending：本機解析中…" : item.status + (item.errorMessage ? "：" + item.errorMessage : "");
+        const statusClass = item.pending ? "warn" : item.status === "indexed" ? "indexed" : item.status === "error" || item.status === "encrypted" ? "error" : "warn";
+        const status = make("div", "file-status " + statusClass, statusText);
+        const remove = button("移除", "small", () => void removeImported(item));
+        row.append(check, body, make("div", "file-row-actions", ""));
+        row.lastChild.append(status, remove);
+        list.append(row);
+      }
+    }
+    renderSidebar();
+    renderContextDrawer();
+    $("review-context").disabled = selectedCount() === 0;
+  }
+  async function removeImported(item) {
+    if (item.pending) return;
+    try {
+      if (!String(item.id).startsWith("pending-")) await api("/api/files/" + encodeURIComponent(item.id), { method: "DELETE" });
+      state.imported.delete(item.id);
+      invalidatePreview("臨時文件已移除；請重新產生精確預覽。", true);
+      renderTemporary();
+      if (state.route === "documents" && state.submittedQuery) void search(1);
+      showToast("臨時文件已從本次工作階段移除。");
+    } catch (error) { setStatus("file-status-message", error.message || "臨時文件移除失敗。", "error"); }
+  }
+  async function upload(files) {
+    for (const file of Array.from(files || [])) {
+      if (state.imported.size >= MAX) {
+        showToast("session 最多保留 20 份臨時文件。");
+        break;
+      }
+      const pending = { id: "pending-" + Date.now() + "-" + Math.random().toString(16).slice(2), filename: file.name, extension: "", sizeBytes: file.size, status: "pending", pending: true, selected: false };
+      state.imported.set(pending.id, pending);
+      renderTemporary();
+      setStatus("file-status-message", "本機解析 " + file.name + "…", "");
+      try {
+        const data = await api("/api/files", { method: "POST", headers: { "X-File-Name": encodeURIComponent(file.name), "content-type": "application/octet-stream" }, body: file });
+        state.imported.delete(pending.id);
+        data.selected = data.status === "indexed" && selectedCount() < MAX;
+        data.pending = false;
+        state.imported.set(data.id, data);
+        invalidatePreview("臨時文件已更新；請重新產生精確預覽。", true);
+        setStatus("file-status-message", file.name + " 已收到 server 狀態：" + data.status + "。", data.status === "indexed" ? "ok" : "warn");
+      } catch (error) {
+        pending.pending = false;
+        pending.status = "error";
+        pending.errorMessage = error.message || "上傳或解析失敗。";
+        setStatus("file-status-message", file.name + "：" + pending.errorMessage, "error");
+      }
+      renderTemporary();
+    }
+  }
+  function invalidatePreview(message, rerender) {
+    state.previewSeq++;
+    state.preview = null;
+    const text = $("preview-text");
+    if (text) text.textContent = "尚未產生預覽。";
+    const meta = $("preview-meta");
+    if (meta) meta.textContent = "尚未產生 server 預覽。";
+    const progress = $("preview-progress");
+    if (progress) progress.value = 0;
+    const copy = $("copy-preview");
+    if (copy) copy.disabled = true;
+    setStatus("preview-status", message || "待產生精確預覽。", "");
+    if (rerender) {
+      renderSidebar();
+      renderContextDrawer();
+      if (state.route === "documents") renderDocuments();
+      if (state.route === "temporary") renderTemporary();
+      if (state.route === "detail") renderDetail();
+    }
+  }
+  function contextFingerprint() {
+    const selections = Array.from(state.selected.values()).map(item => [item.query, item.reference]);
+    const files = Array.from(state.imported.values()).filter(item => item.selected && item.status === "indexed").map(item => item.id);
+    return JSON.stringify([state.mode, selections, files]);
+  }
+  function previewPayload() {
+    return {
+      provider: "auto",
+      model: "auto",
+      question: "",
+      mode: state.mode,
+      selections: Array.from(state.selected.values()).map(item => ({ query: item.query, reference: item.reference })),
+      fileIds: Array.from(state.imported.values()).filter(item => item.selected && item.status === "indexed").map(item => item.id),
+    };
+  }
+  function updatePreviewControls() {
+    const current = Boolean(state.preview && state.preview.fingerprint === contextFingerprint());
+    $("copy-preview").disabled = !current;
+  }
+  async function makePreview() {
+    if (selectedCount() === 0) {
+      setStatus("preview-status", "請先選取文件。", "warn");
+      return;
+    }
+    const seq = ++state.previewSeq;
+    const fingerprint = contextFingerprint();
+    setStatus("preview-status", "正在重新驗證來源並建立精確預覽…", "");
+    $("copy-preview").disabled = true;
+    try {
+      const data = await api("/api/preview", { method: "POST", body: previewPayload() });
+      if (seq !== state.previewSeq || fingerprint !== contextFingerprint()) return;
+      state.preview = { ...data, fingerprint };
+      $("preview-text").textContent = data.context;
+      $("preview-meta").textContent = String(data.documentCount) + " 份文件 · " + String(data.bytes) + " bytes" + (data.truncated ? " · 內容已截短" : "");
+      $("preview-progress").value = Math.min(Number(data.bytes || 0), 262144);
+      $("copy-preview").disabled = false;
+      setStatus("preview-status", "預覽完成。複製內容與上方可見文字逐字一致。", "ok");
+    } catch (error) {
+      if (seq !== state.previewSeq) return;
+      state.preview = null;
+      setStatus("preview-status", error.message || "精確預覽失敗。", "error");
+    }
+  }
+  function showDialog(dialog, trigger, focusTarget) {
+    state.dialogTrigger = trigger || document.activeElement;
+    dialog.showModal();
+    setTimeout(() => { if (focusTarget && !dialog.open) return; (focusTarget || dialog).focus(); }, 0);
+  }
+  function restoreDialogFocus() {
+    const trigger = state.dialogTrigger;
+    state.dialogTrigger = null;
+    if (trigger instanceof HTMLElement && document.contains(trigger)) trigger.focus();
+  }
+  function openPreview() {
+    if (selectedCount() === 0) return;
+    const dialog = $("preview-dialog");
+    showDialog(dialog, document.activeElement, $("copy-preview"));
+    void makePreview();
+  }
+  async function copyPreview() {
+    if (!state.preview || state.preview.fingerprint !== contextFingerprint()) return;
+    try {
+      await navigator.clipboard.writeText(state.preview.context);
+      showToast("已複製目前 server 精確預覽。");
+    } catch { setStatus("preview-status", "瀏覽器拒絕剪貼簿權限；請手動複製可見預覽。", "error"); }
+  }
+  function renderContextDrawer() {
+    const count = selectedCount();
+    $("nav-context-count").textContent = String(count);
+    $("context-count").textContent = "已選 " + count + " / " + MAX;
+    $("context-open-preview").disabled = count === 0;
+    const indexed = $("context-indexed-list");
+    const temporary = $("context-temporary-list");
+    indexed.replaceChildren();
+    temporary.replaceChildren();
+    if (!state.selected.size) indexed.append(make("div", "empty-state", "尚未選取索引文件。"));
+    for (const selected of state.selected.values()) {
+      const row = make("div", "context-item");
+      const body = make("div", "", "");
+      body.append(make("div", "context-item-name", selected.item.path));
+      body.append(make("div", "context-item-meta", (selected.item.extension || "") + " · " + (selected.item.location || "未提供位置")));
+      const actions = make("div", "context-item-actions");
+      actions.append(button("檢視", "small", () => openDetail(selected.item)));
+      actions.append(button("移除", "small", () => { state.selected.delete(selected.reference); invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
+      row.append(body, actions);
+      indexed.append(row);
+    }
+    const selectedTemps = Array.from(state.imported.values()).filter(item => item.selected);
+    if (!selectedTemps.length) temporary.append(make("div", "empty-state", "尚未選取臨時文件。"));
+    for (const item of selectedTemps) {
+      const row = make("div", "context-item");
+      const body = make("div", "", "");
+      body.append(make("div", "context-item-name", item.filename));
+      body.append(make("div", "context-item-meta", (item.extension || "") + " · " + item.status));
+      row.append(body, button("移除", "small", () => { item.selected = false; invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
+      temporary.append(row);
+    }
+  }
+  function openContext(trigger) {
+    const drawer = $("context-drawer");
+    state.focusAfterDrawer = trigger || document.activeElement;
+    drawer.hidden = false;
+    drawer.removeAttribute("inert");
+    drawer.setAttribute("aria-hidden", "false");
+    $("app-shell").setAttribute("inert", "");
+    $("scrim").hidden = false;
+    renderContextDrawer();
+    $("context-close").focus();
+  }
+  function closeContext() {
+    const drawer = $("context-drawer");
+    drawer.hidden = true;
+    drawer.setAttribute("inert", "");
+    drawer.setAttribute("aria-hidden", "true");
+    $("scrim").hidden = true;
+    $("app-shell").removeAttribute("inert");
+    const trigger = state.focusAfterDrawer;
+    state.focusAfterDrawer = null;
+    if (trigger instanceof HTMLElement && document.contains(trigger)) trigger.focus();
+  }
+  function rootCheckbox(path, selected, kind) {
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = "table-check";
+    input.checked = selected;
+    input.setAttribute("aria-label", (kind === "trash" ? "選取垃圾桶項目 " : "選取索引根目錄 ") + path);
+    input.disabled = isIndexing();
+    input.addEventListener("change", () => {
+      const set = kind === "trash" ? state.selectedTrash : state.selectedRoots;
+      if (input.checked) set.add(path); else set.delete(path);
+      kind === "trash" ? renderTrash() : renderRoots();
+    });
+    return input;
+  }
+  function rootIntegrity(root) {
+    if (root.lastSyncComplete === false) return { text: "未完整同步", kind: "bad" };
+    if (Array.isArray(root.errors) && root.errors.length) return { text: "錯誤 " + root.errors.length + " 項", kind: "bad" };
+    if (root.lastSyncComplete === null) return { text: "尚未完成", kind: "warn" };
+    return { text: "完整", kind: "good" };
+  }
+  function renderRoots() {
+    renderScopeSummaries();
+    const data = state.indexStatus;
+    const body = $("roots-body");
+    body.replaceChildren();
+    $("root-select-all").checked = Boolean(data && data.roots && data.roots.length && data.roots.every(root => state.selectedRoots.has(root.path)));
+    $("root-select-all").indeterminate = state.selectedRoots.size > 0 && !$("root-select-all").checked;
+    const disabled = isIndexing();
+    $("root-select-all").disabled = disabled || !data || !data.roots || !data.roots.length;
+    $("root-delete-selected").disabled = disabled || state.selectedRoots.size === 0;
+    $("roots-refresh").disabled = disabled;
+    $("roots-stop").hidden = !disabled;
+    $("roots-stop").disabled = !disabled;
+    $("top-refresh").disabled = disabled;
+    $("top-stop").hidden = !disabled;
+    $("top-stop").disabled = !disabled;
+    $("root-choose").disabled = disabled;
+    $("root-choose-inline").disabled = disabled;
+    $("root-confirm").disabled = disabled || !state.addRootDraft;
+    $("root-draft").value = state.addRootDraft;
+    if (!data || data.state === "missing" || !data.roots || !data.roots.length) {
+      body.append(make("tr", "root-empty-row", ""));
+      body.lastChild.append(make("td", "", "尚無已登錄根目錄。"));
+      body.lastChild.firstChild.colSpan = 6;
+    } else {
+      for (const root of data.roots) {
+        const row = document.createElement("tr");
+        row.dataset.rootRow = root.path;
+        row.tabIndex = 0;
+        const check = document.createElement("td"); check.append(rootCheckbox(root.path, state.selectedRoots.has(root.path), "roots"));
+        const pathCell = document.createElement("td");
+        const pathButton = make("button", "root-focus-button", root.path);
+        pathButton.type = "button"; pathButton.title = root.path; pathButton.addEventListener("click", () => { state.focusRoot = root.path; pathButton.focus(); });
+        pathCell.className = "root-path"; pathCell.append(pathButton);
+        const count = make("td", "", String(root.documentCount));
+        const integrity = rootIntegrity(root);
+        const synced = make("td", "root-state", root.lastSyncComplete === null ? "尚未同步" : "已同步");
+        const status = make("td", "root-state " + integrity.kind, integrity.text);
+        status.title = Array.isArray(root.errors) && root.errors.length ? root.errors.join("；") : Array.isArray(root.notices) && root.notices.length ? root.notices.join("；") : integrity.text;
+        const actions = make("td", "root-actions", "");
+        const refresh = button("更新", "", () => void runIndex(root.path));
+        const move = button("移至垃圾桶", "danger", () => { state.selectedRoots.clear(); state.selectedRoots.add(root.path); requestDelete("roots"); });
+        refresh.disabled = disabled;
+        move.disabled = disabled;
+        actions.append(refresh, move);
+        row.append(check, pathCell, count, synced, status, actions);
+        body.append(row);
+      }
+    }
+    const addPanel = $("root-add-panel");
+    addPanel.classList.toggle("has-draft", Boolean(state.addRootDraft));
+    const draftMessage = $("root-draft-message");
+    draftMessage.textContent = state.addRootDraft ? "已選取；尚未開始索引。" : "尚未選取資料夾。";
+    renderSidebar();
+  }
+  function renderTrash() {
+    const data = state.indexStatus;
+    const body = $("trash-body");
+    body.replaceChildren();
+    const trash = data && Array.isArray(data.trash) ? data.trash : [];
+    const disabled = isIndexing();
+    $("trash-select-all").checked = Boolean(trash.length && trash.every(item => state.selectedTrash.has(item.path)));
+    $("trash-select-all").indeterminate = state.selectedTrash.size > 0 && !$("trash-select-all").checked;
+    $("trash-select-all").disabled = disabled || !trash.length;
+    $("trash-restore-selected").disabled = disabled || state.selectedTrash.size === 0;
+    $("trash-purge-selected").disabled = disabled || state.selectedTrash.size === 0;
+    if (!trash.length) {
+      const row = make("tr", "trash-empty-row", "");
+      const cell = make("td", "", "垃圾桶是空的。"); cell.colSpan = 3; row.append(cell); body.append(row);
+    } else {
+      for (const item of trash) {
+        const row = document.createElement("tr");
+        const check = document.createElement("td"); check.append(rootCheckbox(item.path, state.selectedTrash.has(item.path), "trash"));
+        const pathCell = make("td", "trash-path", ""); pathCell.title = item.path;
+        pathCell.append(make("h2", "", item.path), make("p", "", String(item.documentCount) + " 份文件 · " + formatLocalDateTime(item.deletedAt)));
+        const actions = make("td", "trash-actions", "");
+        const restore = button("還原並重新索引", "primary", () => void restoreTrash([item.path]));
+        restore.disabled = disabled;
+        const purge = button("永久刪除", "danger", () => { state.selectedTrash.clear(); state.selectedTrash.add(item.path); requestDelete("trash"); });
+        purge.disabled = disabled;
+        actions.append(restore, purge);
+        row.append(check, pathCell, actions); body.append(row);
+      }
+    }
+    renderSidebar();
+  }
+  async function refreshStatus() {
+    if (state.statusRefreshBusy) return;
+    state.statusRefreshBusy = true;
+    const previous = state.indexStatus;
+    try {
+      state.indexStatus = await api("/api/index-status");
+      state.deleteConfirmation = state.indexStatus.deleteConfirmation !== false;
+      const settingsCheck = $("settings-delete-confirmation");
+      if (settingsCheck) settingsCheck.checked = state.deleteConfirmation;
+      state.autoupdateEnabled = Boolean(state.indexStatus.autoupdate && state.indexStatus.autoupdate.enabled);
+      const autoupdateCheck = $("settings-autoupdate");
+      if (autoupdateCheck) autoupdateCheck.checked = state.autoupdateEnabled;
+      renderSidebar();
+      renderScopeSummaries();
+      renderRoots();
+      renderTrash();
+      if (state.route === "documents") renderDocuments();
+      if (state.route === "temporary") renderTemporary();
+      if (!state.indexNotice && state.indexStatus.indexing && state.indexStatus.indexing.state === "failed") setNotice(state.indexStatus.indexing.message, "error");
+    } catch (error) {
+      state.indexStatus = previous || { state: "unavailable", roots: [], trash: [], indexing: { state: "idle", message: "索引狀態暫時無法讀取。" } };
+      if (!previous || !isIndexing()) setNotice(error.message || "索引狀態暫時無法讀取；請稍後重試。", "warn");
+      renderSidebar();
+      renderScopeSummaries();
+      renderRoots();
+      renderTrash();
+    } finally {
+      state.statusRefreshBusy = false;
+    }
+  }
+  async function runIndex(root) {
+    if (state.indexOperationBusy || isIndexing()) {
+      setNotice(root ? "索引進行中，請完成後再加入。" : "索引進行中，請稍候。", "warn");
+      return false;
+    }
+    state.indexOperationBusy = true;
+    setNotice(root ? "已確認資料夾；正在建立索引…" : "正在更新已登錄根目錄…", "");
+    renderRoots(); renderTrash(); renderSidebar();
+    try {
+      const body = root ? { root } : {};
+      const data = await api("/api/index", { method: "POST", body });
+      state.indexStatus = { ...(state.indexStatus || {}), indexing: data.indexing };
+      renderRoots(); renderTrash(); renderSidebar();
+      while (state.indexStatus && state.indexStatus.indexing && ["running", "stopping"].includes(state.indexStatus.indexing.state)) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await refreshStatus();
+      }
+      await refreshStatus();
+      const success = state.indexStatus && state.indexStatus.indexing && state.indexStatus.indexing.state === "complete";
+      if (success && root) state.addRootDraft = "";
+      setNotice(state.indexStatus && state.indexStatus.indexing ? state.indexStatus.indexing.message : (success ? "索引已更新。" : "索引完成。"), success ? "ok" : "error");
+      return Boolean(success);
+    } catch (error) {
+      setNotice(error.message || "索引無法開始。", "error");
+      await refreshStatus();
+      return false;
+    } finally {
+      state.indexOperationBusy = false;
+      renderRoots(); renderTrash(); renderSidebar();
+    }
+  }
+  async function stopIndex() {
+    if (!isIndexing()) return;
+    setNotice("正在停止索引同步…", "warn");
+    try {
+      const data = await api("/api/index/stop", { method: "POST", body: {} });
+      state.indexStatus = { ...(state.indexStatus || {}), indexing: data.indexing };
+      await refreshStatus();
+      setNotice("索引同步已停止；現在可以移除根目錄。", "ok");
+    } catch (error) {
+      setNotice(error.message || "無法停止索引同步。", "error");
+    }
+  }
+  async function restoreTrash(paths) {
+    if (!paths.length || isIndexing()) return;
+    for (const root of paths) {
+      const success = await runIndex(root);
+      if (!success) break;
+    }
+    state.selectedTrash.clear();
+    renderTrash();
+  }
+  async function chooseFolder() {
+    if (isIndexing()) { setNotice("索引進行中，請完成後再加入。", "warn"); return; }
+    if (state.folderPickerBusy) return;
+    state.folderPickerBusy = true;
+    try {
+      const data = await api("/api/select-folder", { method: "POST" });
+      const root = data && typeof data.root === "string" ? data.root.trim() : "";
+      if (!root) { setNotice("已取消選擇資料夾；尚未開始索引。", "warn"); return; }
+      state.addRootDraft = root;
+      setNotice("已選擇資料夾；請按「確認並建立索引」。", "ok");
+      renderRoots();
+    } catch (error) { setNotice(error.message || "資料夾選擇失敗。", "error"); }
+    finally { state.folderPickerBusy = false; }
+  }
+  function requestAddRoot() {
+    const root = state.addRootDraft.trim();
+    if (!root) { setNotice("請先按「加入資料夾」選擇資料夾。", "warn"); return; }
+    void runIndex(root);
+  }
+  function requestDelete(kind) {
+    const paths = Array.from(kind === "trash" ? state.selectedTrash : state.selectedRoots);
+    if (!paths.length) return;
+    if (isIndexing()) { setNotice(kind === "trash" ? "索引進行中，請完成後再清理垃圾桶。" : "索引進行中，請完成後再刪除根目錄。", "warn"); return; }
+    if (kind === "roots" && !state.deleteConfirmation) { void executeDelete(kind, paths, false); return; }
+    openDeleteDialog(kind, paths);
+  }
+  function openDeleteDialog(kind, paths) {
+    state.pendingDelete = { kind, paths };
+    const dialog = $("delete-dialog");
+    const permanent = kind === "trash";
+    $("delete-title").textContent = permanent ? "永久刪除垃圾桶項目？" : "將索引根目錄移至垃圾桶？";
+    $("delete-message").textContent = "選取數量：" + paths.length + "。";
+    const shown = paths.slice(0, 3).join(String.fromCharCode(10));
+    $("delete-detail").textContent = shown + (paths.length > 3 ? String.fromCharCode(10) + "… 共 " + paths.length + " 條路徑" : "");
+    $("delete-warning").textContent = permanent ? "此操作無法還原。來源資料夾與檔案不會被刪除。" : "只會移除索引；來源資料夾與檔案不會被刪除。垃圾桶仍可還原並重新索引。";
+    $("delete-confirm").textContent = permanent ? "永久刪除（無法還原）" : "移至垃圾桶";
+    $("delete-dont-remind").checked = false;
+    $("delete-dont-remind-row").hidden = permanent;
+    showDialog(dialog, document.activeElement, $("delete-confirm"));
+  }
+  async function executeDelete(kind, paths, dontRemind) {
+    try {
+      const endpoint = kind === "trash" ? "/api/trash" : "/api/index-roots/trash";
+      await api(endpoint, { method: kind === "trash" ? "DELETE" : "POST", body: { roots: paths } });
+      if (kind === "trash") state.selectedTrash.clear(); else state.selectedRoots.clear();
+      await refreshStatus();
+      setNotice(kind === "trash" ? "垃圾桶項目已永久刪除。" : "索引根目錄已移至垃圾桶。", "ok");
+      showToast(kind === "trash" ? "垃圾桶項目已永久刪除；來源資料未刪除。" : "索引根目錄已移至垃圾桶；來源資料未刪除。");
+      if (kind === "roots" && dontRemind) await saveDeleteConfirmation(false);
+      return true;
+    } catch (error) {
+      setNotice(error.message || "刪除操作失敗。", "error");
+      return false;
+    } finally { renderRoots(); renderTrash(); }
+  }
+  async function saveDeleteConfirmation(enabled) {
+    try {
+      const data = await api("/api/settings", { method: "POST", body: { deleteConfirmation: enabled } });
+      state.deleteConfirmation = data.deleteConfirmation !== false;
+      $("settings-delete-confirmation").checked = state.deleteConfirmation;
+      setStatus("settings-status", state.deleteConfirmation ? "已開啟刪除確認提醒。" : "已關閉刪除確認提醒。", "ok");
+      return true;
+    } catch (error) {
+      setStatus("settings-status", error.message || "設定保存失敗。", "error");
+      return false;
+    }
+  }
+  async function saveAutoupdate(enabled) {
+    const check = $("settings-autoupdate");
+    if (check) check.disabled = true;
+    try {
+      const data = await api("/api/settings", { method: "POST", body: { autoupdateEnabled: enabled } });
+      state.autoupdateEnabled = Boolean(data.autoupdate && data.autoupdate.enabled);
+      if (check) check.checked = state.autoupdateEnabled;
+      setStatus("settings-status", state.autoupdateEnabled
+        ? "背景自動更新已開啟；檔案變更會增量更新，並每 6 小時完整校正。"
+        : "背景自動更新已關閉。", "ok");
+    } catch (error) {
+      if (check) check.checked = state.autoupdateEnabled;
+      setStatus("settings-status", error.message || "背景自動更新設定失敗。", "error");
+    } finally { if (check) check.disabled = false; }
+  }
+  function openSettings(trigger) {
+    const check = $("settings-delete-confirmation");
+    if (check) check.checked = state.deleteConfirmation;
+    const autoupdate = $("settings-autoupdate");
+    if (autoupdate) autoupdate.checked = state.autoupdateEnabled;
+    showDialog($("settings-dialog"), trigger || document.activeElement, check || $("settings-dialog"));
+  }
+  function makePageHeader(title, description) {
+    const header = make("header", "page-header");
+    const copy = make("div", "", ""); copy.append(make("h1", "", title), make("p", "", description));
+    const actions = make("div", "page-header-actions", ""); header.append(copy, actions); header.actions = actions; return header;
+  }
+  function buildApp() {
+    const app = $("app");
+    const shell = make("div", "app-shell"); shell.id = "app-shell";
+    const topbar = make("header", "topbar");
+    const brand = make("div", "brand"); brand.append(make("span", "brand-mark", "S"), make("span", "", "seekah"));
+    const searchLabel = make("label", "global-search"); searchLabel.htmlFor = "global-query"; searchLabel.append(make("span", "", "⌕"));
+    const globalQuery = document.createElement("input"); globalQuery.id = "global-query"; globalQuery.type = "search"; globalQuery.maxLength = 1000; globalQuery.autocomplete = "off"; globalQuery.placeholder = "搜尋所有本機文件"; globalQuery.setAttribute("aria-label", "全域搜尋所有本機文件"); searchLabel.append(globalQuery);
+    const topActions = make("div", "top-actions");
+    const refresh = button("完整校正", "top-button", () => void runIndex()); refresh.id = "top-refresh"; refresh.title = "列舉所有根目錄並比較 metadata；只重新解析新增或變更的文件。";
+    const stop = button("停止同步", "top-button", () => void stopIndex()); stop.id = "top-stop"; stop.hidden = true;
+    const trace = button("Trace", "top-button", () => { location.href = "/traces#" + encodeURIComponent(token()); }); trace.id = "trace-toggle"; trace.title = "開啟獨立 Trace 診斷頁，查看持久化搜尋與 answer log。";
+    const settings = button("設定", "top-button", () => openSettings(settings)); settings.id = "settings-toggle";
+    const status = make("span", "local-status", "本機模式"); status.id = "top-status";
+    topActions.append(refresh, stop, trace, settings, status); topbar.append(brand, searchLabel, topActions); shell.append(topbar);
+
+    const sidebar = make("aside", "sidebar"); sidebar.setAttribute("aria-label", "主要導覽");
+    const documentsGroup = make("div", "nav-group", "文件"); sidebar.append(documentsGroup);
+    const nav = make("nav", "nav-list");
+    nav.setAttribute("aria-label", "文件導覽");
+    const allDocs = navButton(() => navigate("documents")); allDocs.dataset.route = "documents"; allDocs.append(make("span", "nav-icon", "▤"), make("span", "", "所有文件"), make("span", "nav-count", "")); allDocs.lastChild.id = "nav-doc-count";
+    const temp = navButton(() => navigate("temporary")); temp.dataset.route = "temporary"; temp.append(make("span", "nav-icon", "＋"), make("span", "", "臨時文件"), make("span", "nav-count", "0")); temp.lastChild.id = "nav-temp-count";
+    nav.append(allDocs, temp); sidebar.append(nav);
+    sidebar.append(make("div", "nav-group", "常用範圍")); const rootList = make("div", "root-nav-list", ""); rootList.id = "sidebar-roots"; sidebar.append(rootList);
+    sidebar.append(make("div", "nav-group", "索引管理"));
+    const manage = make("nav", "nav-list");
+    manage.setAttribute("aria-label", "索引管理導覽");
+    const roots = navButton(() => navigate("roots")); roots.dataset.route = "roots"; roots.append(make("span", "nav-icon", "◫"), make("span", "", "根目錄"), make("span", "nav-count", "")); roots.lastChild.id = "nav-root-count";
+    const trash = navButton(() => navigate("trash")); trash.dataset.route = "trash"; trash.append(make("span", "nav-icon", "♲"), make("span", "", "垃圾桶"), make("span", "nav-count", "")); trash.lastChild.id = "nav-trash-count";
+    manage.append(roots, trash); sidebar.append(manage);
+    sidebar.append(make("div", "nav-group", "工作區"));
+    const workspace = make("nav", "nav-list");
+    workspace.setAttribute("aria-label", "工作區導覽");
+    const context = navButton(() => openContext(context)); context.append(make("span", "nav-icon", "▣"), make("span", "", "已選上下文"), make("span", "nav-count", "0")); context.lastChild.id = "nav-context-count";
+    const settingsSide = navButton(() => openSettings(settingsSide)); settingsSide.append(make("span", "nav-icon", "⚙"), make("span", "", "設定"));
+    workspace.append(context, settingsSide); sidebar.append(workspace);
+    allDocs.id = "nav-documents"; temp.id = "nav-temporary"; roots.id = "nav-roots"; trash.id = "nav-trash"; context.id = "nav-context"; settingsSide.id = "nav-settings";
+    const footer = make("div", "sidebar-footer"); const footerStatus = make("strong", "", "讀取中…"); footerStatus.id = "sidebar-status"; footer.append(footerStatus, make("br"), make("span", "", "搜尋與臨時解析留在這台電腦。")); sidebar.append(footer); shell.append(sidebar);
+
+    const main = make("main", "main"); main.id = "main"; main.tabIndex = -1;
+    const docPage = make("section", "page", ""); docPage.dataset.page = "documents"; docPage.setAttribute("aria-labelledby", "documents-heading"); docPage.id = "documents-page";
+    const docHeader = makePageHeader("文件", "搜尋、篩選並選取要加入上下文的來源。"); docHeader.querySelector("h1").id = "documents-heading";
+    const selectLabel = make("span", "button-label", "選取："); const selectPage = button("本頁", "", () => { if (state.data) for (const item of state.data.results) toggleSelection(item, true); }); selectPage.id = "select-page";
+    const selectAll = button("全部", "", () => void selectAllAccessible()); selectAll.id = "select-all"; selectAll.title = "選取全部目前可瀏覽結果";
+    const viewList = button("☷", "", () => { state.viewMode = "list"; renderDocuments(); }); viewList.id = "view-list"; viewList.setAttribute("aria-label", "清單檢視");
+    const viewTable = button("▤", "", () => { state.viewMode = "table"; renderDocuments(); }); viewTable.id = "view-table"; viewTable.setAttribute("aria-label", "表格檢視");
+    const views = make("div", "segmented"); views.setAttribute("role", "group"); views.setAttribute("aria-label", "文件顯示模式"); views.append(viewList, viewTable);
+    const sortSelect = document.createElement("select"); sortSelect.id = "document-sort"; sortSelect.className = "btn";
+    sortSelect.setAttribute("aria-label", "排序規則");
+    sortSelect.append(new Option("目前結果：相關性", "relevance"),
+      new Option("目前結果：檔名 A → Z", "filename"), new Option("目前結果：最近修改優先", "modified"));
+    sortSelect.addEventListener("change", () => { state.sortMode = sortSelect.value; renderDocuments(); });
+    docHeader.actions.append(selectLabel, selectPage, selectAll, views, sortSelect); docPage.append(docHeader);
+    const scopeBar = make("form", "scope-bar"); scopeBar.id = "document-search-form";
+    const queryWrap = make("label", "document-query"); queryWrap.htmlFor = "document-query"; const queryField = document.createElement("select"); queryField.id = "query-field"; queryField.setAttribute("aria-label", "搜尋欄位"); queryField.append(new Option("檔名與內容", "all"), new Option("只搜尋檔名", "filename"), new Option("只搜尋內容", "content")); const pageQuery = document.createElement("input"); pageQuery.id = "document-query"; pageQuery.type = "search"; pageQuery.maxLength = 1000; pageQuery.autocomplete = "off"; pageQuery.placeholder = "搜尋"; queryWrap.append(queryField, pageQuery);
+    const modeSwitch = make("div", "mode-switch"); modeSwitch.setAttribute("role", "group"); modeSwitch.setAttribute("aria-label", "搜尋模式"); const phrase = button("完整片語 ×", "filter-choice", () => setMode("all-terms")); phrase.id = "mode-phrase"; phrase.dataset.mode = "phrase"; const allTerms = button("全部詞彙 ×", "filter-choice", () => setMode("phrase")); allTerms.id = "mode-all-terms"; allTerms.dataset.mode = "all-terms"; modeSwitch.append(phrase, allTerms);
+    const searchButton = button("搜尋", "primary search-submit", () => void search(1)); searchButton.id = "document-search-button";
+    const summaries = make("div", "scope-summaries"); summaries.append(scopeSummary("根目錄", "scope-root"), scopeSummary("格式", "scope-format"), scopeSummary("解析狀態", "scope-parse"));
+    const resetFilters = button("重設篩選", "filter-reset", () => {
+      state.searchField = "all"; state.rootFilter = ""; state.typeFilter = ""; state.statusFilter = ""; state.sortMode = "relevance";
+      queryField.value = "all"; sortSelect.value = "relevance"; renderScopeSummaries(); if (state.submittedQuery || state.queryDraft.trim()) void search(1);
+    }); resetFilters.id = "reset-filters";
+    scopeBar.append(queryWrap, summaries, modeSwitch, resetFilters, searchButton); docPage.append(scopeBar);
+    const searchStatus = make("div", "status", "尚未搜尋。"); searchStatus.id = "search-status"; searchStatus.setAttribute("role", "status"); searchStatus.setAttribute("aria-live", "polite"); docPage.append(searchStatus);
+    const resultToolbar = make("div", "results-toolbar"); const resultCopy = make("div", "", ""); resultCopy.append(make("strong", "", "尚未搜尋"), make("span", "", "")); resultCopy.lastChild.id = "results-subtitle"; resultCopy.firstChild.id = "results-title"; const pagination = make("div", "pagination"); const paginationLabel = make("span", "pagination-label", "1"); paginationLabel.id = "pagination-label"; const prev = button("‹", "small", () => void search((state.data?.page || 1) - 1)); prev.id = "documents-prev"; prev.setAttribute("aria-label", "上一頁"); const next = button("›", "small", () => void search((state.data?.page || 1) + 1)); next.id = "documents-next"; next.setAttribute("aria-label", "下一頁"); pagination.append(prev, paginationLabel, next); resultToolbar.append(resultCopy, pagination); docPage.append(resultToolbar);
+    const resultList = make("div", "result-list", ""); resultList.id = "document-list"; docPage.append(resultList);
+    const tableWrap = make("div", "table-wrap", ""); tableWrap.id = "document-table-wrap"; const table = document.createElement("table"); table.className = "documents-table"; const thead = document.createElement("thead"); const headRow = document.createElement("tr"); for (const label of ["選取", "標題", "根目錄", "格式", "命中位置", "狀態"]) headRow.append(make("th", "", label)); thead.append(headRow); const tbody = document.createElement("tbody"); tbody.id = "document-table-body"; table.append(thead, tbody); tableWrap.append(table); docPage.append(tableWrap);
+    const bulk = make("div", "bulk-bar", ""); bulk.id = "bulk-bar"; const selectionLabel = make("strong", "", ""); selectionLabel.id = "selection-label"; const review = button("加入上下文", "primary", openPreview); review.id = "review-context"; const clear = button("清除選取", "", () => { state.selected.clear(); for (const item of state.imported.values()) item.selected = false; invalidatePreview("選取已清除；請重新產生精確預覽。", true); }); bulk.append(selectionLabel, review, clear); docPage.append(bulk); main.append(docPage);
+
+    const detailPage = make("section", "page", ""); detailPage.dataset.page = "detail"; detailPage.id = "detail-page";
+    const detailHeader = make("header", "detail-header"); const detailClose = button("× 關閉", "", closeDetail); detailClose.id = "detail-close"; const detailPrev = button("←", "", () => moveDetail(-1)); detailPrev.id = "detail-prev"; detailPrev.setAttribute("aria-label", "上一份"); const detailNext = button("→", "", () => moveDetail(1)); detailNext.id = "detail-next"; detailNext.setAttribute("aria-label", "下一份"); const detailTitle = make("h1", "", ""); detailTitle.id = "detail-title"; const detailSpacer = make("span", "detail-spacer", ""); const detailOpen = button("開啟來源", "", () => { const item = currentDetailItem(); if (item) void documentAction(item, "open"); }); const detailToggle = button("加入上下文", "primary", () => { const item = currentDetailItem(); if (item) toggleSelection(item, !selectedReference(item.reference)); }); detailToggle.id = "detail-context-toggle"; detailHeader.append(detailClose, detailPrev, detailNext, detailTitle, detailSpacer, detailOpen, detailToggle); detailPage.append(detailHeader);
+    const detailGrid = make("div", "detail-grid", ""); const detailFields = make("section", "detail-panel detail-fields", ""); const tabs = make("div", "detail-tabs", ""); const tabDetails = button("詳細資料", "detail-tab", () => { state.detailTab = "details"; renderDetail(); }); tabDetails.id = "detail-tab-details"; tabDetails.setAttribute("role", "tab"); const tabContent = button("索引內容", "detail-tab", () => { state.detailTab = "content"; renderDetail(); }); tabContent.id = "detail-tab-content"; tabContent.setAttribute("role", "tab"); tabs.append(tabDetails, tabContent);
+    tabs.setAttribute("role", "tablist");
+    const detailsPanel = make("div", "", ""); detailsPanel.id = "detail-details-panel"; const values = document.createElement("dl"); values.className = "detail-metadata"; values.id = "detail-values"; detailsPanel.append(values);
+    const contentPanel = make("div", "", ""); contentPanel.id = "detail-content-panel"; const contentBody = make("div", "detail-index-content", ""); contentBody.id = "detail-index-content"; contentPanel.append(contentBody);
+    detailFields.append(tabs, detailsPanel, contentPanel);
+    const detailPreview = make("section", "detail-panel detail-preview", ""); const previewTools = make("div", "detail-preview-tools", ""); const previewPage = make("span", "btn", "片段 1，共 1 段"); const zoomOut = button("−", "", () => { state.previewZoom = Math.max(80, state.previewZoom - 10); renderDetail(); }); const zoomLabel = make("span", "btn", "100%"); zoomLabel.id = "detail-zoom"; const zoomIn = button("+", "", () => { state.previewZoom = Math.min(120, state.previewZoom + 10); renderDetail(); }); previewTools.append(previewPage, zoomOut, zoomLabel, zoomIn); const previewPaper = make("div", "preview-paper", ""); previewPaper.id = "detail-preview-paper"; detailPreview.append(previewTools, previewPaper); detailGrid.append(detailFields, detailPreview); detailPage.append(detailGrid); main.append(detailPage);
+
+    const temporaryPage = make("section", "page", ""); temporaryPage.dataset.page = "temporary"; temporaryPage.id = "temporary-page"; const tempHeader = makePageHeader("臨時文件", "本次工作階段解析，不加入永久索引。"); const tempCount = make("strong", "sr-only", "0 / 20 份"); tempCount.id = "temporary-count"; tempHeader.actions.append(tempCount, button("選取文件", "primary", () => $("file-input").click())); temporaryPage.append(tempHeader); const drop = make("div", "drop-zone", ""); drop.id = "drop-zone"; drop.tabIndex = 0; drop.setAttribute("role", "button"); drop.setAttribute("aria-label", "拖曳或選取文件"); drop.append(make("strong", "", "拖曳文件到這裡"), make("small", "", "目前有 0 份臨時文件可加入上下文。")); drop.querySelector("small").id = "drop-help"; temporaryPage.append(drop); const fileInput = document.createElement("input"); fileInput.id = "file-input"; fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true; temporaryPage.append(fileInput); const fileStatus = make("div", "status", ""); fileStatus.id = "file-status-message"; fileStatus.setAttribute("role", "status"); fileStatus.setAttribute("aria-live", "polite"); temporaryPage.append(fileStatus); const fileList = make("div", "file-list", ""); fileList.id = "file-list"; temporaryPage.append(fileList); main.append(temporaryPage);
+
+    const rootsPage = make("section", "page", ""); rootsPage.dataset.page = "roots"; rootsPage.id = "roots-page"; const rootsHeader = makePageHeader("索引根目錄", "「完整校正」會列舉所有檔案比較 metadata，但只重新解析新增或變更的文件；日常更新可在設定開啟背景自動更新。"); const rootRefresh = button("完整校正", "", () => void runIndex()); rootRefresh.id = "roots-refresh"; const rootStop = button("停止同步", "danger", () => void stopIndex()); rootStop.id = "roots-stop"; rootStop.hidden = true; const rootChoose = button("加入資料夾", "primary", () => void chooseFolder()); rootChoose.id = "root-choose"; rootsHeader.actions.append(rootRefresh, rootStop, rootChoose); rootsPage.append(rootsHeader); const indexStatusMessage = make("div", "status", "讀取中…"); indexStatusMessage.id = "index-status-message"; indexStatusMessage.setAttribute("role", "status"); indexStatusMessage.setAttribute("aria-live", "polite"); rootsPage.append(indexStatusMessage); const rootsPanel = make("section", "root-list-panel", ""); rootsPage.append(rootsPanel); const rootsToolbar = make("div", "root-toolbar", ""); const rootSelectAll = document.createElement("input"); rootSelectAll.type = "checkbox"; rootSelectAll.id = "root-select-all"; rootSelectAll.setAttribute("aria-label", "選取全部根目錄"); rootSelectAll.addEventListener("change", () => { state.selectedRoots.clear(); if (rootSelectAll.checked && state.indexStatus && state.indexStatus.roots) for (const item of state.indexStatus.roots) state.selectedRoots.add(item.path); renderRoots(); }); const rootDeleteSelected = button("移除所選", "danger", () => requestDelete("roots")); rootDeleteSelected.id = "root-delete-selected"; rootsToolbar.append(rootSelectAll, make("span", "", "選取全部"), rootDeleteSelected); rootsPanel.append(rootsToolbar); const rootsTable = document.createElement("table"); rootsTable.className = "roots-table"; const rootsHead = document.createElement("thead"); const rootsHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "文件", "同步", "完整性", "操作"]) rootsHeadRow.append(make("th", "", label)); rootsHead.append(rootsHeadRow); const rootsBody = document.createElement("tbody"); rootsBody.id = "roots-body"; rootsTable.append(rootsHead, rootsBody); rootsPanel.append(rootsTable);
+    rootsHeadRow.lastChild.textContent = "";
+    const addPanel = make("section", "panel root-add", ""); addPanel.id = "root-add-panel"; const addHead = make("div", "panel-head", ""); addHead.append(make("div", "", "")); addHead.firstChild.append(make("h2", "", "加入資料夾"), make("p", "", "選擇資料夾後，按「確認並建立索引」才會開始。只索引選取的資料夾，不要選整顆系統磁碟。")); addPanel.append(addHead); const rootInstructions = make("p", "root-instructions", "取消選擇或尚未確認不會送出索引；選取路徑為唯讀。"); addPanel.append(rootInstructions); const addBody = make("div", "root-add-body", ""); const addField = make("div", "root-add-field", ""); const addLabel = make("label", "", "已選資料夾"); addLabel.htmlFor = "root-draft"; const rootDraft = document.createElement("input"); rootDraft.id = "root-draft"; rootDraft.readOnly = true; rootDraft.placeholder = "尚未選擇資料夾"; rootDraft.setAttribute("aria-readonly", "true"); addField.append(addLabel, rootDraft); const draftMessage = make("div", "status", "尚未選取資料夾。"); draftMessage.id = "root-draft-message"; addField.append(draftMessage); const chooseButton = button("重新選擇", "", () => void chooseFolder()); chooseButton.id = "root-choose-inline"; chooseButton.addEventListener("click", () => void chooseFolder()); const confirmButton = button("確認並建立索引", "primary", requestAddRoot); confirmButton.id = "root-confirm"; addBody.append(addField, chooseButton, confirmButton); addPanel.append(addBody); rootsPage.append(addPanel); main.append(rootsPage);
+
+    const trashPage = make("section", "page", ""); trashPage.dataset.page = "trash"; trashPage.id = "trash-page"; const trashHeader = makePageHeader("垃圾桶", "這裡只保存被移除的索引記錄；來源資料仍在原位置。"); const purgeSelected = button("永久刪除所選", "danger", () => requestDelete("trash")); purgeSelected.id = "trash-purge-selected"; trashHeader.actions.append(purgeSelected); trashPage.append(trashHeader); const trashStatus = make("div", "status", ""); trashStatus.id = "trash-status-message"; trashStatus.setAttribute("role", "status"); trashStatus.setAttribute("aria-live", "polite"); trashPage.append(trashStatus); const trashPanel = make("section", "trash-list-panel", ""); const trashToolbar = make("div", "trash-toolbar", ""); const trashSelectAll = document.createElement("input"); trashSelectAll.type = "checkbox"; trashSelectAll.className = "table-check"; trashSelectAll.id = "trash-select-all"; trashSelectAll.setAttribute("aria-label", "全選垃圾桶項目"); trashSelectAll.addEventListener("change", () => { state.selectedTrash.clear(); if (trashSelectAll.checked && state.indexStatus?.trash) for (const item of state.indexStatus.trash) state.selectedTrash.add(item.path); renderTrash(); }); const trashSelectLabel = make("label", "", ""); trashSelectLabel.htmlFor = "trash-select-all"; trashSelectLabel.append(trashSelectAll, make("span", "", "全選垃圾桶項目")); const trashToolbarActions = make("div", "button-row", ""); const restoreSelected = button("還原選取並重新索引", "primary", () => void restoreTrash(Array.from(state.selectedTrash))); restoreSelected.id = "trash-restore-selected"; trashToolbarActions.append(restoreSelected); trashToolbar.append(trashSelectLabel, trashToolbarActions); trashPanel.append(trashToolbar); const trashTable = document.createElement("table"); trashTable.className = "trash-table"; const trashHead = document.createElement("thead"); const trashHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "操作"]) trashHeadRow.append(make("th", "", label)); trashHead.append(trashHeadRow); const trashBody = document.createElement("tbody"); trashBody.id = "trash-body"; trashTable.append(trashHead, trashBody); trashPanel.append(trashTable); trashPage.append(trashPanel); main.append(trashPage);
+    shell.append(main); app.append(shell);
+
+    const scrim = make("button", "scrim", ""); scrim.id = "scrim"; scrim.type = "button"; scrim.setAttribute("aria-label", "關閉上下文抽屜"); scrim.hidden = true; scrim.addEventListener("click", closeContext); app.append(scrim);
+    const drawer = make("div", "context-drawer", ""); drawer.id = "context-drawer"; drawer.hidden = true; drawer.setAttribute("aria-hidden", "true"); drawer.setAttribute("inert", ""); drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-labelledby", "context-title"); const drawerHead = make("div", "context-drawer-head", ""); const drawerTitle = make("div", "", ""); drawerTitle.append(make("h2", "", "已選上下文"), make("p", "", "")); drawerTitle.firstChild.id = "context-title"; drawerTitle.lastChild.id = "context-count"; const drawerClose = iconButton("×", "關閉上下文抽屜", closeContext); drawerClose.id = "context-close"; drawerHead.append(drawerTitle, drawerClose); const drawerBody = make("div", "context-drawer-body", ""); const indexedSection = make("section", "context-section", ""); indexedSection.append(make("h3", "", "已索引文件")); const indexedList = make("div", "", ""); indexedList.id = "context-indexed-list"; indexedSection.append(indexedList); const temporarySection = make("section", "context-section", ""); temporarySection.append(make("h3", "", "本次臨時文件")); const temporaryList = make("div", "", ""); temporaryList.id = "context-temporary-list"; temporarySection.append(temporaryList); drawerBody.append(indexedSection, temporarySection); const drawerFooter = make("div", "context-drawer-footer", ""); const drawerPreview = button("檢查精確上下文", "primary", openPreview); drawerPreview.id = "context-open-preview"; drawerFooter.append(drawerPreview); drawer.append(drawerHead, drawerBody, drawerFooter); app.append(drawer);
+
+    const previewDialog = document.createElement("dialog"); previewDialog.id = "preview-dialog"; previewDialog.className = "preview-dialog"; previewDialog.setAttribute("aria-labelledby", "preview-title"); const previewHeadDialog = make("div", "dialog-head", ""); const previewHeading = make("div", "", ""); previewHeading.append(make("h2", "", "檢查精確上下文"), make("p", "", "重新驗證來源後顯示 server context；不包含完整文件。")); previewHeading.firstChild.id = "preview-title"; const previewClose = iconButton("×", "關閉精確上下文預覽", () => previewDialog.close()); previewHeadDialog.append(previewHeading, previewClose); const previewBodyDialog = make("div", "dialog-body", ""); const previewMeta = make("div", "preview-meta", "尚未產生 server 預覽。"); previewMeta.id = "preview-meta"; const previewText = make("pre", "preview-text", "尚未產生預覽。"); previewText.id = "preview-text"; const progress = document.createElement("progress"); progress.className = "preview-progress"; progress.id = "preview-progress"; progress.max = 262144; progress.value = 0; progress.setAttribute("aria-label", "精確上下文 bytes，最多 256 KiB"); const previewStatus = make("div", "preview-status", "待產生精確預覽。"); previewStatus.id = "preview-status"; previewStatus.setAttribute("role", "status"); previewStatus.setAttribute("aria-live", "polite"); previewBodyDialog.append(previewMeta, previewText, progress, previewStatus); const previewActions = make("div", "dialog-actions", ""); const copy = button("複製預覽", "primary", () => void copyPreview()); copy.id = "copy-preview"; copy.disabled = true; const previewCancel = button("關閉", "", () => previewDialog.close()); previewActions.append(previewCancel, copy); previewDialog.append(previewHeadDialog, previewBodyDialog, previewActions); app.append(previewDialog);
+
+    const settingsDialog = document.createElement("dialog"); settingsDialog.id = "settings-dialog"; settingsDialog.className = "settings-dialog"; settingsDialog.setAttribute("aria-labelledby", "settings-title"); const settingsHead = make("div", "dialog-head", ""); const settingsHeading = make("div", "", ""); settingsHeading.append(make("h2", "", "設定")); settingsHeading.firstChild.id = "settings-title"; const settingsClose = iconButton("×", "關閉設定", () => settingsDialog.close()); settingsHead.append(settingsHeading, settingsClose); const settingsBody = make("div", "dialog-body", ""); settingsBody.append(make("p", "", "管理工作台與索引更新。")); const settingLabel = make("label", "setting-check", ""); const settingCheck = document.createElement("input"); settingCheck.type = "checkbox"; settingCheck.id = "settings-delete-confirmation"; settingCheck.addEventListener("change", () => void saveDeleteConfirmation(settingCheck.checked)); settingLabel.append(settingCheck, make("span", "", "刪除索引目錄前顯示確認")); const autoupdateLabel = make("label", "setting-check", ""); const autoupdateCheck = document.createElement("input"); autoupdateCheck.type = "checkbox"; autoupdateCheck.id = "settings-autoupdate"; autoupdateCheck.addEventListener("change", () => void saveAutoupdate(autoupdateCheck.checked)); autoupdateLabel.append(autoupdateCheck, make("span", "", "背景自動更新（檔案變更增量更新；每 6 小時完整校正）")); settingsBody.append(settingLabel, autoupdateLabel); const settingsStatus = make("div", "status", ""); settingsStatus.id = "settings-status"; settingsStatus.setAttribute("role", "status"); settingsStatus.setAttribute("aria-live", "polite"); settingsBody.append(settingsStatus); const settingsActions = make("div", "dialog-actions", ""); settingsActions.append(button("完成", "primary", () => settingsDialog.close())); settingsDialog.append(settingsHead, settingsBody, settingsActions); app.append(settingsDialog);
+
+    const deleteDialog = document.createElement("dialog"); deleteDialog.id = "delete-dialog"; deleteDialog.className = "delete-dialog"; deleteDialog.setAttribute("aria-labelledby", "delete-title"); const deleteHead = make("div", "dialog-head", ""); const deleteHeading = make("div", "", ""); deleteHeading.append(make("h2", "", "確認操作"), make("p", "", "")); deleteHeading.firstChild.id = "delete-title"; deleteHeading.lastChild.id = "delete-message"; const deleteClose = iconButton("×", "取消刪除操作", () => deleteDialog.close()); deleteHead.append(deleteHeading, deleteClose); const deleteBody = make("div", "dialog-body", ""); const deleteDetail = make("div", "delete-detail", ""); deleteDetail.id = "delete-detail"; const deleteWarning = make("div", "delete-warning", ""); deleteWarning.id = "delete-warning"; deleteBody.append(deleteDetail, deleteWarning); const deleteActions = make("div", "dialog-actions", ""); const dontRemindLabel = make("label", "setting-check", ""); dontRemindLabel.id = "delete-dont-remind-row"; const dontRemind = document.createElement("input"); dontRemind.type = "checkbox"; dontRemind.id = "delete-dont-remind"; dontRemindLabel.append(dontRemind, make("span", "", "下次不再提醒（可在設定重新開啟）")); const deleteCancel = button("取消", "", () => deleteDialog.close()); const deleteConfirm = button("確認", "danger-fill", () => { const pending = state.pendingDelete; if (!pending) return; const dont = $("delete-dont-remind").checked; state.pendingDelete = null; deleteDialog.close(); void executeDelete(pending.kind, pending.paths, dont); }); deleteConfirm.id = "delete-confirm"; deleteActions.append(dontRemindLabel, deleteCancel, deleteConfirm); deleteDialog.append(deleteHead, deleteBody, deleteActions); app.append(deleteDialog);
+    const toast = make("div", "toast", ""); toast.id = "toast"; toast.hidden = true; toast.setAttribute("role", "status"); toast.setAttribute("aria-live", "polite"); app.append(toast);
+
+    state.viewMode = "list";
+    switchPageVisibility();
+    renderDocuments(); renderTemporary(); renderRoots(); renderTrash(); renderContextDrawer();
+    for (const dialog of [previewDialog, settingsDialog, deleteDialog]) dialog.addEventListener("close", restoreDialogFocus);
+    globalQuery.addEventListener("input", () => { state.queryDraft = globalQuery.value; pageQuery.value = state.queryDraft; });
+    pageQuery.addEventListener("input", () => { state.queryDraft = pageQuery.value; globalQuery.value = state.queryDraft; });
+    globalQuery.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); routeFromTopSearch(); void search(1); } });
+    pageQuery.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); void search(1); } });
+    scopeBar.addEventListener("submit", event => { event.preventDefault(); void search(1); });
+    queryField.addEventListener("change", () => { state.searchField = queryField.value; if (state.submittedQuery) void search(1); });
+    sortSelect.value = state.sortMode;
+    fileInput.addEventListener("change", () => { void upload(fileInput.files); fileInput.value = ""; });
+    drop.addEventListener("click", () => fileInput.click());
+    drop.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInput.click(); } });
+    drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("is-dragging"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("is-dragging"));
+    drop.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("is-dragging"); void upload(event.dataTransfer.files); });
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && !$("context-drawer").hidden) closeContext(); });
+    $("view-list").setAttribute("aria-pressed", "true"); $("view-table").setAttribute("aria-pressed", "false");
+    $("mode-phrase").setAttribute("aria-pressed", "true"); $("mode-all-terms").setAttribute("aria-pressed", "false");
+    $("trash-status-message").textContent = "垃圾桶只保存索引 metadata；來源資料不會被刪除。";
+  }
+  function scopeSummary(label, id) {
+    const wrapper = make("label", "scope-summary", "");
+    wrapper.append(make("strong", "", label));
+    const value = document.createElement("select"); value.id = id; value.setAttribute("aria-label", label);
+    value.addEventListener("change", () => {
+      if (id === "scope-root") state.rootFilter = value.value;
+      if (id === "scope-format") state.typeFilter = value.value;
+      if (id === "scope-parse") state.statusFilter = value.value;
+      if (state.submittedQuery) void search(1);
+    });
+    wrapper.append(value); return wrapper;
+  }
+  function setMode(mode) {
+    if (state.mode === mode) return;
+    state.mode = mode;
+    state.data = null;
+    state.submittedQuery = "";
+    state.queryDraft = "";
+    state.searchState = "idle";
+    state.searchSeq++;
+    clearIndexedSelection("搜尋模式已切換；已清除索引選取與舊結果，保留臨時文件。");
+    $("mode-phrase").setAttribute("aria-pressed", String(mode === "phrase"));
+    $("mode-all-terms").setAttribute("aria-pressed", String(mode === "all-terms"));
+    syncQueryInputs();
+    renderDocuments();
+  }
+  async function loadState() {
+    try {
+      const data = await api("/api/state");
+      state.supportedExtensions = Array.isArray(data.supportedExtensions) ? data.supportedExtensions : [];
+      renderScopeSummaries(); renderTemporary();
+    } catch (error) { setStatus("search-status", error.message || "工作台狀態讀取失敗。", "error"); }
+  }
+  async function initialize() {
+    await loadState();
+    await refreshStatus();
+  }
+  buildApp();
+  setInterval(() => { if (isIndexing()) void refreshStatus(); }, 750);
+  void initialize();
 })();
 </script>
 </body>

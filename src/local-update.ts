@@ -40,6 +40,8 @@ export interface LocalUpdateOptions {
   lstat?: typeof lstat;
   readdir?: typeof readdir;
   stat?: typeof stat;
+  /** 解析前兩次 metadata 須相同，且間隔至少此毫秒數（通常等於 debounce）。0 表示只做解析前後核對。 */
+  stableMs?: number;
 }
 
 function emptyResult(kind: LocalUpdateKind, filePath: string, root: string): LocalUpdateResult {
@@ -217,6 +219,36 @@ async function applyFileUpdateLocked(
     if (ignore.match(filePath, false)) {
       result.kind = "skipped";
       return result;
+    }
+    const stableMs = options.stableMs ?? 0;
+    if (stableMs > 0) {
+      const firstKey = identityKey(info);
+      await sleep(stableMs);
+      let second: Awaited<ReturnType<typeof lstat>>;
+      try {
+        second = await lstatFn(filePath);
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") return applyPathDeleteLocked(filePath, root, store, options);
+        if (isTransient(error) && attempt < UNSTABLE_BACKOFF_MS.length) {
+          await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
+          continue;
+        }
+        result.kind = "unstable";
+        result.complete = false;
+        result.diagnostics.push({ stage: "read", path: filePath, code: errorCode(error) || "FILE_READ_FAILED", message: "無法讀取文件，保留既有索引" });
+        return result;
+      }
+      if (identityKey(second) !== firstKey) {
+        if (attempt < UNSTABLE_BACKOFF_MS.length) {
+          await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
+          continue;
+        }
+        result.kind = "unstable";
+        result.complete = false;
+        result.diagnostics.push({ stage: "read", path: filePath, code: "FILE_UNSTABLE", message: "穩定觀察期間檔案仍在變動，保留既有索引" });
+        return result;
+      }
+      info = second;
     }
     const extension = path.extname(filePath).toLowerCase();
     const reason = classifyReprocess({

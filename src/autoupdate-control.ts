@@ -42,11 +42,25 @@ export interface AutoupdateStateFile {
   mode: LiveMode;
 }
 
+export interface LiveReconcileStatus {
+  generation: number;
+  phase: "active" | "complete" | "failed";
+  reason: string;
+  checked: number;
+  frontierCount: number;
+  failedScopes: number;
+  startedAt: string;
+  updatedAt: string;
+}
+
 export interface LiveRootStatus {
   path: string;
   watch: RootWatchState;
   pending: number;
+  scopeMode?: "split" | "coarse";
+  handles?: number;
   lastError?: string;
+  reconcile?: LiveReconcileStatus;
 }
 
 export interface LiveStatus {
@@ -61,9 +75,17 @@ export interface LiveStatus {
   ready: boolean;
   roots: LiveRootStatus[];
   pendingCount: number;
+  eventCount: number;
+  localUpdateCount: number;
+  rootScanCount: number;
+  subtreeScanCount: number;
+  queuePendingCount: number;
+  queueDegraded: boolean;
+  oldestQueuedAt?: string;
   lastEvent?: { at: string; root: string };
   lastLocalUpdate?: { at: string; root: string; path: string };
   lastReconcile?: { at: string; root: string; complete: boolean };
+  nextReconcileAt?: string;
   recentErrors: string[];
   logError?: "AUTOUPDATE_LOG_ERROR";
 }

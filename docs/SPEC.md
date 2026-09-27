@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.36.1 本機實作完成；當前優先為 0.36.2 GUI 改版（第 47 節），0.37.0（第 46 節）暫緩。
-- 日期：2026-09-24
-- 狀態：使用者核准 GUI 設計並授權 §47 規格與後續實作；正式程式仍為 0.36.1。公司 Windows 待驗；不得把規格或原型當成正式 GUI 已完成。
+- 規格基線：0.38.0（第 50 節 block 級 FTS5 位置索引搜尋後端）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 日期：2026-09-27
+- 狀態：package 為 0.38.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1018,7 +1018,7 @@ docsearch doctor
 - 索引搜尋仍呼叫既有 `searchDocuments`；勾選的穩定文件代碼仍以 `prepareContextTool` 重新驗證來源。拖曳文件以檔名、格式、位置與依原順序擷取的文字建立 Markdown，清楚標示這是參考資料而非操作指令。
 - 索引與拖曳內容合併後仍以 UTF-8 256 KiB 為上限。拖曳內容可在邊界安全截短並加上明確標記；既有索引 context 不改 schema 或搜尋語意。介面可只複製預覽到本機剪貼簿，不需要設定 AI Provider。
 - 遠端送出採兩步驟：先預覽「provider、model、問題、實際上下文與 bytes」，伺服器用工作階段 HMAC 綁定該組資料；只有使用者勾選確認並送回同一 preview id 才可呼叫遠端 API。任一欄位或選取改變後舊確認立即失效。
-- 不提供整庫全選、自動 RAG、自動上傳、背景傳送或未預覽的 API 呼叫。日誌不得記錄 API Key、文件正文、問題或模型回答。
+- 一般日誌不得記錄 API Key、文件正文或模型回答；本機 structured diagnostics trace 為明確例外，可保留原始 query／question 供本機追查，但仍不得保存完整文件正文、上下文正文或 answer 正文。
 
 ### 43.3 Provider 與帳務真相
 
@@ -1182,11 +1182,22 @@ docsearch doctor
 - 搜尋結果接在最新 search block，文件預覽、已選清單、命令、roots、status 與 context 均以 transcript block 顯示真實內容與頁次。context 繼續顯示精確預覽與 UTF-8 bytes，只有完整 `yes` 可複製，不模仿 agent 回答或已送出訊息。
 - 保留 §45.5 的全部鍵盤行為、slash commands、domain service、read-only store、raw input、80 ms Esc、resize、訊號、alternate screen 及 finally cleanup；本次只改呈現與 session-local view model。
 - 支援 80×24／120×40、中文 cell width、24-bit／16 色、`NO_COLOR` 與小於 60×16 的安全退化；每行不得超過 columns，檔名、路徑、snippet、root、message 與 workflow text 都須經控制字元消毒。
-- 真實 status 才能顯示監看中；尚未實作的 0.37.0 queue／dirty scope／startup 不可偽造。HTML 明示示範資料且不連索引，只供審閱外觀，不能作為 runtime 驗收證據。
+- 真實 status 才能顯示監看中；0.37.0 queue／dirty scope／startup 與 all-terms pruning 已接入正式路徑，不以 HTML 示範資料取代 runtime 驗收。公司 Windows 行為仍須分開記錄。
 - 固定交接中心為 docs/handoff/。公司 Windows 人工驗收與本機測試結果分別記錄。
 實作紀錄（2026-09-24）：0.36.2 TUI 呈現改為上述單欄 workflow；搜尋、選取、context、open／reveal 與 terminal lifecycle 契約未改。公司 Windows／Windows Terminal 仍待使用者驗收。
 
-## 46. 0.37.0：日常變更發現與混合詞搜尋效能
+## 46. 0.37.0：日常變更發現、混合詞搜尋效能與工作台加入根目錄
+
+### 46.0 版本契約、範圍與交付
+
+- 2026-09-25 將既有日常變更發現規劃與「工作台加入新根目錄」收成同一版本契約。程式基線為 0.36.2（§47）。本節是 0.37.0 的行為權威；實作狀態以 `docs/STATUS.md` 與 `docs/handoff/CURRENT.md` 為準。規格完成不升 package、不打 tag、不建立發佈包。
+- 兩條可獨立驗證、必須合入同版的工作線：
+  1. **日常變更發現與搜尋效能**（§46.1～§46.10）：把既有 `autoupdate` 做成初次索引後的日常主路徑；持久事件佇列、有界 watcher scopes、可接續分批校正、可選登入啟動、mixed all-terms 長詞 pruning。
+  2. **工作台加入根目錄**（§46.11／D068／D072）：已有索引時，索引狀態頁用按鈕開啟本機資料夾選擇器，選取後背景登錄該根。
+- 使用者可見的產品故事：已經建過索引的人，日常檔案變更走 `autoupdate start`，不必每次對 30 萬檔做完整 `index`；要多找一個資料夾時，在工作台先按「選擇資料夾」、確認選取結果後再按「確認並建立索引」，不必改開 CLI。第一次建立索引、立即完整校正、CLI `roots` 仍可用。
+- 本版不做：USN／raw volume、Windows Service、提權、OCR、embedding、LAN、新解析格式、更改 `TEXT_PARSE_VERSION` 或 parser selection、加入新根時一次選取多條路徑、整碟建議、GUI 內 autoupdate 開關或假 daemon／queue 狀態、聊天 Provider／API Key 面。
+- 安全與資料沿用既有契約：LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、writer lock、payload／Bloom schema、loopback token／Host／Origin／nonce CSP、20 份／256 KiB context、臨時文件不入永久索引。不得要求 rebuild 或刪 WAL／journal。
+- 實作順序見 `docs/handoff/0.37.0.md`。各階段單獨提交與回歸；CURRENT 未切換前不得開工。完成後才將 package／lockfile 升為 0.37.0，交付 `docs/0.37.0-VALIDATION.md`、更新使用手冊，封裝 `Seekah-0.37.0.zip`（歷史包名仍可並列）。公司 Windows 未回報不得宣稱已通過。
 
 ### 46.1 問題定義與現有架構結論
 
@@ -1202,6 +1213,7 @@ docsearch doctor
 - 完整 reconciliation 保留作正確性安全網；0.37.0 將 daemon 啟動及週期校正改為 §46.8 的背景分批工作。預設一輪完成後 6 小時再排下一輪，既有 `--reconcile` 範圍不變，不重疊建立多輪。overflow／未知事件先校正可證明受影響的最小 scope；來源無法定位時才保護並校正整根。使用者明確執行 `index` 仍是立即完整校正，沒有新增 `index --full` 選項。
 - `autoupdate status` 應讓使用者分辨「daemon 健康／最近局部事件／上次完整校正／下一次完整校正／目前降級原因」，並顯示最近完整校正是否因 scan failure 不完整。搜尋可沿用現有不完整提示。
 - 0.37.0 先驗收既有 `autoupdate`，重用 `LiveUpdateEngine`／局部更新服務；持久事件佇列、scope 管理與分批校正依 §46.6～§46.10 擴充。公司驗收未取得時可先完成本機實作與故障注入，但不得宣稱 Windows 行為已通過。
+- GUI 狀態頁、搜尋範圍與頂列不得捏造 daemon、queue 或「正在監看」狀態。背景更新健康度只經 CLI `autoupdate status` 表達；§46.11 只負責加入根目錄。
 
 ### 46.3 普通使用者權限與離線期間
 
@@ -1224,7 +1236,7 @@ docsearch doctor
 3. **程序關閉期間**：停止 daemon 後新增、修改、刪除，再啟動；背景校正完成後結果必須正確。在校正中仍可搜尋，且不能提前標示完整。持久 queue 與校正 cursor 的 crash／重播案例見 §46.10。
 4. **搜尋 benchmark**：固定相同大型 store，記錄查詢總時、候選文件、payload 解壓／精確核對數與結果雜湊。混合長短詞時，被任一必要長詞 Bloom 排除的文件不得解壓 payload；結果集合與 0.36.0 精確基線逐筆相同。至少三次回報中位數與 p95，不以縮短 timeout 或減少資料冒充改善。
 5. **migration**：日常流程調整不得要求 rebuild；舊 Bloom／summary 仍可讀。新增工作狀態資料採版本化、可重入初始化；資料缺失或損壞時將來源標為未確認並排校正，不能清掉文件索引。登入啟動僅依 §46.9 由使用者明確開啟。
-6. **完成界線**：依序完成現有 watcher 基線、持久 queue、scope、分批校正、登入啟動與 status；all-terms 可獨立驗證後合入同版。0.36.1 的刪除安全是前置依賴。各階段單獨提交與回歸，不因拆提交就更改版本承諾；無法完成的項目必須回報並調整 STATUS，不可默默省略。
+6. **完成界線**：依序完成現有 watcher 基線、持久 queue、scope、分批校正、登入啟動與 status；all-terms 與 §46.11 GUI 加入新根目錄可獨立驗證後合入同版。0.36.1 的刪除安全與 0.36.2 GUI 安全契約是前置依賴。各階段單獨提交與回歸，不因拆提交就更改版本承諾；無法完成的項目必須回報並調整 STATUS，不可默默省略。
 
 ### 46.6 既有 watcher 與事件處理契約
 
@@ -1267,8 +1279,72 @@ docsearch doctor
 - scope：兩個 sibling watcher，A 未知事件／錯誤只校正 A，B 保持事件更新；另測頂層新目錄、跨 scope rename、handle 上限退回粗 scope、連結越界、system exclusion 與無法定位事件的 root fallback。
 - 分批：批次中途 stop／kill／restart、巨型單目錄、掃描期間新增／刪除／rename、不可讀 sibling、root 離線與 writer contention。停止不能抹去進度；處理完成後與獨立完整掃描的文件集合等價。對故障 scope 不誤刪，對正常 scope 能刪。
 - 登入啟動：普通 Windows 帳號實測 enable／重複 enable／status／disable、真正登出登入、已在執行時不產生第二 daemon、路徑搬移與政策拒絕；只操作測試使用者自己的捷徑，不要求管理員。
-- 交付 `docs/0.37.0-VALIDATION.md`：列既有／新增能力、Node 22.17.0 回歸、完整 npm test、匿名各階段 profile、事件延遲、queue／scope／校正 fault 證據與公司 Windows 待驗項。README 分開教初次 index、日常 start/status/stop、可選 startup、手動完整校正與 CMD／PowerShell。
+- GUI 加入根目錄：依 §46.11.6 驗收 sibling、合併、無效路徑、可見忙碌拒絕、開啟時不掃未確認輸入、臨時文件與 CLI `roots` 一致。證據寫入 `0.37.0-VALIDATION.md`。
+- 交付 `docs/0.37.0-VALIDATION.md`：列既有／新增能力、Node 22.17.0 回歸、完整 npm test、匿名各階段 profile、事件延遲、queue／scope／校正 fault 證據、GUI 加入根目錄與公司 Windows 待驗項。README 分開教初次 index、日常 start/status/stop、可選 startup、手動完整校正、工作台加入資料夾與 CMD／PowerShell。
 - 參考邊界：[Paperless-ngx consumption](https://docs.paperless-ngx.com/usage/) 採受管理收件匣，不能當作任意 D 槽同步；[ripgrep Guide](https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md) 的即時純文字搜尋也不能取代 Office／PDF 索引。本版只借用通知、穩定等待與工作排程概念，不新增搬移原檔／managed library 模式。Windows 事件漏失的保守補掃依 [ReadDirectoryChangesW 文件](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw)，但實際 Node 可見錯誤仍須測證。
+
+### 46.11 工作台加入新的索引根目錄
+
+#### 46.11.1 授權與 0.36.2 差異
+
+- 2026-09-25 使用者要求：已有索引時，也要能在 UI 把新資料夾加入索引，不必改用 CLI。決策 D068。
+- 0.36.2：尚無索引（`missing`）才顯示第一個資料夾選擇按鈕；`available` 時「更新索引」只同步已登錄根。開啟工作台的背景同步同樣只掃已登錄根。
+- 0.37.0：`available` 時索引狀態頁必須另有「加入資料夾」按鈕。按鈕呼叫本機資料夾選擇器，選取結果先顯示在唯讀欄位；使用者再按「確認並建立索引」後，後端取得並驗證 `root`，繼續重用 `POST /api/index`、既有 `sync()`／`validateRoot`／多根合併；不另建 parser、schema、資料目錄或寫入入口。
+- 尚無索引時也使用「選擇資料夾」再「確認並建立索引」的兩步流程建立第一個根，語意不變。臨時文件拖曳／選取仍只留在本次工作階段。
+
+#### 46.11.2 畫面、文案與操作
+
+- 位置：左側「索引狀態」（窄螢幕為底部「狀態」）。已有根卡片列表下方固定一塊「加入資料夾」，不另開設定頁，也不放進搜尋主畫面。
+- 控制項：先顯示主要按鈕「選擇資料夾」；選取後顯示唯讀資料夾路徑與主要按鈕「確認並建立索引」。說明文字：「選擇資料夾後，按『確認並建立索引』才會開始。只索引選取的資料夾，不要選整顆系統磁碟。」
+- 使用者必須按「選擇資料夾」完成選擇，再按「確認並建立索引」才送出索引；取消選擇或尚未確認不得送出。不得在選擇、失焦或開啟工作台時自動開始索引。
+- 「更新索引」繼續表示「同步全部已登錄根」，與兩步驟的加入流程分開；確認按鈕只處理使用者剛選取的那一條路徑。
+- 進行中顯示既有檢查進度（檢查／略過／更新，不含正文與預設完整路徑）。完成後根列表出現新路徑與文件數；搜尋範圍文案改為全部已登錄根。失敗時保留最後選取的路徑，根列表維持送出前狀態。
+- 沿用 §47：狀態頁不顯示 ISO／相對同步時間；深淺色、鍵盤、焦點與 44×44 CSS px 觸控區適用此表單。不可信路徑字串只當文字顯示。
+
+#### 46.11.3 路徑、合併與拒絕
+
+- 工作台按鈕先呼叫本機資料夾選擇器；瀏覽器收到選取結果後才提交字串 `root` 至索引 API。伺服器以既有 `validateRoot` 正規化：Windows 接受 `D:`／`D:/`／全形分隔符並視為磁碟根；拒絕 Windows 磁碟根下的 `$RECYCLE.BIN`、`System Volume Information` 當根；不存在、不是目錄、不可讀則失敗。
+- 通過驗證後走既有 `sync(root)`（`requireRegistered` 為假，以允許新根）。父子涵蓋則歸屬合併、保留文件 ID／payload；重疊被拒時不改既有根。同一位置的別名沿用已登錄根並同步該範圍。
+- 路徑長度上限沿用現有 API（16,384）。使用者取消選擇不送出索引；選擇器回傳的路徑不得由瀏覽器自行修改或拼接。CLI 仍可直接接受解析後的本機路徑，不展開字面 `%USERPROFILE%`／`$env:USERPROFILE`。
+- 錯誤以繁體中文顯示於狀態頁（找不到、不是目錄、系統目錄、重疊、忙碌、權限、選擇器失敗），不得把內部 stack 當預設內容。既有根、文件與 payload 在拒絕後與送出前相同。
+
+#### 46.11.4 忙碌、背景同步與生命週期
+
+- 工作台已有同步進行中（含開啟時對已登錄根的背景同步、更新索引、加入新根）時，新的加入請求必須**可見地拒絕**，例如提示「索引進行中，請完成後再加入。」禁止現況 `startIndex` 在已有 `indexingTask` 時默默回傳同一輪、讓使用者以為第二次已受理。
+- 跨程序寫入忙碌沿用 `INDEX_BUSY`：GUI 顯示可稍後重試，不另開第二個 writer。
+- 開啟工作台仍自動 `POST /api/index` 且不帶 `root`，只同步已登錄根；不得把輸入欄裡尚未確認的文字當成新根。
+- 關閉工作台（Ctrl+C／啟動器視窗）中止進行中同步，與 0.36.2 相同；已提交的文件保留。不得在關閉後繼續索引未完成的新根。
+
+#### 46.11.5 與 CLI、autoupdate、臨時文件
+
+- CLI `index`／`roots`／`roots remove` 契約不變。GUI 加入成功後，同一索引的 `roots` 必須列出該正規化路徑；CLI 先加入的根，工作台重新整理狀態後必須看得到。
+- 若 `autoupdate` daemon 已在執行，新根由既有動態 roots 刷新（約 `ROOT_REFRESH_MS`）納入監看，不為 GUI 另開 IPC。daemon 未執行時，加入新根只完成這一次 `sync()`，不暗中 `autoupdate start`。
+- 臨時文件集合與加入根目錄互不影響：加入根不會把暫存檔寫入索引；拖曳也不等於登錄根目錄。
+- 活躍根卡片提供核取方塊、全選與「移至垃圾桶」；刪除只移除索引資料並將根目錄放入垃圾桶，絕不刪除來源資料夾或來源檔案。垃圾桶提供「還原此目錄並重新索引」與「永久刪除」。
+- 刪除前預設顯示確認對話框；對話框提供選取項目、不可還原警告與「下次不再提醒」。此偏好持久保存於索引 metadata，設定頁可重新開啟提醒。多選刪除必須一次性交易，任一根無效時全部拒絕。
+- 垃圾桶只保存根目錄路徑、刪除時間與文件數；還原會重新驗證來源並重新索引，成功後移除垃圾桶項目。來源不存在或不可讀時保留垃圾桶項目。
+- 本版不做：一次選取多條新路徑、UNC／LAN 建議清單、在 GUI 顯示或操作 autoupdate。
+
+#### 46.11.6 刪除、確認與垃圾桶
+
+- 索引狀態頁每個已登錄根目錄可勾選；「全選索引根目錄」只作用於目前已登錄根目錄。「移至垃圾桶」無選取時停用，索引進行中拒絕刪除。
+- 確認對話框列出選取目錄，明確說明只移除索引、不刪來源；勾選「下次不再提醒」後，本次刪除成功才關閉後續提醒。側欄「設定」與右上角齒輪中的「刪除索引目錄前顯示確認」可再次開啟。
+- 「垃圾桶」是獨立工作台頁面，支援垃圾桶全選、選取後還原並重新索引、永久刪除確認、逐項還原並重新索引。永久刪除只刪垃圾桶 metadata，不操作來源路徑。
+- `POST /api/index-roots/trash`、`DELETE /api/trash` 與 `POST /api/settings` 同樣受 loopback Host／Origin／token 保護；索引進行中刪除或清空垃圾桶回 409。
+
+#### 46.11.7 驗收
+
+1. 已有根 A 時，在 UI 加入 sibling B：狀態列出 A 與 B，搜尋 B 內文件命中，`roots` 含 B。
+2. 加入涵蓋既有子根的上層：歸屬合併與 CLI `index` 相同，文件 ID 保留，不經 `roots remove`。
+3. 不存在、檔案路徑、系統目錄、與既有根重疊：可見錯誤，既有根與文件數不變。
+4. 同步進行中再按加入：可見忙碌，不啟動第二輪，不把未確認路徑寫入 roots。
+5. 開啟工作台不帶未確認輸入：只同步已登錄根。
+6. 拖曳臨時文件後加入另一根：臨時文件仍只在本次工作階段；新根內來源檔可被搜尋。
+7. Host／token／Origin 防線與不帶 `root` 的更新索引行為保持 0.36.2。自動測試覆蓋表單出現於 `available`、拒絕忙碌、無效路徑與成功後 roots；公司 Windows 人工路徑另列待驗。
+8. 多根勾選與全選後刪除：確認對話框說明不刪來源，索引根消失並出現在垃圾桶；來源文件仍存在。
+9. 勾選「下次不再提醒」後再次刪除不顯示確認；設定重新開啟後再次顯示確認。
+10. 垃圾桶可全選永久刪除；還原存在的來源資料夾會重新索引並從垃圾桶移除，來源不存在時保留垃圾桶項目。
+11. 刪除／清空與索引競爭時可見回 409；Host／token／Origin 錯誤不得執行任何刪除。
 
 ## 47. 0.36.2：核准的本機 GUI 工作台改版
 
@@ -1280,13 +1356,14 @@ docsearch doctor
 - 保持 Node.js／TypeScript、自足 HTML／CSS／JavaScript、既有 CLI 與 TUI／MCP 行為。不得為視覺改版引入前端框架、CDN、外部字型、埋點、新解析格式、OCR、embedding、任意路徑讀取或索引寫入入口。
 - 優先順序：本節及 §43 安全契約 → [設計說明](design/SEEKAH-WORKBENCH.md) → HTML／截圖外觀。原型的假資料、瀏覽器端搜尋與提示成功不能移植為正式能力。
 
-### 47.2 三區版面與響應式
+### 47.2 Desktop-only shell
 
-- 大於 1120 CSS px：左導覽約 232 px、中央彈性工作區、右上下文約 348 px；中央是主要閱讀區，不把搜尋／Provider／確認重新拆為等權卡片。
-- 左側提供搜尋、臨時文件、索引狀態與連線設定；右側持續顯示已選索引文件、已選臨時文件、合計份數與上下文容量。切換畫面不得丟失查詢、選取、上傳結果、問題或回答。
-- 761～1120 px：保留左導覽，右側改抽屜。760 px 以下：隱藏左導覽，以底部搜尋／臨時文件／狀態／上下文四項導覽取代。頂列保留已選數入口；所有尺寸都可進連線設定及深淺色切換，不照搬原型在小螢幕隱藏設定的缺口。
-- 使用原稿暖紙白、石墨、青綠與琥珀命中提示；結果用分隔列而非大量卡片。深淺色使用同一結構與完整狀態色，初次跟隨系統，可於本次工作階段切換，不持久化查詢、內容或憑證。
-- 320 px 起不得水平溢位。長檔名／路徑在結果可截短，在預覽完整折行；底部導覽、抽屜主動作與對話框操作不得遮住不可捲動的最後內容。支援 200% 縮放、橫向短視窗、安全區與 reduced-motion。
+- 工作台只支援桌面寬度，`html`／`body` 的最小寬度為 1180 CSS px；不提供手機版、底部導覽或 mobile breakpoint。低於此寬度由瀏覽器水平捲動，不把桌面資訊壓縮成另一套互動模型。
+- 頂列固定 58 px，左側導覽固定約 246 px（窄桌面可降至 220 px），中央主工作區佔餘下寬度。1440 與 1920 CSS px 必須維持同一資訊層級；中央不再永久保留第三欄上下文面板。
+- 左側只放文件、臨時文件、實際索引根目錄、根目錄管理、垃圾桶與工作區設定。右上提供全域搜尋、更新索引、深淺色與設定；所有狀態來自既有 API，不放示範資料。
+- 文件頁同時提供 Preview list 與 Table 顯示；查詢、範圍摘要、分頁、結果與選取工具列共享同一狀態。文件明細改為獨立 route，左側 metadata／索引內容與右側命中片段預覽各自可捲動。
+- 已選上下文改為可由「已選 N」開啟的固定 overlay drawer；開啟時 app shell inert、scrim 可關閉、Esc 可返回，關閉後保留選取集合與原觸發控制項焦點。
+- 使用暖紙白、石墨、青綠與琥珀焦點色；深色模式只改本次程序／頁面狀態。長檔名與路徑在清單中截短，在 metadata／對話框中安全折行；不加入行動版專用導覽。
 
 ### 47.3 搜尋、分頁、選取與命中預覽
 
@@ -1319,6 +1396,8 @@ docsearch doctor
 
 - 現有 `/api/state` 只有 indexAvailable、格式與 fileLimit，不能支撐原型索引計數／時間。新增受相同 Host／token 保護、no-store 的唯讀 `GET /api/index-status`，重用既有 `indexStatus`／store 狀態讀取，不另掃來源、不解壓正文、不建立或升級索引。
 - `POST /api/index` 受相同 token、Host／Origin 防線保護。無 `root` 時只同步既有已登錄根；尚無索引時 UI 要求使用者明確輸入第一個根目錄，才可建立索引。它在背景執行既有 `sync()`，回報 running／complete／failed 與摘要，工作台不因同步而失去操作能力；不建立第二套 parser、同步服務或資料路徑。
+- 工作台 `POST /api/index` 的實際列舉／解析／SQLite 寫入在獨立 worker thread 執行；HTTP server 必須持續能回應 `/api/index-status`、停止、搜尋與唯讀操作。每次進度以原子替換寫入索引資料目錄的 `indexing.json`（只保存路徑、計數與狀態，不保存正文），重開工作台若發現上一個程序已死亡，顯示「已中斷」並保留已提交文件；再次執行普通索引由既有 metadata 比對接續，不能把未提交文件宣稱為已完成。
+- 工作台瀏覽器在索引進行中持續輪詢狀態；重新整理或暫時的唯讀 busy／locked 不得把最後可見進度清成「未知」。進度訊息可顯示目前檔名；停止先送取消，若 parser／檔案 IO 未在安全點回應，最多等待固定寬限後終止 worker，下一次索引必須能從 SQLite 已提交交易恢復。
 - 回傳可判別狀態 `available|missing|unavailable`；available 含實際文件總數、逐狀態計數、有效根目錄與每根已有的最後嘗試／最後完整同步摘要、讀取時間；missing 不建庫，unavailable 附安全錯誤碼／提示。實作以既有資料欄位映射，不將缺值補 0 或以 HTTP 成功等同索引健康。
 - 多根目錄逐根展示，不能拿最新一個時間代表全部。最近同步完整性與文件解析問題分開；最後完整同步是歷史時間，不表示來源現在最新或 daemon 正在監看。
 - GUI 狀態頁只顯示根目錄、文件數、完整性與問題數；不顯示 ISO／相對同步時間。API 保留原始時間欄位供其他既有 consumer 使用。
@@ -1337,8 +1416,129 @@ docsearch doctor
 
 1. **真實搜尋**：合成索引超過 20 份、中英長路徑、多格式與僅檔名文件；以正式 CLI 啟動 ui，搜尋、翻頁、跨查詢去重、模式切換、零結果、先送後回覆順序均正確；選取與查詢來源不錯配。
 2. **來源與限制**：實際拖曳 TXT／Office／PDF 代表合成文件及損壞案例；確認解析成功／失敗、取消選取、移除失敗保留、合計 20／21 邊界與 UTF-8 256 KiB／截短提示。沒有索引仍完成只拖曳→預覽→複製。
-3. **精確與確認**：比較 server.context、可見完整預覽與剪貼簿文字；選取、模式、問題、目的地、model 改變後不能用舊確認；來源修改／刪除、較晚舊 response、空問題、無 Key、重複點擊都不產生未授權 Provider 呼叫。使用注入 provider 捕捉器驗證實際 HTTP 流程，不連真實付費 API。
+3. **精確與確認**：比較 server.context、可見完整預覽與剪貼簿文字；選取或 mode 改變後不能使用舊預覽；來源修改／刪除、較晚舊 response、空選取與重複點擊不得產生錯誤的複製或外部動作。GUI 不提供 Provider／model／Key／question／answer 控制，也不連真實付費 API。
 4. **狀態與安全**：missing／健康／同步不完整／忙碌／待回復索引；狀態查詢唯讀、不掃來源、不啟動背景程序。不可信 HTML 字串只顯示文字；錯 Host／Origin／token 仍拒絕，Key 不回顯且 CSP 無違規。
-5. **真實瀏覽器視覺**：正式 ui 的 1440×1000、1280×800、1024×768、390×844、320×568；淺／深色、200% 縮放、鍵盤、抽屜／對話框、resize、長內容、錯誤與回答均實際操作。截圖須來自正式 API 與合成資料，不以 docs HTML 截圖冒充完成；行動尺寸只驗證同機瀏覽器，不開放手機 LAN 連線。
+5. **真實瀏覽器視覺**：正式 ui 的 1440×900 與 1920×1080；另以 1180 CSS px 驗證最小桌面寬度。淺／深色、鍵盤、overlay drawer／對話框、resize、長內容與錯誤均實際操作；不驗證手機版，因本工作台明確為 desktop-only。截圖須來自正式 API 與合成資料，不以 docs HTML 截圖冒充完成。
 6. **回歸**：更新既有 workbench 消費者行為測試，新增唯讀狀態與 stale-preview／競態等真實邊界測試；不新增只斷言 CSS／文字出現的測試。完成後一次執行完整 `npm test`，以正式最低 Node.js 22.17.0 驗證相容性，再執行 `npm run package`。保留 TUI／CLI／MCP、索引沿用與 parser selection。
 7. **交付**：驗收後才升 0.36.2 package／lockfile、更新 README、STATUS、DECISIONS、固定交接及 `docs/0.36.2-VALIDATION.md`；記錄真實命令、平台、畫面與未驗證項。推送 GitHub main 並提供可直接審閱的連結。公司 Windows／真實 Provider 未測時如實標記，不宣稱通過。
+
+### 47.9 本次 desktop workbench clean cutover
+
+- 2026-09-26 依使用者最新 UI 契約，正式入口以 Paperless-inspired 的桌面資訊層級取代舊三區 GUI；Paperless 只作資訊架構參考，不複製其品牌、資料或假操作。
+- 正式 runtime 只保留 `src/workbench-app.ts` 的新 shell、list／table、detail、temporary、roots、trash、settings、preview 與 overlay context drawer；舊三區的固定第三欄、舊頁面 route、mobile bottom nav 與假資料控制項不保留。
+- 本次 GUI 不顯示 Provider、model、API Key、AI question、送出、answer 或任何外部 AI 控制。`/api/preview` 只作本機重新驗證與複製；CLI／MCP 既有 provider 契約不在本次刪除範圍。
+- 所有結果、索引狀態、臨時文件、根目錄與垃圾桶均來自正式 loopback API；瀏覽器送出 search 的 `query`／`mode`／`page`／`pageSize`，文件操作只送 stable `reference` 與 `open|reveal`。
+- 驗收以 1440×900、1920×1080、CSP／安全 DOM／焦點與 API smoke 為證據；公司 Windows 真實資料夾、真實大型庫與非 Windows 外部開檔仍按驗證文件列為未驗證。
+
+## 48. FTS5 unigram／trigram postings 搜尋後端
+
+### 48.1 索引資料與候選優先順序
+
+- SQLite 必須提供 FTS5。建立兩個 contentless virtual table：`search_unigrams` 與 `search_trigrams`；兩者均以 `documents.id` 作 rowid，每文件各一列，不複製既有正文 payload 到一般表。
+- `search_unigrams` 將 NFKC／小寫後的 Unicode code point 編碼成可查詢 token，負責一至二個 code point 的 query；`search_trigrams` 保存同一正規化文字，負責三個以上 code point 的 query。文件索引文字包含 filename、heading 與 content，欄位間的分隔不可造成正式搜尋漏命中。
+- phrase query 以整段 query 取 FTS postings；all-terms 以每個唯一 normalized term 的 postings 取交集。postings 是 candidate 的第一來源，禁止先枚舉全部 documents 再以 Bloom 作唯一候選來源。FTS 結果仍只能作排除；既有 exact normalized verification、filename／heading／content rank、排序、snippet 與 stable reference 必須保留。
+- 候選文件進入既有 document／payload pruning；payload 可跨 64 KiB 壓縮邊界，跨 payload 的 phrase 不得因 FTS 或 payload 篩選漏掉。沒有完成 ngram migration 的 index 必須使用保守舊路徑，不能以不完整 postings 回傳漏字結果。
+
+### 48.2 寫入、刪除與遷移
+
+- fresh index 設 `ngram_index_version=1`。每個文件以 `ngram_1` marker 記錄完成；upsert、replace、remove、removeMissing、root cleanup 必須在同一 writer transaction 清除舊 rowid 及 marker，replace 不改 document ID。
+- 舊 index 的 ngram migration 逐文件 transaction 提交 postings 與 marker；檢查 AbortSignal，取消後保留已提交文件，下一次 writer 從 marker 缺少處接續。既有舊 block text migration 也必須逐文件可取消／可續跑。migration 不得重新壓縮或改寫既有 payload bytes。
+- `formatStatus` 必須揭露 ngram version、完成文件數、FTS table readiness 與 needsUpgrade。寫入路徑明確執行 upgrade；CLI search/status、MCP tools/server 與其他 read-only API 不得建表、寫 metadata、寫 marker 或啟動遷移，未完成時只能 fallback 並回報狀態。
+
+### 48.3 Workbench 與量測驗收
+
+- Workbench 對已存在但 `needsUpgrade` 的 index，第一次非空搜尋回 HTTP 202 與 `pendingUpgrade`，啟動背景 writer upgrade；前端不得丟棄原 query，背景完成後輪詢狀態並自動重新送出同一搜尋。正常 ready index 直接回 200。
+- 必須有行為測試覆蓋 exact、phrase、all-terms、filename hit、排序、snippet、stable reference、文件／payload pruning、replace/delete postings cleanup、64 KiB 邊界、read-only 不寫、取消與續跑 migration，以及 Workbench 202→background→resubmit。
+- 必須提供 baseline 與 FTS postings benchmark，固定資料集量測 index time、SQLite index bytes、process RSS，並分別量測 rare、common、two-character、three-character、long phrase query；結果寫入 `docs/benchmark-ngram.json`。本節不改 package version，release bump 另行核准。
+
+## 49. 搜尋 Diagnostics／Performance Trace
+
+### 49.1 每次搜尋的結構化紀錄
+
+- 標準文件搜尋（`search()`、`SearchResultSet`、`SearchSession`、Workbench `/api/search`、MCP `search_documents`，以及文件命中片段 `matchingPassages()`）每次完成都產生 schema version `3` 的 structured trace。trace 使用既有 `performance.now()` 單調時鐘量測，不另建 logging framework；完成的 trace 同步追加至索引資料目錄的 `trace.log` JSONL。
+- trace 至少包含 `startedAt`、`completedAt`、`durationMs`、`bottleneck`、`inclusiveBottleneck`、原始 `query`、正規化查詢、`mode`、`field`、`sort`、`candidateStrategy`、`candidateSources`、各 phase 的毫秒數與 counts。`phasesMs` 是 phase inclusive time；`phaseSelfMs` 是扣除其 nested child phase 後的 self time。`bottleneck` 依 self time 推導，`inclusiveBottleneck` 依 inclusive time 推導；不能把 parent inclusive 與 child inclusive 相加當作總耗時。phase 固定為 `queryNormalization`、`postingsLookup`、`documentEnumeration`、`documentBloom`、`payloadBloom`、`payloadLookup`、`payloadDecompression`、`exactVerification`、`resultRanking`、`snippet`、`other`。
+- FTS5 `postings` 目前只回傳 candidate document IDs；不傳遞 `payload_ordinal`。payload-level pruning 是獨立的 `document_payload_blooms` 查詢。`postingPayloadHits` 因此在目前架構固定為 `0`，不是「沒有命中」的模糊值，而是明確表示 postings 沒有 payload 粒度。
+- counts 必須區分 `documentsInScope`、`documentsConsidered`、`documentsAfterPruning`、`documentsPruned`、`documentsExactVerified`、`documentsMatched`、`payloadsConsidered`、`payloadsAfterPruning`、`payloadsRead`、`payloadsDecompressed`、`payloadReadPasses`、`postingPayloadHits`、`expandedPayloads`、`fullDocumentFallbacks`、`filenameOnlyFallbacks`、`blockExpansionRatio`、`results` 與 `returnedResults`。`results` 是完整搜尋結果數；`returnedResults` 是本次 page 實際物化數。
+- `payloadsConsidered` 是候選文件的 payload Bloom summary rows；`payloadsAfterPruning` 是 payload Bloom 通過的 ordinal 數，短詞、缺 summary 或空候選會保守回到完整文件路徑。`payloadsRead`／`payloadsDecompressed` 是每次實際執行 `streamBlocksFor` 的 payload rows 總和，包含 page materialization 對已命中文件的再次讀取，所以不要求小於或等於 `payloadsConsidered`；`payloadReadPasses` 用來看重複的 per-document stream。
+- `expandedPayloads` 是 block reconstruction 讀到、但不在該次 candidate payload ordinal 集合中的額外 payload rows；`blockExpansionRatio` 是 block-filtered stream 的讀取 rows／輸入 candidate ordinals，沒有 block-filtered stream 時為 `0`。`fullDocumentFallbacks` 是實際執行且未套 payload filter 的 stream 次數；`filenameOnlyFallbacks` 是 exact ranking 只靠檔名完成、未消費 blocks generator 的結果數。每次 block-filtered `streamBlocksFor` 以一次 mapping query 加一次 payload query 讀取，不是每個 payload 一條 SQL；`blockSource` 仍可能在 page materialization 重新執行一次。
+- 診斷細分保留在 schema 3：`diagnostics.payloadSql` 依 `blocksMetadata`／`owningBlockMapping`／`payloadBlob` 記錄 prepare／execute 次數與毫秒；execute 包含同步 SQLite 執行、列資料與 blob 轉成 JS 值，不含外側 JSON／Set 建立。payload SQL 內嵌的反向 mapping 時間仍計入 `payloadBlob`。這些是 `payloadLookup` 的子計時，不得再次加到 phase self 總和。
+- `selectedPayloadsRead + expandedPayloads + fullFallbackPayloads = payloadsRead`；`uniquePayloadsRead + duplicatePayloadsRead = payloadsRead`，去重鍵為整個搜尋 recorder 的 `(documentId, payloadOrdinal)`。`diagnostics.payloadReads` 依 ranking／snippet／other 分開計數；snippet 指 `blockSource` 的結果文字回讀，不是純 snippet 字串處理。`filenameOnlyFallbacks` 表示跳過正文，不是全文 fallback。
+- `bloomSelectedPayloads` 僅計真正由 Bloom 選中的 ordinal；既有 `payloadsConsidered`／`payloadsAfterPruning` 包含之後只命中檔名、未消費 generator 的文件，因此不是實際讀取量。SQL 使用 `.all()`，`payloadsRead` 計全部回傳 blob，即使 generator 提早停止；解壓計數只計真正執行的 payload。
+- 另記錄 metadata／mapping 回傳列數、壓縮 bytes、實際解壓後 UTF-8 JSON bytes、最大單 pass 讀取／expansion、Brotli 與 decode／JSON.parse 子計時。`exactTextMs` 是每 block 的正規化與比對／代表片段選擇時間，不含 generator 產生 block；`exactVerification` self 還包含 metadata Map、block 重建、迴圈與診斷成本，不能稱為純 `includes()`。
+- metadata／mapping diagnostics 另包含 `blocksMetadataRows`、`owningBlockMappingRows`、`candidatePayloadOrdinals`、`owningBlocksFound`、`blockExpansionInputPayloads`。candidate payload 非空時，`streamBlocksFor` 必須在 SQLite 內以 selected CTE 取得必要 block metadata，並以同一 selected block 集合求完整 owning-block payload closure；Q1 以 selected-preserving `LEFT JOIN` 保留缺 metadata marker，Q2 的反向 mapping 必須使用既有 `document_payload_blocks_document_block` index。獨立 `blockSource` mapping 仍計入 `owningBlockMappingRows`；Q1／Q2 內嵌 mapping 不重複計數。candidate `[]` 仍不讀 metadata；selected mapping 為空時保留 full-document fallback 與原錯誤行為。
+
+### 49.2 Answer／structured response 的結構化紀錄
+
+- Workbench `/api/ask` 每次成功或可追蹤的錯誤 answer response 必須帶 `trace`，另由 `WorkbenchHandle.lastAnswerTrace()` 提供目前程序內最後一筆。answer trace schema version `2` 至少包含 `traceId`、`question`、provider／model、`fallbackUsed`、`status`、`durationMs`、`bottleneck`、phase timings 與 `selectedDocuments`、`contextBytes`、`answerCharacters`、`answerBytes`、`providerAttempts`。
+- answer 的實際 phase 為 `inputValidation`、`contextBuild`、`routeResolution`、`previewValidation`、`providerRequest`、`responseParsing` 與 `other`。primary quota fallback 必須累計兩次 provider attempt，並在 trace 標示實際 provider／model 與 `fallbackUsed`。
+- answer trace 不含 API Key、完整上下文或 answer 正文；它只記錄 bytes／counts，並將結構化 trace 追加至同一個本機 JSONL log。provider response parsing 的 JSON／output text 驗證時間不得被假裝歸入 network phase。
+
+### 49.3 可視性與持久化邊界
+
+- `SearchResultSet.trace`、`SearchSession.trace` 與 `IndexStore.lastSearchTrace()` 提供程式內診斷；store 只在目前程序記憶體保留最後一筆 trace。每次完成的 search／answer trace 另寫入索引資料目錄的 `trace.log`，不寫 SQLite 或 profile。
+- MCP `search_documents` 與 Workbench `/api/search` response 帶出 `trace`；CLI `search --verbose` 另外向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；Workbench 頂列 Trace 按鈕開啟獨立 `/traces#<token>` UI，`GET /api/traces` 提供同一工作階段的 token-protected 查詢。
+- `trace.log` 是 UTF-8 JSONL，單檔上限 2 MiB，最多保留目前檔與 4 個輪替檔。trace 不把文件全文、payload、snippet、context 或 answer 正文寫入 log，但保留 query／question、phase、counts、route 與錯誤碼供本機追查；log 寫入失敗不得破壞搜尋或 answer。
+
+### 49.4 驗收
+
+- 行為測試必須覆蓋 postings、Bloom fallback pruning、SearchSession restricted refinement、passage lookup、CLI `--verbose` JSON、Workbench answer fallback trace，以及 phase finite、候選／文件／payload／answer counts、結果數與不因 trace 改變 read-only 行為。
+- 行為測試另須覆蓋 payload ordinal 只在 `document_payload_blooms`／`document_payload_blocks` 間傳遞、block expansion、full-document／filename-only fallback、`payloadsRead` 與 `payloadsConsidered` 可因 page reread 分離，以及 inclusive／self phase timing 不把 parent 與 child 重複計入 bottleneck；完整回歸後須提供實際瀏覽器頁面與 log 路徑證據。
+
+## 50. 0.38.0：block 級 FTS5 位置索引搜尋後端
+
+依 D081。本節只改變候選與命中判定的資料結構；搜尋結果（集合、排序、rank、代表 block、heading／location、snippet、總數、分頁、stable reference）必須與既有語意（§14、§46、§48 的 exact normalized substring 規則）完全相同。
+
+### 50.1 索引資料
+
+- content：每個 content 非空的 block 一列，rowid＝`blocks.id`，文字＝`content.normalize("NFKC").toLowerCase()`。
+  - `search_block_trigrams`：FTS5 contentless、`contentless_delete=1`、`detail=full`、`trigram case_sensitive 1` tokenizer。文字與查詢已先經 NFKC＋`toLowerCase()`；tokenizer 不得再做 case folding，否則會把希臘 final sigma `ς` 折成 `σ` 而多出命中。
+  - `search_block_unigrams`：`detail=none`，每個 code point 一個 `u<hex>` token，同一 block 內去重。
+  - `search_block_bigrams`：`detail=none`，每對相鄰 code point 一個 `b<hex>x<hex>` token，同一 block 內去重。
+- 檔名：`search_filename_trigrams`／`_unigrams`／`_bigrams`，rowid＝`documents.id`，文字為正規化檔名；每份文件（含 metadata-only 文件）一列。
+- heading：`search_headings(id, document_id, min_ordinal, heading)` 對每份文件的不同 heading 去重，並記錄最小 ordinal；`search_heading_trigrams`／`_unigrams`／`_bigrams` 的 rowid＝`search_headings.id`。
+- metadata `block_index_version=1`；每份文件以 `index_migration_documents(version='block_index_1')` 記錄完成。
+- 正文仍只存在既有 64 KiB Brotli payload，作為 snippet 與 passages 的 docstore。
+
+### 50.2 查詢
+
+- 以正規化後的 code point 數選表：1 → unigram token、2 → bigram token、≥3 → trigram。
+  - content 的 ≥3 字以 phrase 查詢，直接視為命中，不讀正文。
+  - 檔名與 heading 的候選以明文 `normalize().includes()` 驗證。
+  - 含 U+0000 的 ≥3 字查詢改以 unigram token AND 取候選，再讀 block 正文驗證。
+- phrase：
+  - 檔名完全相同 4、包含 3，此時不看 heading／content。
+  - 否則有 heading 命中為 2（代表 block＝最小 ordinal 的命中 heading），否則有 content 命中為 1（代表 block＝最小 ordinal 的命中 block）。
+- all-terms：與 `rankDocument()` 相同：
+  - 檔名以外的 term 必須都出現在文件的 heading 或 content。
+  - 同一 heading 含全部 term 為 2；同一 block content 含全部 term 為 1。
+  - 否則以覆蓋度代表 block 作 1：heading 含任一 term 時以 heading 為來源；依覆蓋度、heading 優先、最小 ordinal 取代表。
+- `field=filename` 只看檔名，`field=content` 不看檔名。type、root、subtree、status 篩選套用在 documents；`sort` 與 restricted ids（結果內搜尋，保留輸入順序）語意不變。
+- 排序前不得讀取 payload；snippet 只為當頁結果讀取代表 block。
+- 索引未完成（`block_index_version` 不是 1）時，使用 §48 舊路徑。舊路徑遇到含 U+0000 的 ≥3 字查詢時，改用不含 postings 的保守 fallback，不得丟出錯誤。
+
+### 50.3 寫入、刪除與遷移
+
+- upsert、touchMetadata、replace、removeDocument、removeMissing、clearDocuments、removeRoot、moveRootsToTrash 必須在同一 writer transaction 內清除舊的 block／檔名／heading rows，並寫入新 rows 與 marker；replace 不改 document ID。
+- fresh index 直接設 `block_index_version=1`，不建立 `document_blooms`、`document_payload_blooms`、`search_unigrams`、`search_trigrams`。
+- 舊 index 的 writer upgrade 逐文件 transaction 寫入新索引與 marker，檢查 AbortSignal，取消後從缺 marker 的文件接續；不得改寫 payload bytes。
+  - 遷移期間的 upsert 同時維護舊結構與新結構。
+  - 全部完成時，在同一交易設定 version，刪除上述四個舊結構、其 migration markers，以及 `payload_bloom_version`／`ngram_index_version` metadata。
+  - read-only 開啟一律不建表、不寫入。
+- `formatStatus` 揭露 `blockIndexVersion`、`blockIndexCompletedDocuments` 與 `legacySearchStructures`；`needsUpgrade` 在 block index 未完成時為真。CLI `status` 與 MCP `index_status` 顯示相同資訊。
+
+### 50.4 Trace
+
+- search trace schema version 4：
+  - 新增 candidate source `block-index` 與 strategy `block-index`、`block-index+restricted-ids`。
+  - 新增 counts `indexPostingRows`、`indexCandidateBlocks`、`indexVerifiedBlocks`。
+  - 其餘欄位與 schema 3 相同；新路徑的 `postingsLookup`、`exactVerification`、`resultRanking`、`snippet` phase 各自計時。
+
+### 50.5 驗收
+
+- 行為測試覆蓋：
+  - 查詢語意：1／2／≥3 字與 NFKC／大小寫；phrase 與 all-terms 的 rank 與代表 block（含 heading 優先、覆蓋度代表）；`field`／`sort`／type／root／subtree／status／restricted ids；跨 64 KiB payload 的 block；含 U+0000 查詢（新舊路徑）；snippet 與 stable reference。
+  - 索引維護：replace／delete／removeMissing／root 刪除後 rows 清理；fresh index 無舊結構。
+  - 遷移：read-only 不遷移、取消與接續、完成後刪除舊結構，以及舊路徑與新路徑的結果相同。
+- 以隨機查詢比對新路徑與逐文件暴力核對的等價測試。
+- 在真實 store 複本上重跑 prototype 的 benchmark 查詢，確認 p50 與 PROTOTYPE-RESULTS 的 C2-hybrid 一致。
+- package 版本 0.38.0。

@@ -143,7 +143,7 @@ export function runDoctor(options: DoctorOptions): number {
       const status = store.formatStatus();
       const roots = store.roots();
       report(!status.needsUpgrade, "唯讀索引", status.needsUpgrade
-        ? `格式需要升級（${status.completedDocuments}/${status.totalDocuments}）；請執行 index`
+        ? `格式需要升級（block 索引 ${status.blockIndexCompletedDocuments}/${status.totalDocuments}）；請執行 index`
         : `${roots.length} 個根目錄，可唯讀開啟`);
     } catch {
       report(false, "唯讀索引", "無法以唯讀模式開啟；請執行 docsearch status 查看診斷");

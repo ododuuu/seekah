@@ -13,6 +13,7 @@ import {
 import { createAutoupdateLog, formatAutoupdateLogLine } from "./autoupdate-log.js";
 import { LiveUpdateEngine, resolveAutoupdateReconcile, resolveWatchDebounce, WatchError } from "./live-update.js";
 
+import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus } from "./autoupdate-startup.js";
 export { AutoupdateError, resolveAutoupdateReconcile };
 export const HANDSHAKE_TIMEOUT_MS = 15_000;
 export const STOP_WAIT_MS = 30_000;
@@ -25,6 +26,7 @@ export interface AutoupdateCliOptions {
   stopWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  dataDir?: string;
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -48,16 +50,23 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     `目前階段：${status.phase}`,
     `設定：防抖 ${status.settings.debounceMs} ms；完整校正 ${status.settings.reconcileMs} ms`,
     `待處理：${status.pendingCount}`,
+    `基線：事件 ${status.eventCount}；局部更新 ${status.localUpdateCount}；根目錄掃描 ${status.rootScanCount}；子樹掃描 ${status.subtreeScanCount}`,
+    `工作佇列：待辦 ${status.queuePendingCount}；${status.queueDegraded ? "降級（落盤失敗）" : "正常"}`,
+    `最舊待辦：${status.oldestQueuedAt ?? "無"}`,
     `最後事件：${status.lastEvent ? `${status.lastEvent.at} ${status.lastEvent.root}` : "無"}`,
     `最後局部更新：${status.lastLocalUpdate ? `${status.lastLocalUpdate.at} ${status.lastLocalUpdate.path}` : "無"}`,
     `最後完整校正：${status.lastReconcile ? `${status.lastReconcile.at} ${status.lastReconcile.root} 完整=${status.lastReconcile.complete ? "是" : "否"}` : "無"}`,
+    `下次完整校正：${status.nextReconcileAt ?? "尚未排程"}`,
     `最近錯誤：${status.recentErrors.length ? status.recentErrors.join("；") : "無"}`,
   ];
   if (status.logError) lines.push(`日誌：${status.logError}`);
   lines.push("根目錄：");
   if (!status.roots.length) lines.push("  （無）");
   for (const root of status.roots) {
-    lines.push(`  ${root.path} 監看=${root.watch} 待處理=${root.pending}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
+    const reconcile = root.reconcile
+      ? ` 校正=${root.reconcile.phase}#${root.reconcile.generation} 已檢查=${root.reconcile.checked} 剩餘範圍=${root.reconcile.frontierCount} 失敗scope=${root.reconcile.failedScopes}`
+      : "";
+    lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -95,7 +104,10 @@ export async function autoupdateStatus(databasePath = defaultDatabasePath()): Pr
           text: `${formatLiveStatus({
             schemaVersion: 1, instanceId: state.instanceId, pid: state.pid, mode: state.mode,
             startedAt: state.startedAt, lastHeartbeatAt: "", phase: "stopping",
-            settings: state.settings, ready: false, roots: [], pendingCount: 0, recentErrors: [error.message],
+            settings: state.settings, ready: false, roots: [], pendingCount: 0,
+            eventCount: 0, localUpdateCount: 0, rootScanCount: 0, subtreeScanCount: 0,
+            queuePendingCount: 0, queueDegraded: false,
+            recentErrors: [error.message],
           }, { unresponsive: true })}\nAUTOUPDATE_UNRESPONSIVE：控制通道無回應。`,
         };
       }
@@ -198,11 +210,14 @@ export async function autoupdateStart(
 
   const execPath = options.execPath ?? process.execPath;
   const cliPath = resolveCliPath(options.cliPath);
-  const child = (options.spawn ?? spawn)(execPath, [
+  const childArgs = [
     cliPath, "autoupdate", "--daemon",
+    "--database-path", path.resolve(databasePath),
     "--debounce", String(settings.debounceMs),
     "--reconcile", String(settings.reconcileMs),
-  ], {
+    ...(options.dataDir ? ["--data-dir", options.dataDir] : []),
+  ];
+  const child = (options.spawn ?? spawn)(execPath, childArgs, {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
@@ -306,6 +321,8 @@ export async function runAutoupdateDaemon(
 export async function runAutoupdateCommand(args: readonly string[], options: AutoupdateCliOptions = {}): Promise<number> {
   let debounce: number | undefined;
   let reconcile: number | undefined;
+  let dataDir: string | undefined;
+  let databasePathOption: string | undefined;
   let daemon = false;
   const positional: string[] = [];
   try {
@@ -320,8 +337,18 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         const value = args[++index];
         if (!value || value.startsWith("--")) throw new Error("--reconcile 缺少毫秒數。");
         reconcile = resolveAutoupdateReconcile(Number(value));
+      } else if (option === "--data-dir") {
+        if (dataDir !== undefined) throw new Error("不可重複指定 --data-dir。");
+        const value = args[++index];
+        if (!value || value.startsWith("--")) throw new Error("--data-dir 缺少資料目錄。");
+        dataDir = path.resolve(value);
+      } else if (option === "--database-path") {
+        if (databasePathOption !== undefined) throw new Error("不可重複指定內部 database path。");
+        const value = args[++index];
+        if (!value || value.startsWith("--")) throw new Error("內部 database path 缺少值。");
+        databasePathOption = path.resolve(value);
       } else if (option.startsWith("--") || !option.trim()) {
-        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>]\n        docsearch autoupdate status\n        docsearch autoupdate stop");
+        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\\n        docsearch autoupdate status [--data-dir <資料目錄>]\\n        docsearch autoupdate stop [--data-dir <資料目錄>]\\n        docsearch autoupdate startup enable|disable|status");
       } else positional.push(option);
     }
     if (daemon) {
@@ -329,21 +356,37 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
       return await runAutoupdateDaemon({
         debounceMs: resolveWatchDebounce(debounce),
         reconcileMs: resolveAutoupdateReconcile(reconcile),
-      });
+      }, databasePathOption ?? (dataDir ? path.join(dataDir, "LocalDocSearch", "index.db") : defaultDatabasePath()));
     }
+    if (databasePathOption !== undefined) throw new Error("內部 database path 只供 daemon 使用。");
     const action = positional[0];
-    if (positional.length !== 1 || !action || !["start", "status", "stop"].includes(action)) {
-      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>]\n        docsearch autoupdate status\n        docsearch autoupdate stop");
+    const startupAction = action === "startup" ? positional[1] : undefined;
+    if (action === "startup") {
+      if (positional.length !== 2 || !startupAction || !["enable", "disable", "status"].includes(startupAction)) {
+        throw new Error("用法：docsearch autoupdate startup enable|disable|status");
+      }
+    } else if (positional.length !== 1 || !action || !["start", "status", "stop"].includes(action)) {
+      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\\n        docsearch autoupdate status [--data-dir <資料目錄>]\\n        docsearch autoupdate stop [--data-dir <資料目錄>]\\n        docsearch autoupdate startup enable|disable|status");
     }
-    if ((action === "status" || action === "stop") && (debounce !== undefined || reconcile !== undefined)) {
+    if ((action === "status" || action === "stop" || action === "startup") && (debounce !== undefined || reconcile !== undefined)) {
       throw new Error(`autoupdate ${action} 不接受 --debounce／--reconcile。`);
     }
-    const databasePath = defaultDatabasePath();
+    const databasePath = dataDir ? path.join(dataDir, "LocalDocSearch", "index.db") : defaultDatabasePath();
+    if (action === "startup") {
+      const startupOptions = { ...options, databasePath };
+      const result = startupAction === "enable"
+        ? await autoupdateStartupEnable(startupOptions)
+        : startupAction === "disable"
+          ? autoupdateStartupDisable(startupOptions)
+          : autoupdateStartupStatus(startupOptions);
+      console.log(result.text);
+      return result.code;
+    }
     if (action === "start") {
       const result = await autoupdateStart({
         debounceMs: resolveWatchDebounce(debounce),
         reconcileMs: resolveAutoupdateReconcile(reconcile),
-      }, databasePath, options);
+      }, databasePath, { ...options, ...(dataDir ? { dataDir } : {}) });
       console.log(result.text);
       return result.code;
     }

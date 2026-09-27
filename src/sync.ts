@@ -96,6 +96,7 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
   const root = plan.registeredRoot;
   const extraIgnoreBases = store.ignoreBases(root);
   const scanStart = plan.subtree ?? root;
+  const enumerateStarted = performance.now();
   const found = options.scan
     ? await options.scan(root, {
       ...(options.signal ? { signal: options.signal } : {}),
@@ -109,6 +110,7 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
       ...(extraIgnoreBases.length ? { extraIgnoreBases } : {}),
       ...(scanStart !== root ? { start: scanStart } : {}),
     });
+  const enumerateMs = performance.now() - enumerateStarted;
   // 使用者可能把索引資料目錄放在被掃描根目錄內；LocalDocSearch 自己的資料庫
   // 與 WAL／協調檔不是來源文件，納入會造成每次同步都修改自己的輸入。
   const databasePath = path.resolve(store.databasePath);
@@ -144,6 +146,7 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
   const addPhase = (name: string, elapsedMs: number) => {
     report.phasesMs[name] = (report.phasesMs[name] ?? 0) + elapsedMs;
   };
+  addPhase("enumerate", enumerateMs);
   const notePhase = (next: string) => {
     if (next === phase) return;
     phase = next;

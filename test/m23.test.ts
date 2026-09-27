@@ -5,13 +5,15 @@ import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync } from "node:zlib";
-import { search } from "../src/search.js";
+import { createSearchResultSet, search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { createLegacyStore } from "./legacy-index.js";
 
 test("M23 more than 32766 candidate payloads preserve a complete cross-payload block", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-many-payloads-"));
   const database = path.join(temp, "index.db");
-  let store = new IndexStore(database);
+  // Pre-0.38.0 payload Bloom path (still used until the block index migration finishes).
+  let store = createLegacyStore(database);
   try {
     store.upsert({ path: path.join(temp, "large.txt"), filename: "large.txt", extension: ".txt", sizeBytes: 1, modifiedAtMs: 1,
       status: "indexed", errorCode: null, errorMessage: null,
@@ -83,5 +85,106 @@ test("M23 keeps a phrase split at a payload boundary searchable", async () => {
       status: "indexed", errorCode: null, errorMessage: null, blocks: [{ ordinal: 0, heading: null,
         content: "x".repeat(65_535) + "邊界關鍵字", locationKind: "line", locationValue: "第 1 行" }] });
     assert.equal(search(store, "邊界關鍵字").length, 1);
+  } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
+});
+
+test("metadata mapping pruning only materializes selected block metadata", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-selected-metadata-"));
+  const database = path.join(temp, "index.db");
+  // Pre-0.38.0 payload Bloom path (still used until the block index migration finishes).
+  let writer: IndexStore | undefined = createLegacyStore(database);
+  try {
+    const marker = "needle-739";
+    const blocks = Array.from({ length: 256 }, (_, ordinal) => {
+      const prefix = ordinal === 128 || ordinal === 192 ? `${marker} ` : "";
+      return {
+        ordinal,
+        heading: null,
+        content: prefix + "x".repeat(32_768 - prefix.length),
+        locationKind: "line" as const,
+        locationValue: `line ${ordinal}`,
+      };
+    });
+    writer.upsert({
+      path: path.join(temp, "sparse.txt"), filename: "sparse.txt", extension: ".txt",
+      sizeBytes: 8_388_608, modifiedAtMs: 1000, status: "indexed",
+      errorCode: null, errorMessage: null, blocks,
+    });
+    writer.close();
+    writer = undefined;
+    const store = new IndexStore(database, { readOnly: true });
+    try {
+      const db = new DatabaseSync(database, { readOnly: true });
+      try {
+        const blockCount = db.prepare("SELECT count(*) AS count FROM blocks").get() as { count: number };
+        const payloadCount = db.prepare("SELECT count(*) AS count FROM document_payloads").get() as { count: number };
+        const mappingCount = db.prepare("SELECT count(*) AS count FROM document_payload_blocks").get() as { count: number };
+        assert.equal(blockCount.count, 256);
+        assert.equal(payloadCount.count, 256);
+        assert.equal(mappingCount.count, 256);
+      } finally { db.close(); }
+
+      const resultSet = createSearchResultSet(store, marker);
+      const rankingTrace = resultSet.trace;
+      assert.equal(resultSet.total, 1);
+      assert.equal(rankingTrace.counts.candidatePayloadOrdinals, 2);
+      assert.equal(rankingTrace.counts.owningBlocksFound, 2);
+      assert.equal(rankingTrace.counts.blocksMetadataRows, 2);
+      assert.equal(rankingTrace.counts.owningBlockMappingRows, 0);
+      assert.equal(rankingTrace.counts.payloadsRead, 2);
+      assert.equal(rankingTrace.counts.expandedPayloads, 0);
+      assert.equal(rankingTrace.counts.fullDocumentFallbacks, 0);
+
+      const page = resultSet.page(1, 20);
+      const trace = resultSet.trace;
+      assert.equal(page.results.length, 1);
+      assert.equal(page.total, 1);
+      assert.equal(page.results[0]!.rank, 1);
+      assert.equal(page.results[0]!.location, "line 128");
+      assert.equal(page.results[0]!.filenameOnly, false);
+      assert.match(page.results[0]!.snippet, /needle-739/u);
+      assert.equal(trace.counts.blocksMetadataRows, 4);
+      assert.equal(trace.counts.owningBlockMappingRows, 1);
+      assert.equal(trace.counts.owningBlocksFound, 3);
+      assert.equal(trace.counts.candidatePayloadOrdinals, 3);
+      assert.equal(trace.counts.blockExpansionInputPayloads, 3);
+      assert.equal(trace.counts.payloadsRead, 3);
+      assert.equal(trace.counts.uniquePayloadsRead, 2);
+      assert.equal(trace.counts.duplicatePayloadsRead, 1);
+      assert.equal(trace.diagnostics.payloadSql.owningBlockMapping.executeCount, 1);
+    } finally { store.close(); }
+  } finally {
+    writer?.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("empty selected block mappings use the full-document fallback without losing results", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-empty-mapping-"));
+  const database = path.join(temp, "index.db");
+  const store = new IndexStore(database);
+  try {
+    store.upsert({
+      path: path.join(temp, "fallback.txt"), filename: "fallback.txt", extension: ".txt",
+      sizeBytes: 128, modifiedAtMs: 1000, status: "indexed", errorCode: null, errorMessage: null,
+      blocks: [
+        { ordinal: 0, heading: null, content: "unrelated content", locationKind: "line", locationValue: "line 1" },
+        { ordinal: 1, heading: null, content: "fallback-target-739", locationKind: "line", locationValue: "line 2" },
+      ],
+    });
+    const document = store.getDocument(path.join(temp, "fallback.txt"))!;
+    const internal = store as unknown as {
+      db: { prepare(sql: string): { run(...values: unknown[]): unknown } };
+    };
+    internal.db.prepare("DELETE FROM document_payload_blocks WHERE document_id = ?").run(document.id);
+
+    const hits = search(store, "fallback-target-739");
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0]!.location, "line 2");
+    assert.match(hits[0]!.snippet, /fallback-target-739/u);
+    const trace = store.lastSearchTrace()!;
+    assert.ok(trace.counts.fullDocumentFallbacks > 0);
+    assert.ok(trace.counts.fullFallbackPayloads > 0);
+    assert.ok(trace.counts.blocksMetadataRows >= 2);
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });

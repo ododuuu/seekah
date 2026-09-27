@@ -9,8 +9,9 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
 import type { DocumentRecord } from "../src/model.js";
 import { OperationCancelledError } from "../src/progress.js";
-import { search } from "../src/search.js";
+import { createSearchResultSet, search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { clearBlockIndex, createLegacyStore } from "./legacy-index.js";
 
 function document(root: string, name: string, content: string): DocumentRecord {
   return { path: path.join(root, name), filename: name, extension: ".txt", sizeBytes: content.length, modifiedAtMs: 1,
@@ -18,20 +19,23 @@ function document(root: string, name: string, content: string): DocumentRecord {
     blocks: [{ ordinal: 0, heading: `${name} 標題`, content, locationKind: "line", locationValue: "第 1 行" }] };
 }
 
-function makePending(database: string, root: string, count = 2): string[] {
-  const store = new IndexStore(database);
-  for (let index = 0; index < count; index++) store.upsert(document(root, `${index}.txt`, `保留的正文 ${index} ${"內容".repeat(40_000)}`));
+/** A pre-0.38.0 index: complete legacy Bloom／postings, no block index yet. */
+function makePending(database: string, root: string, count = 2, repeat = 40_000): string[] {
+  const store = createLegacyStore(database);
+  for (let index = 0; index < count; index++) store.upsert(document(root, `${index}.txt`, `保留的正文 ${index} ${"內容".repeat(repeat)}`));
   store.close();
+  clearBlockIndex(database);
   const db = new DatabaseSync(database);
   const payloads = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
-  db.exec(`DELETE FROM metadata WHERE key = 'payload_bloom_version';
-    DELETE FROM document_payload_blocks; DELETE FROM document_payload_blooms;
-    DELETE FROM index_migration_documents WHERE version = 'payload_bloom_1';`);
   db.close();
   return payloads;
 }
 
-test("M23 fix read-only status inspection never migrates an old payload index", async () => {
+function scalar(db: DatabaseSync, sql: string): unknown {
+  return Object.values(db.prepare(sql).get() ?? {})[0];
+}
+
+test("0.38.0 read-only status and search never migrate a pre-block index", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m24-readonly-"));
   const database = path.join(temp, "index.db");
   try {
@@ -40,45 +44,65 @@ test("M23 fix read-only status inspection never migrates an old payload index", 
     try {
       const format = store.formatStatus();
       assert.equal(format.needsUpgrade, true);
-      assert.equal(format.payloadBloomVersion, null);
+      assert.equal(format.blockIndexVersion, null);
+      assert.equal(format.blockIndexCompletedDocuments, 0);
+      assert.equal(format.legacySearchStructures, true);
       assert.equal(format.totalDocuments, 1);
+      assert.equal(search(store, "保留的正文 0").length, 1);
+      assert.equal(store.lastSearchTrace()?.candidateStrategy, "postings");
     } finally { store.close(); }
     const db = new DatabaseSync(database, { readOnly: true });
     try {
-      assert.equal(db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get(), undefined);
-      assert.equal((db.prepare("SELECT count(*) AS count FROM document_payload_blooms").get() as { count: number }).count, 0);
+      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), undefined);
+      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
+      assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name = 'document_blooms'"), 1);
     } finally { db.close(); }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
-test("M23 fix preserves payload bytes and resumes after a committed document", async () => {
+test("0.38.0 block index migration preserves payload bytes, resumes, then drops legacy structures", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m24-resume-"));
   const database = path.join(temp, "index.db");
   try {
-    const before = makePending(database, temp);
+    // More documents than one 256-document migration batch.
+    const before = makePending(database, temp, 300, 1_000);
     const first = new IndexStore(database);
     const controller = new AbortController();
     try {
       await assert.rejects(first.upgrade({ signal: controller.signal, onProgress: progress => {
-        if (progress.stage === "upgrade" && progress.current === 1) controller.abort();
+        if (progress.stage === "upgrade" && (progress.current ?? 0) > 0) controller.abort();
       } }), OperationCancelledError);
+      // Legacy search still serves the partly migrated index.
+      assert.equal(first.formatStatus().needsUpgrade, true);
+      assert.equal(search(first, "保留的正文 299").length, 1);
     } finally { first.close(); }
     let db = new DatabaseSync(database, { readOnly: true });
-    assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_1'").get() as { count: number }).count, 1);
-    assert.equal(db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get(), undefined);
+    const committed = Number(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"));
+    assert.ok(committed > 0 && committed < 300, `committed ${committed}`);
+    assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), undefined);
     db.close();
 
     const resumed = new IndexStore(database);
     try {
       await resumed.upgrade();
-      assert.equal(search(resumed, "保留的正文").length, 2);
+      assert.equal(createSearchResultSet(resumed, "保留的正文").total, 300);
+      assert.equal(resumed.lastSearchTrace()?.candidateStrategy, "block-index");
+      assert.equal(resumed.formatStatus().legacySearchStructures, false);
     } finally { resumed.close(); }
     db = new DatabaseSync(database, { readOnly: true });
     try {
       const after = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
       assert.deepEqual(after, before);
-      assert.equal((db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get() as { value: string }).value, "1");
-      assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_1'").get() as { count: number }).count, 2);
+      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), "1");
+      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 300);
+      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'payload_bloom_version'"), undefined);
+      assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('document_blooms', 'document_payload_blooms', 'search_unigrams', 'search_trigrams')"), 0);
+    } finally { db.close(); }
+    // Reopening a migrated index does not recreate the legacy tables.
+    new IndexStore(database).close();
+    db = new DatabaseSync(database, { readOnly: true });
+    try {
+      assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name = 'document_blooms'"), 0);
     } finally { db.close(); }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });

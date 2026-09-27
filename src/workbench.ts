@@ -2,20 +2,30 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { Worker } from "node:worker_threads";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { IndexStore } from "./store.js";
+import { IndexStore, dataDirectory, type TrashedRoot } from "./store.js";
 import { indexStatus, prepareContextTool, searchDocuments } from "./mcp-tools.js";
+import { emptySearchTrace } from "./search-trace.js";
+import { AnswerTraceRecorder, type AnswerTrace } from "./answer-trace.js";
+import { createTraceLog, readTraceLog, TRACE_LOG_FILES, TRACE_LOG_LIMIT } from "./trace-log.js";
 import { MAX_FILE_BYTES } from "./parser.js";
-import { supportedExtensions } from "./model.js";
-import { combineWorkbenchContext, importDocument, sanitizeUploadName, uploadExtension, WORKBENCH_FILE_LIMIT, type ImportedDocument } from "./workbench-context.js";
+import { documentStatuses, supportedExtensions, type DocumentStatus } from "./model.js";
+import { combineWorkbenchContext, importDocument, sanitizeUploadName, WORKBENCH_FILE_LIMIT, type ImportedDocument } from "./workbench-context.js";
 import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, providerNames, providerSelections, requestProvider, requestProviderWithFallback, resolveModelRoute, routeSignature, validateModel, validateProvider, validateProviderSelection, type ProviderName, type ProviderSelection, type ProviderState, type RoutedProviderResult } from "./workbench-provider.js";
 import { workbenchHtml } from "./workbench-app.js";
+import { traceHtml } from "./trace-app.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
-import { sync, type SyncReport } from "./sync.js";
+import { sync } from "./sync.js";
+import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
-import type { ProgressUpdate } from "./progress.js";
+import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
+import { IndexBusyError } from "./write-lock.js";
+import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop } from "./autoupdate.js";
+import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
 
 const HOST = "127.0.0.1";
 const JSON_LIMIT = 128 * 1024;
@@ -38,12 +48,15 @@ export interface WorkbenchOptions {
   environment?: NodeJS.ProcessEnv;
   fetcher?: typeof fetch;
   tempParent?: string;
+  indexHold?: () => Promise<void>;
+  selectFolder?: () => Promise<string | null>;
 }
 
 export interface WorkbenchHandle {
   url: string;
   port: number;
   token: string;
+  lastAnswerTrace(): AnswerTrace | null;
   waitForIndex(): Promise<void>;
   close(): Promise<void>;
 }
@@ -81,6 +94,13 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     return value as Record<string, unknown>;
   } catch { throw Object.assign(new Error("JSON 要求格式無效。"), { statusCode: 400 }); }
+}
+function rootList(body: Record<string, unknown>): string[] {
+  if (!Array.isArray(body.roots) || body.roots.length < 1 || body.roots.length > 128
+    || body.roots.some(root => typeof root !== "string" || !root.trim() || root.length > 16_384)) {
+    throw Object.assign(new Error("根目錄清單無效。"), { statusCode: 400 });
+  }
+  return [...new Set(body.roots.map(root => (root as string).trim()))];
 }
 
 function contextRequest(body: Record<string, unknown>): ContextRequest {
@@ -130,36 +150,117 @@ function modelRoute(input: ContextRequest, keys: ProviderKeys) {
   });
 }
 
+function sqliteBusy(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = "code" in error ? String((error as { code?: unknown }).code) : "";
+  const errcode = "errcode" in error && typeof (error as { errcode?: unknown }).errcode === "number"
+    ? Number((error as { errcode: number }).errcode) : undefined;
+  return /BUSY|LOCKED/u.test(code) || (errcode !== undefined && ((errcode & 0xff) === 5 || (errcode & 0xff) === 6));
+}
+
 async function openStore<T>(databasePath: string, operation: (store: IndexStore) => T | Promise<T>): Promise<T> {
   if (!existsSync(databasePath)) throw new Error("索引尚未建立；仍可只使用拖曳文件。");
-  const store = new IndexStore(databasePath, { readOnly: true });
-  try { return await operation(store); } finally { store.close(); }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let store: IndexStore | undefined;
+    try {
+      store = new IndexStore(databasePath, { readOnly: true });
+      return await operation(store);
+    } catch (error) {
+      if (!sqliteBusy(error) || attempt === 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+    } finally {
+      store?.close();
+    }
+  }
+  throw new Error("索引目前無法唯讀讀取，請稍後重試。");
 }
 
 async function readWorkbenchIndexStatus(databasePath: string) {
   const readAt = new Date().toISOString();
-  if (!existsSync(databasePath)) return { state: "missing" as const, readAt };
+  if (!existsSync(databasePath)) return { state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true };
   try {
-    const status = await openStore(databasePath, store => indexStatus(store));
-    return { state: "available" as const, readAt, ...status };
+    return await openStore(databasePath, store => {
+      const status = indexStatus(store);
+      return {
+        state: "available" as const,
+        readAt,
+        ...status,
+        trash: store.trashRoots(),
+        deleteConfirmation: store.deleteConfirmationEnabled(),
+      };
+    });
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
-    return { state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。" };
+    return { state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。", trash: [] as TrashedRoot[], deleteConfirmation: true };
+  }
+}
+async function readAutoupdateStatus(databasePath: string) {
+  try {
+    const result = await autoupdateStatus(databasePath);
+    return { enabled: result.code === 0, available: result.code === 0, message: result.text };
+  } catch (error) {
+    if (error instanceof AutoupdateError && error.code === "AUTOUPDATE_NOT_RUNNING") {
+      return { enabled: false, available: true, message: "背景自動更新未執行。" };
+    }
+    return { enabled: false, available: false, message: error instanceof Error ? error.message : "無法讀取背景自動更新狀態。" };
   }
 }
 interface WorkbenchIndexingState {
-  state: "idle" | "running" | "complete" | "failed";
+  state: "idle" | "running" | "stopping" | "stopped" | "complete" | "failed";
   message: string;
   roots: string[];
-  reports: Pick<SyncReport, "root" | "complete" | "found" | "updated" | "unchanged" | "removed">[];
+  reports: PersistedIndexingReport[];
   progress: ProgressUpdate | null;
+  instanceId: string;
+  pid: number;
+  startedAt: string;
+  updatedAt: string;
 }
+
+interface IndexWorkerReport extends PersistedIndexingReport {}
+
+type IndexWorkerMessage =
+  | { type: "progress"; progress: ProgressUpdate }
+  | { type: "complete"; reports: IndexWorkerReport[] }
+  | { type: "stopped"; message: string }
+  | { type: "error"; message: string; code?: string };
+
+const INDEX_STOP_GRACE_MS = 2000;
+
+function progressPathLabel(value: string): string {
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, "?");
+  return normalized.split(/[\\/]/u).filter(Boolean).pop() ?? normalized;
+}
+
 function indexingMessage(progress: ProgressUpdate): string {
-  if (progress.current === undefined) return progress.message;
-  if (progress.total === undefined) return `${progress.message}；已發現 ${progress.current} 份`;
-  if (progress.total === 0) return `${progress.message}；沒有找到文件`;
+  const pathLabel = progress.path ? `；目前：${progressPathLabel(progress.path)}` : "";
+  if (progress.current === undefined) return `${progress.message}${pathLabel}`;
+  if (progress.total === undefined) return `${progress.message}；已發現 ${progress.current} 份${pathLabel}`;
+  if (progress.total === 0) return `${progress.message}；沒有找到文件${pathLabel}`;
   const percent = progress.stage === "complete" ? 100 : Math.min((progress.current / progress.total) * 100, 99.99);
-  return `${progress.message}：${progress.current}／${progress.total}（${percent.toFixed(2)}%）`;
+  return `${progress.message}：${progress.current}／${progress.total}（${percent.toFixed(2)}%）${pathLabel}`;
+}
+
+function initialIndexingState(databasePath: string, instanceId: string): WorkbenchIndexingState {
+  const persisted = readIndexingState(databasePath);
+  const now = new Date().toISOString();
+  if (!persisted) {
+    return { state: "idle", message: "尚未開始索引。", roots: [], reports: [], progress: null,
+      instanceId, pid: process.pid, startedAt: now, updatedAt: now };
+  }
+  const interrupted = (persisted.state === "running" || persisted.state === "stopping")
+    && persisted.pid !== process.pid && !isPidAlive(persisted.pid);
+  return {
+    state: interrupted ? "stopped" : persisted.state,
+    message: interrupted ? "上次索引程序已中斷；已提交進度保留，重新索引會從已提交文件接續。" : persisted.message,
+    roots: [...persisted.roots],
+    reports: [...persisted.reports],
+    progress: persisted.progress ? { ...persisted.progress } : null,
+    instanceId: interrupted ? instanceId : persisted.instanceId,
+    pid: interrupted ? process.pid : persisted.pid,
+    startedAt: persisted.startedAt,
+    updatedAt: interrupted ? now : persisted.updatedAt,
+  };
 }
 
 
@@ -172,54 +273,207 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   const consumedPreviews = new Set<string>();
   const tempRoot = await mkdtemp(path.join(options.tempParent ?? os.tmpdir(), "localdocsearch-ui-"));
   const sessionCreatedAt = new Date().toISOString();
+  const instanceId = randomUUID();
   let origin = "";
-  let indexing: WorkbenchIndexingState = { state: "idle", message: "尚未開始索引。", roots: [], reports: [], progress: null };
+  let indexing: WorkbenchIndexingState = initialIndexingState(options.databasePath, instanceId);
   let indexingTask: Promise<void> | undefined;
   let indexAbort: AbortController | undefined;
+  let indexWorker: Worker | undefined;
+  let indexingBusy = false;
+  let lastPersistedAt = 0;
+  let latestAnswerTrace: AnswerTrace | null = null;
+  const traceLog = createTraceLog(dataDirectory(options.databasePath));
 
-  function startIndex(root: string | undefined): WorkbenchIndexingState {
-    if (indexingTask) return indexing;
-    const store = new IndexStore(options.databasePath);
+  function persistIndexing(force = false): void {
+    const now = Date.now();
+    if (!force && now - lastPersistedAt < 500) return;
+    try {
+      const state: PersistedIndexingState = {
+        schemaVersion: 1,
+        databasePath: options.databasePath,
+        instanceId: indexing.instanceId,
+        pid: indexing.pid,
+        state: indexing.state,
+        message: indexing.message,
+        roots: [...indexing.roots],
+        reports: [...indexing.reports],
+        progress: indexing.progress ? { ...indexing.progress } : null,
+        startedAt: indexing.startedAt,
+        updatedAt: indexing.updatedAt,
+      };
+      writeIndexingState(state);
+      lastPersistedAt = now;
+    } catch {
+      // 進度檔是診斷與恢復資訊，不能讓索引本身失敗。
+    }
+  }
+
+  function updateProgress(progress: ProgressUpdate): void {
+    indexing = { ...indexing, progress, message: indexingMessage(progress), updatedAt: new Date().toISOString() };
+    persistIndexing();
+  }
+
+  function runIndexWorker(input: {
+    databasePath: string;
+    roots: string[];
+    root?: string;
+    upgradeOnly: boolean;
+  }): Promise<{ reports: IndexWorkerReport[] }> {
+    return new Promise((resolve, reject) => {
+      const execArgv = process.execArgv.filter((argument, index) =>
+        argument !== "--input-type" && !argument.startsWith("--input-type=") && process.execArgv[index - 1] !== "--input-type");
+      const worker = new Worker(new URL("./index-worker.js", import.meta.url), { workerData: input, execArgv });
+      indexWorker = worker;
+      let settled = false;
+      const finish = (callback: () => void): void => {
+        if (settled) return;
+        settled = true;
+        if (indexWorker === worker) indexWorker = undefined;
+        callback();
+      };
+      worker.on("message", (message: IndexWorkerMessage) => {
+        if (message.type === "progress") {
+          updateProgress(message.progress);
+        } else if (message.type === "complete") {
+          finish(() => resolve({ reports: message.reports }));
+        } else if (message.type === "stopped") {
+          finish(() => reject(new OperationCancelledError()));
+        } else {
+          finish(() => {
+            const error = new Error(message.message);
+            if (message.code) Object.assign(error, { code: message.code });
+            reject(error);
+          });
+        }
+      });
+      worker.once("error", error => finish(() => reject(error)));
+      worker.once("exit", code => {
+        if (code !== 0) finish(() => reject(new Error(`索引工作執行緒結束（${code}）。`)));
+      });
+    });
+  }
+
+  function requestWorkerStop(): void {
+    const worker = indexWorker;
+    if (!worker) return;
+    worker.postMessage({ type: "stop" });
+    const timer = setTimeout(() => {
+      if (indexWorker === worker) void worker.terminate();
+    }, INDEX_STOP_GRACE_MS);
+    timer.unref();
+  }
+
+  function startIndex(root: string | undefined, upgradeOnly = false): WorkbenchIndexingState {
+    if (indexingBusy) {
+      if (root) throw Object.assign(new Error("索引進行中，請完成後再加入。"), { statusCode: 409 });
+      return indexing;
+    }
+    if ((indexing.state === "running" || indexing.state === "stopping")
+      && indexing.pid !== process.pid && isPidAlive(indexing.pid)) {
+      throw Object.assign(new Error("另一個工作台程序正在索引；請等待它完成，或關閉該程序後再重試。"), { statusCode: 409 });
+    }
+    indexingBusy = true;
+    let store: IndexStore | undefined;
+    try {
+      store = new IndexStore(options.databasePath);
+    } catch (error) {
+      indexingBusy = false;
+      if (error instanceof IndexBusyError) {
+        throw Object.assign(new Error("INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"), { statusCode: 409 });
+      }
+      throw error;
+    }
     const roots = root ? [root] : store.roots();
-    if (!roots.length) {
+    if (!upgradeOnly && !roots.length) {
       store.close();
+      indexingBusy = false;
       throw new Error("尚無索引根目錄；請先在工作台選擇要建立索引的資料夾。");
     }
-    indexing = { state: "running", message: "正在初始化索引…", roots, reports: [], progress: null };
+    const now = new Date().toISOString();
+    indexing = {
+      state: "running",
+      message: upgradeOnly ? "正在建立 unigram／trigram 搜尋 postings…" : "正在初始化索引…",
+      roots,
+      reports: [],
+      progress: null,
+      instanceId,
+      pid: process.pid,
+      startedAt: now,
+      updatedAt: now,
+    };
+    persistIndexing(true);
     indexAbort = new AbortController();
     const abort = indexAbort;
+    const useInProcess = Boolean(options.indexHold);
+    if (!useInProcess) {
+      store.close();
+      store = undefined;
+    }
     indexingTask = (async () => {
       try {
-        for (const target of roots) {
-          const report = await sync(target, store, {
-            requireRegistered: !root,
-            signal: abort.signal,
-            onProgress: progress => { indexing = { ...indexing, progress, message: indexingMessage(progress) }; },
+        if (useInProcess) {
+          await Promise.race([
+            options.indexHold!(),
+            new Promise<never>((_, reject) => {
+              abort.signal.addEventListener("abort", () => reject(new Error("索引已中止。")), { once: true });
+            }),
+          ]);
+          if (upgradeOnly) {
+            await store!.upgrade({ signal: abort.signal, onProgress: updateProgress });
+          }
+          if (!upgradeOnly) {
+            for (const target of roots) {
+              const report = await sync(target, store!, {
+                requireRegistered: !root,
+                signal: abort.signal,
+                onProgress: updateProgress,
+              });
+              indexing.reports.push({
+                root: report.root,
+                complete: report.complete,
+                found: report.found,
+                updated: report.updated,
+                unchanged: report.unchanged,
+                removed: report.removed,
+              });
+            }
+            if (indexing.reports.every(report => report.complete)) store!.purgeTrashRoots(roots);
+          }
+        } else {
+          const result = await runIndexWorker({
+            databasePath: options.databasePath,
+            roots,
+            ...(root === undefined ? {} : { root }),
+            upgradeOnly,
           });
-          indexing.reports.push({
-            root: report.root,
-            complete: report.complete,
-            found: report.found,
-            updated: report.updated,
-            unchanged: report.unchanged,
-            removed: report.removed,
-          });
+          indexing = { ...indexing, reports: result.reports, updatedAt: new Date().toISOString() };
         }
         indexing = {
           ...indexing,
           state: "complete",
-          message: indexing.reports.every(report => report.complete) ? "索引已更新。" : "索引完成，但部分根目錄未完整同步。",
+          message: upgradeOnly ? "unigram／trigram 搜尋 postings 已建立。"
+            : indexing.reports.every(report => report.complete) ? "索引已更新。" : "索引完成，但部分根目錄未完整同步。",
+          updatedAt: new Date().toISOString(),
         };
       } catch (error) {
-        indexing = { ...indexing, state: "failed", message: error instanceof Error ? error.message : "索引無法完成。" };
+        const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : "";
+        const stopped = abort.signal.aborted || error instanceof OperationCancelledError;
+        const message = stopped ? "索引同步已停止。"
+          : code === "INDEX_BUSY" || error instanceof IndexBusyError
+            ? "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"
+            : error instanceof Error ? error.message : "索引無法完成。";
+        indexing = { ...indexing, state: stopped ? "stopped" : "failed", message, updatedAt: new Date().toISOString() };
       } finally {
-        store.close();
+        store?.close();
         if (indexAbort === abort) indexAbort = undefined;
         indexingTask = undefined;
+        indexingBusy = false;
+        persistIndexing(true);
       }
     })();
     return indexing;
   }
+  persistIndexing(true);
 
 
   const buildContext = async (input: ContextRequest) => {
@@ -243,6 +497,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   };
 
   const server = createServer(async (request, response) => {
+    let activeAnswerTrace: AnswerTraceRecorder | undefined;
     try {
       const host = request.headers.host;
       const currentAddress = server.address();
@@ -263,8 +518,42 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         });
         response.end(body); return;
       }
+      if (request.method === "GET" && url.pathname === "/traces") {
+        const nonce = randomBytes(18).toString("base64url");
+        const body = traceHtml(nonce);
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
+          "cache-control": "no-store",
+          "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+          "cross-origin-opener-policy": "same-origin",
+        });
+        response.end(body); return;
+      }
       if (!url.pathname.startsWith("/api/")) { json(response, 404, { error: "找不到本機資源。" }); return; }
       if (request.headers["x-localdocsearch-token"] !== token) { json(response, 403, { error: "工作階段 token 無效。" }); return; }
+      if (request.method === "GET" && url.pathname === "/api/traces") {
+        const typeValue = url.searchParams.get("type");
+        const statusValue = url.searchParams.get("status");
+        const limitValue = url.searchParams.get("limit");
+        if (typeValue && typeValue !== "search" && typeValue !== "answer") throw new Error("Trace 類型篩選無效。");
+        if (statusValue && statusValue !== "success" && statusValue !== "error") throw new Error("Trace 狀態篩選無效。");
+        const limit = limitValue === null ? undefined : Number(limitValue);
+        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 500)) throw new Error("Trace 筆數必須是 1～500。");
+        const snapshot = readTraceLog(dataDirectory(options.databasePath), {
+          ...(typeValue ? { type: typeValue as "search" | "answer" } : {}),
+          ...(statusValue ? { status: statusValue as "success" | "error" } : {}),
+          ...(limit === undefined ? {} : { limit }),
+        });
+        json(response, 200, {
+          ...snapshot,
+          retention: { maxFiles: TRACE_LOG_FILES, maxFileBytes: TRACE_LOG_LIMIT },
+          writeFailed: traceLog.failed,
+        });
+        return;
+      }
       if (request.method !== "GET" && request.headers.origin !== origin) { json(response, 403, { error: "跨來源要求已拒絕。" }); return; }
 
       if (request.method === "GET" && url.pathname === "/api/state") {
@@ -278,7 +567,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         }); return;
       }
       if (request.method === "GET" && url.pathname === "/api/index-status") {
-        json(response, 200, { ...await readWorkbenchIndexStatus(options.databasePath), indexing }); return;
+        json(response, 200, { ...await readWorkbenchIndexStatus(options.databasePath), indexing,
+          autoupdate: await readAutoupdateStatus(options.databasePath) }); return;
       }
       if (request.method === "POST" && url.pathname === "/api/index") {
         const body = await readJson(request);
@@ -288,17 +578,109 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         }
         json(response, 202, { indexing: startIndex(typeof root === "string" ? root.trim() : undefined) }); return;
       }
+      if (request.method === "POST" && url.pathname === "/api/index/stop") {
+        if (!indexingBusy || !indexAbort) {
+          if ((indexing.state === "running" || indexing.state === "stopping")
+            && indexing.pid !== process.pid && isPidAlive(indexing.pid)) {
+            throw Object.assign(new Error("另一個工作台程序正在索引；請在原程序停止。"), { statusCode: 409 });
+          }
+          json(response, 200, { indexing }); return;
+        }
+        indexing = { ...indexing, state: "stopping", message: "正在停止索引同步…", updatedAt: new Date().toISOString() };
+        persistIndexing(true);
+        indexAbort.abort();
+        requestWorkerStop();
+        await indexingTask;
+        json(response, 200, { indexing }); return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/index-roots/trash") {
+        if (indexingBusy) throw Object.assign(new Error("索引進行中，請完成後再刪除根目錄。"), { statusCode: 409 });
+        const roots = rootList(await readJson(request));
+        const store = new IndexStore(options.databasePath);
+        try { json(response, 200, { removed: store.moveRootsToTrash(roots) }); }
+        finally { store.close(); }
+        return;
+      }
+      if (request.method === "DELETE" && url.pathname === "/api/trash") {
+        if (indexingBusy) throw Object.assign(new Error("索引進行中，請完成後再清理垃圾桶。"), { statusCode: 409 });
+        const roots = rootList(await readJson(request));
+        const store = new IndexStore(options.databasePath);
+        try { json(response, 200, { removed: store.purgeTrashRoots(roots) }); }
+        finally { store.close(); }
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/settings") {
+        const body = await readJson(request);
+        if (body.deleteConfirmation !== undefined && typeof body.deleteConfirmation !== "boolean") throw new Error("刪除提醒設定無效。");
+        if (body.autoupdateEnabled !== undefined && typeof body.autoupdateEnabled !== "boolean") throw new Error("背景自動更新設定無效。");
+        let deleteConfirmation = true;
+        if (body.deleteConfirmation !== undefined || existsSync(options.databasePath)) {
+          const store = new IndexStore(options.databasePath);
+          try {
+            if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
+            deleteConfirmation = store.deleteConfirmationEnabled();
+          } finally { store.close(); }
+        }
+        if (body.autoupdateEnabled === true) {
+          await autoupdateStart({ debounceMs: 1500, reconcileMs: 21_600_000 }, options.databasePath,
+            { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
+        } else if (body.autoupdateEnabled === false) {
+          try { await autoupdateStop(options.databasePath); }
+          catch (error) {
+            if (!(error instanceof AutoupdateError && error.code === "AUTOUPDATE_NOT_RUNNING")) throw error;
+          }
+        }
+        json(response, 200, { deleteConfirmation, autoupdate: await readAutoupdateStatus(options.databasePath) });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/select-folder") {
+        const selected = await (options.selectFolder ?? selectFolder)();
+        json(response, 200, { root: selected }); return;
+      }
       if (request.method === "POST" && url.pathname === "/api/search") {
         const body = await readJson(request);
         const page = Number(body.page);
         const pageSize = Number(body.pageSize);
         if (!Number.isSafeInteger(page) || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 20) throw new Error("工作台每頁最多 20 筆。");
-        const result = await openStore(options.databasePath, store => searchDocuments(store, {
-          query: typeof body.query === "string" ? body.query : "",
-          mode: body.mode === "all-terms" ? "all-terms" : "phrase",
-          page, pageSize,
-        }));
-        json(response, 200, result); return;
+        const field = body.field === "filename" || body.field === "content" ? body.field : body.field === "all" || body.field === undefined ? "all" : undefined;
+        const sort = body.sort === "filename" || body.sort === "modified" ? body.sort : body.sort === "relevance" || body.sort === undefined ? "relevance" : undefined;
+        if (!field || !sort) throw new Error("搜尋欄位或排序方式無效。");
+        const statuses = body.statuses === undefined ? undefined : Array.isArray(body.statuses)
+          && body.statuses.every(value => typeof value === "string" && documentStatuses.includes(value as DocumentStatus))
+          ? [...new Set(body.statuses as DocumentStatus[])] : null;
+        if (statuses === null) throw new Error("解析狀態篩選無效。");
+        const types = body.types === undefined ? undefined : Array.isArray(body.types) && body.types.every(value => typeof value === "string")
+          ? body.types as string[] : null;
+        if (types === null) throw new Error("格式篩選無效。");
+        const query = typeof body.query === "string" ? body.query.normalize("NFKC").toLowerCase().trim() : "";
+        const searchInput: import("./mcp-tools.js").SearchDocumentsInput = {
+          query: typeof body.query === "string" ? body.query : "", mode: body.mode === "all-terms" ? "all-terms" as const : "phrase" as const,
+          page, pageSize, field, sort,
+          ...(statuses ? { statuses } : {}), ...(types ? { types } : {}),
+          ...(typeof body.root === "string" && body.root ? { root: body.root } : {}),
+        };
+        if (query && existsSync(options.databasePath)) {
+          const ready = await openStore(options.databasePath, store => !store.formatStatus().needsUpgrade);
+          if (!ready) {
+            startIndex(undefined, true);
+            json(response, 202, { pendingUpgrade: true, message: "block 搜尋索引尚未完成；背景升級完成後會自動搜尋。" });
+            return;
+          }
+        }
+        const hasIndex = existsSync(options.databasePath);
+        const result = hasIndex
+          ? await openStore(options.databasePath, store => searchDocuments(store, searchInput))
+          : { query: searchInput.query.trim(), mode: searchInput.mode, total: 0, accessibleTotal: 0,
+            truncatedToFirst500: false, page, pageSize, pageCount: 1, results: [],
+            trace: emptySearchTrace(searchInput.query, searchInput.mode!, field, sort) };
+        if (!hasIndex) traceLog.write(result.trace);
+        const temporaryResults = page === 1 && field !== "content" && !body.root ? [...documents.values()]
+          .filter(document => (!types?.length || types.includes(document.extension))
+            && (!statuses?.length || statuses.includes(document.status)) && document.filename.normalize("NFKC").toLowerCase().includes(query))
+          .map(document => ({ id: document.id, temporary: true, path: document.filename, filename: document.filename,
+            extension: document.extension, status: document.status, reason: "臨時文件檔名包含", filenameOnly: true,
+            snippet: document.errorMessage ?? "臨時文件；只以檔名參與搜尋。", location: null })) : [];
+        json(response, 200, { ...result, temporaryResults }); return;
       }
       if (request.method === "POST" && url.pathname === "/api/files") {
         if (documents.size >= WORKBENCH_FILE_LIMIT) throw Object.assign(new Error("一次最多保留 20 份拖曳文件。"), { statusCode: 409 });
@@ -307,13 +689,22 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         let decoded: string;
         try { decoded = decodeURIComponent(header); } catch { throw Object.assign(new Error("檔名編碼無效。"), { statusCode: 400 }); }
         const filename = sanitizeUploadName(decoded);
-        const extension = uploadExtension(filename);
+        const extension = path.extname(filename).toLowerCase();
         const content = await readBody(request, MAX_FILE_BYTES);
-        const temporary = path.join(tempRoot, `${randomUUID()}${extension}`);
-        await writeFile(temporary, content, { mode: 0o600, flag: "wx" });
+        const id = randomUUID();
         let document: ImportedDocument;
-        try { document = await importDocument(temporary, filename); }
-        finally { await unlink(temporary).catch(() => {}); }
+        if (!supportedExtensions.has(extension)) {
+          document = { id, filename, extension, sizeBytes: content.length, status: "unsupported",
+            errorCode: "FORMAT_UNSUPPORTED", errorMessage: "此格式不支援內容解析；只能搜尋檔名，不能加入上下文。", blocks: [] };
+        } else {
+          const temporary = path.join(tempRoot, `${randomUUID()}${extension}`);
+          await writeFile(temporary, content, { mode: 0o600, flag: "wx" });
+          try { document = await importDocument(temporary, filename, id); }
+          catch (error) {
+            document = { id, filename, extension, sizeBytes: content.length, status: "error", errorCode: "PARSE_ERROR",
+              errorMessage: error instanceof Error ? error.message : "文件解析失敗；只能搜尋檔名，不能加入上下文。", blocks: [] };
+          } finally { await unlink(temporary).catch(() => {}); }
+        }
         documents.set(document.id, document);
         const { blocks: _blocks, ...publicDocument } = document;
         json(response, 201, publicDocument); return;
@@ -356,15 +747,27 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       if (request.method === "POST" && url.pathname === "/api/ask") {
         const body = await readJson(request);
+        const trace = new AnswerTraceRecorder(typeof body.question === "string" ? body.question : "");
+        activeAnswerTrace = trace;
+        const validationStarted = performance.now();
         const input = contextRequest(body);
         if (!input.question) throw new Error("送出 AI 前需要填寫問題。");
         if (body.confirmed !== true) throw new Error("尚未確認外部傳送。");
+        trace.addPhase("inputValidation", performance.now() - validationStarted);
+        const contextStarted = performance.now();
         const built = await buildContext(input);
+        trace.addPhase("contextBuild", performance.now() - contextStarted);
+        trace.setContext(built.bytes, input.selections.length + input.fileIds.length);
+        const routeStarted = performance.now();
         const route = modelRoute(input, keys);
+        trace.setRoute(route.primary.provider, route.primary.model);
+        trace.addPhase("routeResolution", performance.now() - routeStarted);
+        const previewStarted = performance.now();
         const expected = previewId(secret, { provider: input.provider, model: input.model, question: input.question, context: built.text, route: routeSignature(route) });
         if (!previewMatches(expected, body.previewId)) throw Object.assign(new Error("預覽已失效；請重新預覽並確認。"), { statusCode: 409 });
         if (typeof body.previewId !== "string" || consumedPreviews.has(body.previewId)) throw Object.assign(new Error("這次確認已送出或已失效，請重新產生預覽。"), { statusCode: 409 });
         consumedPreviews.add(body.previewId);
+        trace.addPhase("previewValidation", performance.now() - previewStarted);
         const primaryKey = keys.get(route.primary.provider);
         const fallbackKey = route.fallback ? keys.get(route.fallback.provider) : undefined;
         let result: RoutedProviderResult;
@@ -373,19 +776,33 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
             { ...route.primary, question: input.question, context: built.text, apiKey: primaryKey },
             route.fallback && fallbackKey ? { ...route.fallback, question: input.question, context: built.text, apiKey: fallbackKey } : undefined,
             options.fetcher,
+            trace,
           );
         } else if (route.fallback && fallbackKey) {
-          result = { answer: await requestProvider({ ...route.fallback, question: input.question, context: built.text, apiKey: fallbackKey }, options.fetcher), provider: route.fallback.provider, model: route.fallback.model, fallbackUsed: true };
+          result = { answer: await requestProvider({ ...route.fallback, question: input.question, context: built.text, apiKey: fallbackKey }, options.fetcher, trace), provider: route.fallback.provider, model: route.fallback.model, fallbackUsed: true };
         } else {
           throw new Error("尚未設定主要 Provider 的 API Key。");
         }
-        json(response, 200, { answer: result.answer, provider: result.provider, model: result.model, fallbackUsed: result.fallbackUsed }); return;
+        trace.setRoute(result.provider, result.model);
+        trace.setFallbackUsed(result.fallbackUsed);
+        const answerTrace = trace.snapshot();
+        latestAnswerTrace = answerTrace;
+        traceLog.write(answerTrace);
+        json(response, 200, { answer: result.answer, provider: result.provider, model: result.model, fallbackUsed: result.fallbackUsed, trace: answerTrace }); return;
       }
       json(response, 404, { error: "找不到本機 API。" });
     } catch (error) {
       const status = error instanceof ProviderError ? 502 : error instanceof Error && "statusCode" in error ? Number((error as Error & { statusCode: number }).statusCode) : 400;
       const message = error instanceof ProviderError || error instanceof Error ? error.message : "無法完成要求。";
-      json(response, Number.isSafeInteger(status) ? status : 400, { error: message.slice(0, 700) });
+      const errorBody: Record<string, unknown> = { error: message.slice(0, 700) };
+      if (activeAnswerTrace) {
+        activeAnswerTrace.setError(error instanceof ProviderError ? error.code : "ANSWER_FAILED");
+        const trace = activeAnswerTrace.snapshot();
+        latestAnswerTrace = trace;
+        traceLog.write(trace);
+        errorBody.trace = trace;
+      }
+      json(response, Number.isSafeInteger(status) ? status : 400, errorBody);
     }
   });
 
@@ -407,11 +824,21 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     url: `${origin}/#${encodeURIComponent(token)}`,
     port: address.port,
     token,
+    lastAnswerTrace: () => {
+      const trace = latestAnswerTrace;
+      if (!trace) return null;
+      return { ...trace, phasesMs: { ...trace.phasesMs }, counts: { ...trace.counts } };
+    },
     waitForIndex: async () => { await indexingTask; },
     close: async () => {
       if (closed) return;
       closed = true;
-      indexAbort?.abort();
+      if (indexingBusy && indexAbort) {
+        indexing = { ...indexing, state: "stopping", message: "正在停止索引同步…", updatedAt: new Date().toISOString() };
+        persistIndexing(true);
+        indexAbort.abort();
+        requestWorkerStop();
+      }
       await indexingTask;
       keys.destroy();
       documents.clear();

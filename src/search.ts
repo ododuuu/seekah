@@ -1,10 +1,15 @@
 import { documentReference } from "./document-reference.js";
 import path from "node:path";
 import type { DocumentStatus } from "./model.js";
+import { SearchTraceRecorder, type SearchTrace } from "./search-trace.js";
 import type { IndexStore, StoredBlockRow, StoredDocumentRow } from "./store.js";
 
 export function normalize(value: string): string {
   return value.normalize("NFKC").toLowerCase();
+}
+
+function comparePath(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
 }
 
 export function parseTypes(value: string): string[] {
@@ -211,6 +216,9 @@ export interface SearchResult {
 }
 
 export type SearchMode = "phrase" | "all-terms";
+export type SearchField = "all" | "filename" | "content";
+export type SearchSort = "relevance" | "filename" | "modified";
+
 
 interface RankedSearchResult {
   result: SearchResult;
@@ -232,6 +240,7 @@ export interface SearchResultPage {
 export interface SearchResultSet {
   readonly total: number;
   readonly dataVersion: number;
+  readonly trace: SearchTrace;
   page(page: number, pageSize: number): SearchResultPage;
 }
 
@@ -242,6 +251,12 @@ function queryTerms(rawQuery: string, mode: SearchMode): { query: string; terms:
     ? [...new Set(rawQuery.trim().split(/\s+/u).map(normalize).filter(Boolean))]
     : [query];
   return { query, terms };
+}
+function searchTraceErrorCode(error: unknown): string {
+  if (error instanceof Error && "code" in error && typeof (error as Error & { code?: unknown }).code === "string") {
+    return (error as Error & { code: string }).code;
+  }
+  return "SEARCH_FAILED";
 }
 
 function includesAll(value: string, terms: readonly string[]): boolean {
@@ -257,15 +272,16 @@ function snippetTerm(source: string, terms: readonly string[]): string {
 type SelectedBlock = { block: StoredBlockRow; source: string; coverage: number; headingHit: boolean };
 
 function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockRow>, query: string, terms: readonly string[],
-  mode: SearchMode): RankedSearchResult | undefined {
+  mode: SearchMode, field: SearchField, trace?: SearchTraceRecorder): RankedSearchResult | undefined {
   const filename = normalize(document.filename);
-  const filenameRank = filename === query ? 4 : includesAll(filename, terms) ? 3 : 0;
+  const filenameRank = field === "content" ? 0 : filename === query ? 4 : includesAll(filename, terms) ? 3 : 0;
   let headingBlock: StoredBlockRow | undefined;
   let contentBlock: StoredBlockRow | undefined;
   let representative: SelectedBlock | undefined;
-  const unmatched = new Set(terms.filter(term => !filename.includes(term)));
-  if (!filenameRank) {
+  const unmatched = new Set(terms.filter(term => field === "content" || !filename.includes(term)));
+  if (!filenameRank && field !== "filename") {
     for (const block of blocks) {
+      const exactTextStarted = performance.now();
       const heading = normalize(block.heading ?? "");
       const content = normalize(block.content);
       if (mode === "all-terms") {
@@ -284,6 +300,7 @@ function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockR
           representative = candidate;
         }
       }
+      trace?.increment("exactTextMs", performance.now() - exactTextStarted);
     }
   }
   if (mode === "all-terms" && !filenameRank && unmatched.size > 0) return undefined;
@@ -291,64 +308,311 @@ function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockR
   const rank = filenameRank || (headingBlock ? 2 : contentBlock ? 1 : 0);
   const effectiveRank = rank || (mode === "all-terms" && representative ? 1 : 0);
   if (!effectiveRank) return undefined;
+  if (filenameRank) trace?.increment("filenameOnlyFallbacks");
   const sourceKind = filenameRank ? "filename" : headingBlock ? "heading" : contentBlock ? "content"
     : representative?.headingHit ? "heading" : "content";
   return { result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
     modifiedAtMs: document.modified_at_ms, heading: block?.heading ?? null,
     location: block?.location_value ?? null, snippet: "", rank: effectiveRank,
-    reason: mode === "all-terms" ? ["", "內容（全部關鍵字）", "標題（全部關鍵字）", "檔名包含（全部關鍵字）", "檔名完全符合"][effectiveRank]!
-      : ["", "內容", "標題", "檔名包含", "檔名完全符合"][effectiveRank]!,
+    reason: rankReason(mode, effectiveRank),
     filenameOnly: !block, status: document.status, snippetTruncated: false },
     documentId: document.id, ordinal: block?.ordinal ?? null, sourceKind };
 }
 
-export function collectHits(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
-  mode: SearchMode = "phrase", restrictIds?: readonly number[], subtree?: string): RankedSearchResult[] {
-  const { query, terms } = queryTerms(rawQuery, mode);
-  const results: RankedSearchResult[] = [];
-  const source = restrictIds
-    ? store.streamCandidatesByIds(restrictIds, terms, mode === "all-terms")
-    : store.streamCandidates(types, root, terms, mode === "all-terms", subtree);
-  for (const { document, blocks } of source) {
-    const ranked = rankDocument(document, blocks, query, terms, mode);
-    if (ranked) results.push(ranked);
+function rankReason(mode: SearchMode, rank: number): string {
+  return mode === "all-terms" ? ["", "內容（全部關鍵字）", "標題（全部關鍵字）", "檔名包含（全部關鍵字）", "檔名完全符合"][rank]!
+    : ["", "內容", "標題", "檔名包含", "檔名完全符合"][rank]!;
+}
+
+type IndexedRank = { rank: number; sourceKind: RankedSearchResult["sourceKind"]; ordinal: number | null };
+
+/**
+ * SPEC §50.2: the same ranking as rankDocument(), computed from the block
+ * index instead of reading document content. Filename and heading candidates
+ * are verified on their plain text; content hits are exact.
+ */
+function indexedHits(store: IndexStore, query: string, terms: readonly string[], mode: SearchMode, field: SearchField,
+  types: readonly string[] | undefined, root: string | undefined, subtree: string | undefined,
+  statuses: readonly DocumentStatus[] | undefined, restrictIds: readonly number[] | undefined,
+  trace: SearchTraceRecorder): RankedSearchResult[] {
+  trace.addCandidateSource("block-index");
+  const restrict = restrictIds ? [...new Set(restrictIds)] : undefined;
+  const allowed = restrict ? new Set(restrict) : undefined;
+  if (restrict) trace.addCandidateSource("restricted-ids");
+  trace.setCount("documentsInScope", restrict ? restrict.length : store.documentsInScope(types, root, subtree));
+  const documents = new Map<number, StoredDocumentRow>();
+  const fetched = new Set<number>();
+  const load = (ids: Iterable<number>) => {
+    const missing = [...ids].filter(id => !fetched.has(id) && (!allowed || allowed.has(id)));
+    for (const id of missing) fetched.add(id);
+    if (!missing.length) return;
+    // Restricted ids (search within results) ignore type／root scope, as streamCandidatesByIds does.
+    const rows = restrict ? store.indexDocuments(missing, undefined, undefined, undefined, trace)
+      : store.indexDocuments(missing, types, root, subtree, trace);
+    for (const row of rows) {
+      if (statuses?.length && !statuses.includes(row.status)) continue;
+      documents.set(Number(row.id), row);
+    }
+  };
+  const verify = <T>(work: () => T): T => {
+    const phase = trace.beginPhase("exactVerification");
+    try { return work(); } finally { trace.endPhase(phase); }
+  };
+  const ranks = new Map<number, IndexedRank>();
+
+  // Filename: 4 exact, 3 contains every term; it wins over any block hit.
+  if (field !== "content") {
+    let candidates: Set<number> | undefined;
+    for (const term of terms) {
+      const ids = store.indexFilenameCandidates(term, trace);
+      candidates = candidates ? new Set(ids.filter(id => candidates!.has(id))) : new Set(ids);
+      if (!candidates.size) break;
+    }
+    load(candidates ?? []);
+    verify(() => {
+      for (const id of candidates ?? []) {
+        const document = documents.get(id);
+        if (!document) continue;
+        trace.increment("documentsExactVerified");
+        const filename = normalize(document.filename);
+        const rank = filename === query ? 4 : includesAll(filename, terms) ? 3 : 0;
+        if (rank) ranks.set(id, { rank, sourceKind: "filename", ordinal: null });
+      }
+    });
   }
-  if (!restrictIds) {
-    results.sort((a, b) => b.result.rank - a.result.rank || b.result.modifiedAtMs - a.result.modifiedAtMs
-      || (a.result.path < b.result.path ? -1 : a.result.path > b.result.path ? 1 : 0));
+
+  if (field !== "filename") {
+    // Distinct headings (first ordinal) that really contain each term.
+    const headingHits = new Map<string, { documentId: number; ordinal: number; heading: string; normalized: string }[]>();
+    for (const term of new Set(terms)) {
+      const candidates = store.indexHeadingCandidates(term, trace);
+      headingHits.set(term, verify(() => candidates
+        .filter(row => !allowed || allowed.has(row.documentId))
+        .map(row => ({ ...row, normalized: normalize(row.heading) }))
+        .filter(row => row.normalized.includes(term))));
+    }
+    const headingAll = new Map<number, number>();
+    for (const row of headingHits.get(terms[0]!)!) {
+      if (!includesAll(row.normalized, terms)) continue;
+      const previous = headingAll.get(row.documentId);
+      if (previous === undefined || row.ordinal < previous) headingAll.set(row.documentId, row.ordinal);
+    }
+    const contentAll = store.indexContentFirstBlocks(terms, restrict, trace);
+    const blockRank = (documentId: number): IndexedRank | undefined => {
+      const heading = headingAll.get(documentId);
+      if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
+      const content = contentAll.get(documentId);
+      return content === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: content };
+    };
+
+    if (mode === "phrase") {
+      const candidates = new Set([...headingAll.keys(), ...contentAll.keys()].filter(id => !ranks.has(id)));
+      load(candidates);
+      for (const id of candidates) {
+        if (!documents.has(id)) continue;
+        trace.increment("documentsExactVerified");
+        ranks.set(id, blockRank(id)!);
+      }
+    } else {
+      // all-terms: every term not in the filename must occur in some heading or block.
+      const present = new Map<string, Set<number>>();
+      for (const term of new Set(terms)) {
+        const set = new Set(headingHits.get(term)!.map(row => row.documentId));
+        const single = terms.length === 1 ? contentAll : store.indexContentFirstBlocks([term], restrict, trace);
+        for (const id of single.keys()) set.add(id);
+        present.set(term, set);
+      }
+      const candidates = new Set<number>();
+      for (const set of present.values()) for (const id of set) if (!ranks.has(id)) candidates.add(id);
+      load(candidates);
+      const representatives: number[] = [];
+      verify(() => {
+        for (const id of candidates) {
+          const document = documents.get(id);
+          if (!document) continue;
+          trace.increment("documentsExactVerified");
+          const filename = normalize(document.filename);
+          const unmatched = terms.filter(term => field === "content" || !filename.includes(term));
+          if (!unmatched.every(term => present.get(term)!.has(id))) continue;
+          const ranked = blockRank(id);
+          if (ranked) ranks.set(id, ranked);
+          else representatives.push(id);
+        }
+      });
+      if (representatives.length) {
+        // Coverage representative: heading source when the heading holds any term,
+        // otherwise block content; best coverage, then heading, then smallest ordinal.
+        const best = new Map<number, { coverage: number; headingHit: boolean; ordinal: number }>();
+        const offer = (documentId: number, candidate: { coverage: number; headingHit: boolean; ordinal: number }) => {
+          const current = best.get(documentId);
+          if (!current || candidate.coverage > current.coverage || (candidate.coverage === current.coverage
+            && (Number(candidate.headingHit) > Number(current.headingHit)
+              || (candidate.headingHit === current.headingHit && candidate.ordinal < current.ordinal)))) best.set(documentId, candidate);
+        };
+        const wanted = new Set(representatives);
+        const headingSeen = new Set<string>();
+        for (const rows of headingHits.values()) {
+          for (const row of rows) {
+            const key = `${row.documentId}:${row.ordinal}:${row.heading}`;
+            if (!wanted.has(row.documentId) || headingSeen.has(key)) continue;
+            headingSeen.add(key);
+            offer(row.documentId, { coverage: terms.filter(term => row.normalized.includes(term)).length, headingHit: true, ordinal: row.ordinal });
+          }
+        }
+        const contentTerms = new Map<string, { documentId: number; ordinal: number; terms: Set<string> }>();
+        for (const term of new Set(terms)) {
+          for (const block of store.indexContentBlocks([term], representatives, trace)) {
+            // A block whose heading holds any term is represented by its heading (offered above).
+            if (block.heading && terms.some(item => normalize(block.heading!).includes(item))) continue;
+            const key = `${block.documentId}:${block.ordinal}`;
+            let entry = contentTerms.get(key);
+            if (!entry) contentTerms.set(key, entry = { documentId: block.documentId, ordinal: block.ordinal, terms: new Set() });
+            entry.terms.add(term);
+          }
+        }
+        for (const entry of contentTerms.values()) {
+          offer(entry.documentId, { coverage: terms.filter(term => entry.terms.has(term)).length, headingHit: false, ordinal: entry.ordinal });
+        }
+        for (const [id, candidate] of best) {
+          ranks.set(id, { rank: 1, sourceKind: candidate.headingHit ? "heading" : "content", ordinal: candidate.ordinal });
+        }
+      }
+    }
+  }
+
+  const blockKeys = [...ranks].filter(([, ranked]) => ranked.ordinal !== null).map(([id, ranked]) => [id, ranked.ordinal!] as const);
+  const display = store.indexBlockDisplay(blockKeys);
+  trace.setCount("documentsConsidered", fetched.size);
+  const order = restrict ?? [...ranks.keys()];
+  const results: RankedSearchResult[] = [];
+  for (const id of order) {
+    const ranked = ranks.get(id);
+    const document = documents.get(id);
+    if (!ranked || !document) continue;
+    const block = ranked.ordinal === null ? undefined : display.get(`${id}:${ranked.ordinal}`);
+    if (ranked.sourceKind === "filename") trace.increment("filenameOnlyFallbacks");
+    trace.increment("documentsMatched");
+    results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
+      modifiedAtMs: document.modified_at_ms, heading: block?.heading ?? null, location: block?.location ?? null, snippet: "",
+      rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: !block, status: document.status, snippetTruncated: false },
+    documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
   }
   return results;
 }
 
+export function collectHits(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
+  mode: SearchMode = "phrase", restrictIds?: readonly number[], subtree?: string, field: SearchField = "all",
+  statuses?: readonly DocumentStatus[], sort: SearchSort = "relevance", trace?: SearchTraceRecorder): RankedSearchResult[] {
+  const recorder = trace ?? new SearchTraceRecorder(rawQuery, mode, field, sort);
+  try {
+    const normalizationStarted = performance.now();
+    const { query, terms } = queryTerms(rawQuery, mode);
+    recorder.addPhase("queryNormalization", performance.now() - normalizationStarted);
+    recorder.setNormalizedQuery(query);
+    let results: RankedSearchResult[];
+    if (store.blockIndexReady()) {
+      results = indexedHits(store, query, terms, mode, field, types, root, subtree, statuses, restrictIds, recorder);
+    } else {
+      // Pre-0.38.0 index whose block migration has not finished (SPEC §50.2).
+      results = [];
+      const source = restrictIds
+        ? store.streamCandidatesByIds(restrictIds, terms, mode === "all-terms", recorder)
+        : store.streamCandidates(types, root, terms, mode === "all-terms", subtree, recorder);
+      for (const { document, blocks, pruned } of source) {
+        if (statuses?.length && !statuses.includes(document.status)) continue;
+        if (pruned) continue;
+        recorder.increment("documentsExactVerified");
+        const verification = recorder.beginPhase("exactVerification");
+        let ranked: RankedSearchResult | undefined;
+        try {
+          ranked = rankDocument(document, blocks, query, terms, mode, field, recorder);
+        } finally {
+          recorder.endPhase(verification);
+        }
+        if (ranked) {
+          recorder.increment("documentsMatched");
+          results.push(ranked);
+        }
+      }
+    }
+    const rankingStarted = performance.now();
+    if (!restrictIds) {
+      results.sort(sort === "filename"
+        ? (a, b) => comparePath(a.result.path, b.result.path) || b.result.modifiedAtMs - a.result.modifiedAtMs
+        : sort === "modified"
+          ? (a, b) => b.result.modifiedAtMs - a.result.modifiedAtMs || comparePath(a.result.path, b.result.path)
+          : (a, b) => b.result.rank - a.result.rank || b.result.modifiedAtMs - a.result.modifiedAtMs
+            || comparePath(a.result.path, b.result.path));
+    }
+    recorder.addPhase("resultRanking", performance.now() - rankingStarted);
+    recorder.setCount("results", results.length);
+    store.recordSearchTrace(recorder.snapshot(results.length));
+    return results;
+  } catch (error) {
+    recorder.setError(searchTraceErrorCode(error));
+    store.recordSearchTrace(recorder.snapshot(), true);
+    throw error;
+  } finally {
+    recorder.pause();
+  }
+}
+
 function materializeHits(store: IndexStore, ranked: readonly RankedSearchResult[], rawQuery: string, mode: SearchMode,
-  page: number, pageSize: number, condition?: string): SearchResultPage {
-  const { terms } = queryTerms(rawQuery, mode);
-  if (!Number.isSafeInteger(page) || page <= 0) throw new Error("--page 必須是正整數。");
-  if (!Number.isSafeInteger(pageSize) || pageSize <= 0) throw new Error("每頁筆數必須是正整數。");
-  const pageCount = Math.max(1, Math.ceil(ranked.length / pageSize));
-  if (ranked.length > 0 && page > pageCount) throw new Error(`頁碼超出範圍；共有 ${pageCount} 頁。`);
-  const offset = (page - 1) * pageSize;
-  const selected = ranked.slice(offset, offset + pageSize).map(({ result, documentId, ordinal, sourceKind }) => {
-    const source = sourceKind === "filename" ? path.basename(result.path)
-      : ordinal === null ? path.basename(result.path) : store.blockSource(documentId, ordinal, sourceKind) ?? path.basename(result.path);
-    const snippetQuery = snippetTerm(source, terms);
-    const snippet = makeSnippet(source, snippetQuery);
-    return condition === undefined
-      ? { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated }
-      : { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated, condition };
-  });
-  return { page, pageSize, total: ranked.length, pageCount,
-    start: selected.length ? offset + 1 : 0, end: offset + selected.length, results: selected };
+  page: number, pageSize: number, condition?: string, trace?: SearchTraceRecorder): SearchResultPage {
+  trace?.resume();
+  try {
+    const { terms } = queryTerms(rawQuery, mode);
+    if (!Number.isSafeInteger(page) || page <= 0) throw new Error("--page 必須是正整數。");
+    if (!Number.isSafeInteger(pageSize) || pageSize <= 0) throw new Error("每頁筆數必須是正整數。");
+    const pageCount = Math.max(1, Math.ceil(ranked.length / pageSize));
+    if (ranked.length > 0 && page > pageCount) throw new Error(`頁碼超出範圍；共有 ${pageCount} 頁。`);
+    const offset = (page - 1) * pageSize;
+    const selected = ranked.slice(offset, offset + pageSize).map(({ result, documentId, ordinal, sourceKind }) => {
+      const source = sourceKind === "filename" ? path.basename(result.path)
+        : ordinal === null ? path.basename(result.path) : store.blockSource(documentId, ordinal, sourceKind, trace) ?? path.basename(result.path);
+      const snippetStarted = performance.now();
+      try {
+        const snippetQuery = snippetTerm(source, terms);
+        const snippet = makeSnippet(source, snippetQuery);
+        return condition === undefined
+          ? { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated }
+          : { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated, condition };
+      } finally {
+        trace?.addPhase("snippet", performance.now() - snippetStarted);
+      }
+    });
+    trace?.setCount("results", ranked.length);
+    trace?.setCount("returnedResults", selected.length);
+    if (trace) store.recordSearchTrace(trace.snapshot(ranked.length, selected.length), true);
+    return { page, pageSize, total: ranked.length, pageCount,
+      start: selected.length ? offset + 1 : 0, end: offset + selected.length, results: selected };
+  } catch (error) {
+    if (trace) {
+      trace.setError(searchTraceErrorCode(error));
+      store.recordSearchTrace(trace.snapshot(ranked.length), true);
+    }
+    throw error;
+  } finally {
+    trace?.pause();
+  }
 }
 
 export function createSearchResultSet(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
-  mode: SearchMode = "phrase", subtree?: string): SearchResultSet {
-  const results = collectHits(store, rawQuery, types, root, mode, undefined, subtree);
+  mode: SearchMode = "phrase", subtree?: string, field: SearchField = "all", statuses?: readonly DocumentStatus[],
+  sort: SearchSort = "relevance"): SearchResultSet {
+  const trace = new SearchTraceRecorder(rawQuery, mode, field, sort);
+  const results = collectHits(store, rawQuery, types, root, mode, undefined, subtree, field, statuses, sort, trace);
   const dataVersion = store.dataVersion();
+  let returnedResults = 0;
   return {
     total: results.length,
     dataVersion,
-    page(page, pageSize) { return materializeHits(store, results, rawQuery, mode, page, pageSize); },
+    get trace() { return trace.snapshot(results.length, returnedResults); },
+    page(page, pageSize) {
+      const resultPage = materializeHits(store, results, rawQuery, mode, page, pageSize, undefined, trace);
+      returnedResults = resultPage.results.length;
+      return resultPage;
+    },
   };
 }
 
@@ -372,40 +636,74 @@ export interface PassageHit {
 /** Collect up to `limit` matching text blocks for one document path (title hits before content). */
 export function matchingPassages(store: IndexStore, rawQuery: string, filePath: string, limit = 3,
   mode: SearchMode = "phrase"): PassageHit[] {
-  const { terms } = queryTerms(rawQuery, mode);
-  if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("--passages 必須是正整數。");
-  const candidate = store.candidateByPath(filePath);
-  if (!candidate) return [];
-  if (mode === "all-terms") {
-    const searchable = [normalize(candidate.document.filename), ...candidate.blocks.flatMap(block =>
-      [normalize(block.heading ?? ""), normalize(block.content)])];
-    if (!terms.every(term => searchable.some(value => value.includes(term)))) return [];
-  }
-  type Ranked = { rank: number; ordinal: number; heading: string | null; location: string | null; source: string; reason: string; matched: string[] };
-  const ranked: Ranked[] = [];
-  for (const block of candidate.blocks) {
-    const headingTerms = block.heading ? terms.filter(term => normalize(block.heading!).includes(term)) : [];
-    const contentTerms = terms.filter(term => normalize(block.content).includes(term));
-    if (headingTerms.length) {
-      ranked.push({ rank: 2, ordinal: block.ordinal, heading: block.heading, location: block.location_value, source: block.heading!,
-        reason: mode === "all-terms" ? `標題（多詞命中 ${headingTerms.length}/${terms.length}）` : "標題", matched: headingTerms });
-    } else if (contentTerms.length) {
-      ranked.push({ rank: 1, ordinal: block.ordinal, heading: block.heading, location: block.location_value, source: block.content,
-        reason: mode === "all-terms" ? `內容（多詞命中 ${contentTerms.length}/${terms.length}）` : "內容", matched: contentTerms });
+  const trace = new SearchTraceRecorder(rawQuery, mode, "all", "relevance");
+  const finish = (results: PassageHit[]): PassageHit[] => {
+    trace.setCount("results", results.length);
+    trace.setCount("returnedResults", results.length);
+    trace.pause();
+    store.recordSearchTrace(trace.snapshot(results.length, results.length), true);
+    return results;
+  };
+  try {
+    const normalizationStarted = performance.now();
+    const { query, terms } = queryTerms(rawQuery, mode);
+    trace.addPhase("queryNormalization", performance.now() - normalizationStarted);
+    trace.setNormalizedQuery(query);
+    if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error("--passages 必須是正整數。");
+    trace.addCandidateSource("restricted-ids");
+    const candidate = store.candidateByPath(filePath, trace);
+    if (!candidate) return finish([]);
+    trace.setCount("documentsInScope", 1);
+    const verificationStarted = performance.now();
+    if (mode === "all-terms") {
+      const searchable = [normalize(candidate.document.filename), ...candidate.blocks.flatMap(block =>
+        [normalize(block.heading ?? ""), normalize(block.content)])];
+      if (!terms.every(term => searchable.some(value => value.includes(term)))) {
+        trace.addPhase("exactVerification", performance.now() - verificationStarted);
+        trace.increment("documentsExactVerified");
+        return finish([]);
+      }
     }
+    type Ranked = { rank: number; ordinal: number; heading: string | null; location: string | null; source: string; reason: string; matched: string[] };
+    const ranked: Ranked[] = [];
+    for (const block of candidate.blocks) {
+      const headingTerms = block.heading ? terms.filter(term => normalize(block.heading!).includes(term)) : [];
+      const contentTerms = terms.filter(term => normalize(block.content).includes(term));
+      if (headingTerms.length) {
+        ranked.push({ rank: 2, ordinal: block.ordinal, heading: block.heading, location: block.location_value, source: block.heading!,
+          reason: mode === "all-terms" ? `標題（多詞命中 ${headingTerms.length}/${terms.length}）` : "標題", matched: headingTerms });
+      } else if (contentTerms.length) {
+        ranked.push({ rank: 1, ordinal: block.ordinal, heading: block.heading, location: block.location_value, source: block.content,
+          reason: mode === "all-terms" ? `內容（多詞命中 ${contentTerms.length}/${terms.length}）` : "內容", matched: contentTerms });
+      }
+    }
+    trace.addPhase("exactVerification", performance.now() - verificationStarted);
+    trace.increment("documentsExactVerified");
+    if (ranked.length) trace.increment("documentsMatched");
+    const rankingStarted = performance.now();
+    const selected: Ranked[] = [];
+    const remaining = [...ranked];
+    const covered = new Set<string>();
+    while (selected.length < limit && remaining.length) {
+      remaining.sort((a, b) => b.matched.filter(term => !covered.has(term)).length - a.matched.filter(term => !covered.has(term)).length
+        || b.matched.length - a.matched.length || b.rank - a.rank || a.ordinal - b.ordinal);
+      const item = remaining.shift()!;
+      selected.push(item);
+      for (const term of item.matched) covered.add(term);
+    }
+    trace.addPhase("resultRanking", performance.now() - rankingStarted);
+    const snippetStarted = performance.now();
+    const results = selected.map(item => {
+      const snippet = makeSnippet(item.source, snippetTerm(item.source, item.matched));
+      return { reason: item.reason, heading: item.heading, location: item.location, snippet: snippet.text, snippetTruncated: snippet.truncated };
+    });
+    trace.addPhase("snippet", performance.now() - snippetStarted);
+    return finish(results);
+  } catch (error) {
+    trace.setError(searchTraceErrorCode(error));
+    store.recordSearchTrace(trace.snapshot(), true);
+    throw error;
+  } finally {
+    trace.pause();
   }
-  const selected: Ranked[] = [];
-  const remaining = [...ranked];
-  const covered = new Set<string>();
-  while (selected.length < limit && remaining.length) {
-    remaining.sort((a, b) => b.matched.filter(term => !covered.has(term)).length - a.matched.filter(term => !covered.has(term)).length
-      || b.matched.length - a.matched.length || b.rank - a.rank || a.ordinal - b.ordinal);
-    const item = remaining.shift()!;
-    selected.push(item);
-    for (const term of item.matched) covered.add(term);
-  }
-  return selected.map(item => {
-    const snippet = makeSnippet(item.source, snippetTerm(item.source, item.matched));
-    return { reason: item.reason, heading: item.heading, location: item.location, snippet: snippet.text, snippetTruncated: snippet.truncated };
-  });
 }

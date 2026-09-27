@@ -1,5 +1,5 @@
 import { prepareSelectedContext, type SelectedContextReference, ContextError } from "./context.js";
-import { parseTypes, type SearchMode } from "./search.js";
+import { parseTypes, type SearchField, type SearchMode, type SearchSort } from "./search.js";
 import { SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
 
@@ -17,6 +17,9 @@ export interface SearchDocumentsInput {
   root?: string;
   page?: number;
   pageSize?: number;
+  field?: SearchField;
+  statuses?: readonly import("./model.js").DocumentStatus[];
+  sort?: SearchSort;
 }
 
 function resolveScope(store: IndexStore, root?: string): { root?: string; subtree?: string } {
@@ -48,7 +51,11 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
   }
   const types = resolveTypes(input.types);
   const scope = resolveScope(store, input.root);
-  const session = new SearchSession(store, query, types, scope.root, mode, scope.subtree);
+  const field = input.field ?? "all";
+  const sort = input.sort ?? "relevance";
+  if (!["all", "filename", "content"].includes(field)) throw new McpToolError("MCP_FIELD_INVALID", "field 必須是 all、filename 或 content。");
+  if (!["relevance", "filename", "modified"].includes(sort)) throw new McpToolError("MCP_SORT_INVALID", "sort 必須是 relevance、filename 或 modified。");
+  const session = new SearchSession(store, query, types, scope.root, mode, scope.subtree, field, input.statuses, sort);
   const accessibleTotal = Math.min(session.originalTotal, 500);
   const pageCount = Math.max(1, Math.ceil(accessibleTotal / pageSize));
   if (page > pageCount) throw new McpToolError("MCP_PAGE_INVALID", `頁碼超出範圍；可瀏覽頁數為 ${pageCount}。`);
@@ -76,6 +83,7 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
     pageSize,
     pageCount,
     results,
+    trace: session.trace,
   };
 }
 
@@ -138,6 +146,12 @@ export function indexStatus(store: IndexStore) {
     format: {
       contentStorageVersion: format.contentStorageVersion,
       payloadBloomVersion: format.payloadBloomVersion,
+      ngramIndexVersion: format.ngramIndexVersion,
+      ngramCompletedDocuments: format.ngramCompletedDocuments,
+      ngramTablesReady: format.ngramTablesReady,
+      blockIndexVersion: format.blockIndexVersion,
+      blockIndexCompletedDocuments: format.blockIndexCompletedDocuments,
+      legacySearchStructures: format.legacySearchStructures,
       needsUpgrade: format.needsUpgrade,
       completedDocuments: format.completedDocuments,
       totalDocuments: format.totalDocuments,
