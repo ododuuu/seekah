@@ -1,8 +1,13 @@
 # 專案狀態
 
-最後更新：2026-09-27（package 0.38.0：block 級 FTS5 位置索引搜尋後端；併入 0.37.0 各階段）
+最後更新：2026-09-28（0.38.1 進行中：大量刪除效能與遷移記號清理；package 仍為 0.38.0）
 
 ## 目前狀態
+
+- **2026-09-28 0.38.1 進行中**：依 SPEC §51／D082。已寫入 SPEC 與 DECISIONS，程式尚未實作。
+  - 起因：真實 index 排除 `AppData` 後，刪除校正移除 175,324 份文件，單一交易約兩小時。根因是 `index_migration_documents` 缺少 `document_id` 索引，CASCADE 每份全表掃描約 24 萬筆 marker（35.9 ms／份，補索引後 0.1 ms）。
+  - 範圍：外鍵子表索引與 schema 自動檢查；遷移完成即清除 marker；`removeMissing` 每 1,000 份分批提交、可取消、有進度。
+  - 另案：遷移遇到鎖直接失敗（`database is locked`），不在本版。
 
 - **2026-09-27 0.38.0**：依 SPEC §50／D081 實作 C2-hybrid 搜尋後端。
   - 索引：content 用 block 級 trigram `detail=full`（`case_sensitive 1`）phrase 加 unigram／bigram token；檔名與 heading 各自建表。排序前不讀正文，payload 只供當頁 snippet／passages。

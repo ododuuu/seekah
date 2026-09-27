@@ -1,5 +1,17 @@
 # 設計決策紀錄
 
+## D082：0.38.1 外鍵子表一律有索引、遷移記號完成即清除、刪除校正分批提交
+
+- 日期：2026-09-28。使用者在真實 index（約 24 萬份文件）以 `.localdocsearchignore` 排除 `AppData` 後，刪除校正要移除 175,324 份文件，單一交易跑了約兩小時。使用者核准三項修正一起做，先寫 SPEC（§51）。
+- 根因（在真實 store 備份上實測）：`index_migration_documents` 的主鍵是 `(version, document_id)`，沒有以 `document_id` 開頭的索引。`DELETE FROM documents` 的 `ON DELETE CASCADE` 因此每份文件都全表掃描約 24 萬筆 marker：每份 35.9 ms，175,324 份約 105 分鐘；補上索引後每份 0.1 ms。0.38.0 的測試 fixture 只有數百份文件，所以沒有暴露這個問題。
+- 決定：
+  - 所有外鍵子表欄位都必須是某個索引的最左欄位，並以自動測試檢查全部 schema。這遵循 SQLite 官方對外鍵子表欄位加索引的建議，讓同類缺陷在新增資料表時就被擋下。
+  - 遷移 marker 只代表進行中遷移的逐文件進度。完成時與 version 同一交易刪除；已完成遷移的 index 由 writer 開啟時清掉殘留 marker。0.38.0 讓每份文件永久保留 `block_index_1` marker，也讓每次寫入都多寫一列，這沒有必要。
+  - `removeMissing` 每 1,000 份文件一個交易，批內用集合式 SQL，批次之間可取消並回報進度。刪除校正可由掃描結果重算，所以分批不需要新的 marker；中斷後下次同步會補刪。
+- 不分批的操作：`removeRoot`、`moveRootsToTrash`、`clearDocuments` 必須和 root 登錄、`root_trash` 原子完成；補索引後主要成本已消除，因此維持單一交易。
+- 參考：Lucene／Elasticsearch 以刪除標記加背景合併處理大量刪除；FTS5 `contentless_delete` 內部也是這種模式。Seekah 的瓶頸不在 FTS5，而在外層的單一大交易與缺少索引的 CASCADE，因此不另建刪除標記層。
+- 不在本版處理：遷移遇到 SQLITE_BUSY 時直接失敗（`database is locked`）的問題，另案處理。
+
 ## D081：0.38.0 搜尋改用 block 級 FTS5 位置索引（C2-hybrid），Bloom 與文件級 postings 退為遷移期 fallback
 
 - 日期：2026-09-27。依據 `research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md`：在真實 235,463 份文件 store 的唯讀 snapshot 上，比較 A（現況）、B（payload 級 postings）、C1（block 級 `detail=none`）、C2（block 級 `detail=full`）、D（fts5vocab 最稀有 trigram）五種索引。使用者於 2026-09-27 授權「依你認為最好的做法實作並發布」，本 ADR 據此核准。

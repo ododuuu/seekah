@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.38.0（第 50 節 block 級 FTS5 位置索引搜尋後端）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
-- 日期：2026-09-27
-- 狀態：package 為 0.38.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
+- 規格基線：0.38.1（第 51 節大量刪除效能與遷移記號清理；第 50 節 block 級 FTS5 位置索引搜尋後端）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 日期：2026-09-28
+- 狀態：package 為 0.38.0；0.38.1 規格已寫入、實作中。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1496,7 +1496,7 @@ docsearch doctor
   - `search_block_bigrams`：`detail=none`，每對相鄰 code point 一個 `b<hex>x<hex>` token，同一 block 內去重。
 - 檔名：`search_filename_trigrams`／`_unigrams`／`_bigrams`，rowid＝`documents.id`，文字為正規化檔名；每份文件（含 metadata-only 文件）一列。
 - heading：`search_headings(id, document_id, min_ordinal, heading)` 對每份文件的不同 heading 去重，並記錄最小 ordinal；`search_heading_trigrams`／`_unigrams`／`_bigrams` 的 rowid＝`search_headings.id`。
-- metadata `block_index_version=1`；每份文件以 `index_migration_documents(version='block_index_1')` 記錄完成。
+- metadata `block_index_version=1`；每份文件以 `index_migration_documents(version='block_index_1')` 記錄完成（0.38.1 起只在遷移期間保留，見 §51.2）。
 - 正文仍只存在既有 64 KiB Brotli payload，作為 snippet 與 passages 的 docstore。
 
 ### 50.2 查詢
@@ -1542,3 +1542,51 @@ docsearch doctor
 - 以隨機查詢比對新路徑與逐文件暴力核對的等價測試。
 - 在真實 store 複本上重跑 prototype 的 benchmark 查詢，確認 p50 與 PROTOTYPE-RESULTS 的 C2-hybrid 一致。
 - package 版本 0.38.0。
+
+## 51. 0.38.1：大量刪除效能與遷移記號清理
+
+依 D082。本節只改變刪除與遷移記號的資料維護方式；搜尋結果、rank、代表 block、snippet、stable reference 與 §50 的查詢語意不變。
+
+背景：2026-09-28 使用者在真實 index（約 24 萬份文件）加入 `.localdocsearchignore` 排除 `AppData` 後，同步的刪除校正要移除 175,324 份文件，單一交易跑了約兩小時。實測原因是 `index_migration_documents` 沒有以 `document_id` 開頭的索引，`DELETE FROM documents` 的 `ON DELETE CASCADE` 每刪一份就全表掃描約 24 萬筆 marker（每份 35.9 ms；補索引後 0.1 ms）。
+
+### 51.1 外鍵子表必須有索引
+
+- 每個外鍵的子表欄位，必須是某個索引（含 PRIMARY KEY、UNIQUE）的最左欄位。否則刪除父列時，SQLite 必須全表掃描子表。
+- 新增 `index_migration_documents_document ON index_migration_documents(document_id)`。writer 開啟時以 `CREATE INDEX IF NOT EXISTS` 補上；read-only 開啟不建。
+- 自動測試以 `PRAGMA foreign_key_list`／`index_list`／`index_info` 檢查 fresh index 與舊 index 遷移完成後的全部外鍵；日後新增的資料表若違反即失敗。
+
+### 51.2 遷移記號只在遷移期間存在
+
+- `index_migration_documents` 只記錄進行中遷移的逐文件進度。某項遷移完成（其 metadata version 已寫入）後：
+  - 完成交易同時刪除該遷移的全部 marker（`content_storage_2`、`block_index_1`；`payload_bloom_*`、`ngram_1` 既有的刪除行為不變）。
+  - 之後的 upsert、replace、touchMetadata 不再寫入該遷移的 marker；刪除 rows 時也不需再刪 marker。
+- 0.38.0 已完成遷移、但仍留有 marker 的 index，由 writer 開啟時在單一交易刪除這些 marker；read-only 開啟不刪、不寫。
+- `formatStatus().blockIndexCompletedDocuments`：block index 完成時等於 `totalDocuments`；遷移期間仍為 marker 數。CLI `status` 與 MCP `index_status` 的顯示格式不變。
+- 本節取代 §50.1「每份文件以 `index_migration_documents(version='block_index_1')` 記錄完成」：marker 只在遷移期間代表逐文件進度。
+
+### 51.3 刪除校正分批提交
+
+- 適用 `removeMissing`，也就是同步與背景校正的刪除校正。
+  - 每批最多 1,000 份文件，一個 writer transaction。
+  - 批次之間檢查 AbortSignal 並讓出事件迴圈，讓其他讀者可以在批次之間讀取。
+  - 批內以集合式 SQL 刪除：該批 document id 先寫入 temp table，再以 `rowid IN (…)` 刪除 block／heading／檔名 FTS rows 與 `search_headings`，最後 `DELETE FROM documents WHERE id IN (…)`。
+- 中斷：已提交的批次保留，未處理的文件在下次同步或校正時重新判定並刪除。刪除校正可由掃描結果重算，不需要 marker。
+  - 取消時，partial report 的 `removed` 為已提交的份數。
+- 進度：沿用既有 `write` stage，message 為「刪除校正」，current／total 為已刪／應刪份數。Workbench `indexing.json` 與 CLI 進度列因此能看到刪除進度。
+- 保護範圍（`protectedScopes`，掃描失敗的範圍）與 subtree 判定和現行相同。
+- `removeRoot`、`moveRootsToTrash`、`clearDocuments` 維持單一交易：它們必須和 root 登錄、`root_trash`、metadata 一起原子完成。這些操作的主要成本在 §51.1 補索引後已經消除。
+
+### 51.4 驗收
+
+- 外鍵索引：fresh index，以及舊 fixture 遷移完成後的 index，全部外鍵都通過 §51.1 檢查。
+- marker：
+  - fresh index 寫入文件後 marker 為 0。
+  - 舊 fixture 遷移完成後 marker 為 0；遷移中途取消後仍可從 marker 接續（既有 m24／m40 保持通過）。
+  - 模擬 0.38.0 留有 marker 的 index：writer 開啟後為 0，read-only 開啟時不變。
+  - `status` 在遷移完成後顯示 block index 完成數等於文件總數。
+- 刪除校正：
+  - 應刪份數超過一批時分成多個交易，進度回報多次。
+  - 在批次之間取消：已提交保留，下次同步補刪，最後的 rows 與搜尋結果和一次刪完相同。
+  - rows 清理、id 重用與搜尋結果沿用 §50.5 的檢查。
+- 效能證據（寫入 `0.38.1-VALIDATION.md`）：合成 index 刪除一萬份文件的耗時；真實 store 複本上每份文件的刪除毫秒數，與 0.38.0 對照。
+- package 版本 0.38.1。
