@@ -26,7 +26,7 @@ function makePending(database: string, root: string, count = 2): string[] {
   const payloads = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
   db.exec(`DELETE FROM metadata WHERE key = 'payload_bloom_version';
     DELETE FROM document_payload_blocks; DELETE FROM document_payload_blooms;
-    DELETE FROM index_migration_documents WHERE version = 'payload_bloom_1';`);
+    DELETE FROM index_migration_documents WHERE version IN ('payload_bloom_1', 'payload_bloom_2');`);
   db.close();
   return payloads;
 }
@@ -64,7 +64,7 @@ test("M23 fix preserves payload bytes and resumes after a committed document", a
       } }), OperationCancelledError);
     } finally { first.close(); }
     let db = new DatabaseSync(database, { readOnly: true });
-    assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_1'").get() as { count: number }).count, 1);
+    assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_2'").get() as { count: number }).count, 1);
     assert.equal(db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get(), undefined);
     db.close();
 
@@ -77,8 +77,8 @@ test("M23 fix preserves payload bytes and resumes after a committed document", a
     try {
       const after = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
       assert.deepEqual(after, before);
-      assert.equal((db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get() as { value: string }).value, "1");
-      assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_1'").get() as { count: number }).count, 2);
+      assert.equal((db.prepare("SELECT value FROM metadata WHERE key = 'payload_bloom_version'").get() as { value: string }).value, "2");
+      assert.equal((db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_2'").get() as { count: number }).count, 2);
     } finally { db.close(); }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });

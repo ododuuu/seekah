@@ -1,6 +1,7 @@
-import { collectHits, materializeHits, type RankedSearchResult, type SearchMode, type SearchResult, type SearchResultPage } from "./search.js";
+import { collectHits, materializeHits, type RankedSearchResult, type SearchField, type SearchMode, type SearchResult, type SearchResultPage, type SearchSort } from "./search.js";
+import type { DocumentStatus } from "./model.js";
+import { SearchTraceRecorder, type SearchTrace } from "./search-trace.js";
 import type { IndexStore } from "./store.js";
-
 export class SearchIndexChangedError extends Error {
   readonly code = "SEARCH_INDEX_CHANGED";
   constructor() {
@@ -20,6 +21,7 @@ export interface SearchSessionIO {
 interface SearchLayer {
   rawQuery: string;
   ranked: RankedSearchResult[];
+  trace: SearchTraceRecorder;
 }
 
 export class SearchSession {
@@ -36,11 +38,15 @@ export class SearchSession {
     root?: string,
     mode: SearchMode = "phrase",
     subtree?: string,
+    private readonly field: SearchField = "all",
+    private readonly statuses?: readonly DocumentStatus[],
+    private readonly sort: SearchSort = "relevance",
   ) {
     this.originalQuery = rawQuery;
     this.mode = mode;
-    const ranked = collectHits(store, rawQuery, types, root, mode, undefined, subtree);
-    this.history = [{ rawQuery, ranked }];
+    const trace = new SearchTraceRecorder(rawQuery, mode, field, sort);
+    const ranked = collectHits(store, rawQuery, types, root, mode, undefined, subtree, field, statuses, sort, trace);
+    this.history = [{ rawQuery, ranked, trace }];
     this.originalTotal = ranked.length;
     this.dataVersion = store.dataVersion();
   }
@@ -51,6 +57,10 @@ export class SearchSession {
 
   get currentTotal(): number {
     return this.current.ranked.length;
+  }
+
+  get trace(): SearchTrace {
+    return this.current.trace.snapshot(this.current.ranked.length);
   }
 
   private get current(): SearchLayer {
@@ -65,8 +75,10 @@ export class SearchSession {
     this.ensureCurrent();
     const query = rawQuery.trim();
     if (!query) throw new Error("縮小條件不可為空白。");
-    const ranked = collectHits(this.store, query, undefined, undefined, this.mode, this.current.ranked.map(item => item.documentId));
-    this.history.push({ rawQuery: query, ranked });
+    const trace = new SearchTraceRecorder(query, this.mode, this.field, this.sort);
+    const ranked = collectHits(this.store, query, undefined, undefined, this.mode, this.current.ranked.map(item => item.documentId),
+      undefined, this.field, this.statuses, this.sort, trace);
+    this.history.push({ rawQuery: query, ranked, trace });
   }
 
   back(): boolean {
@@ -86,7 +98,7 @@ export class SearchSession {
   page(page: number, pageSize: number): SearchResultPage {
     this.ensureCurrent();
     const layer = this.current;
-    return materializeHits(this.store, layer.ranked, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery);
+    return materializeHits(this.store, layer.ranked, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery, layer.trace);
   }
 }
 

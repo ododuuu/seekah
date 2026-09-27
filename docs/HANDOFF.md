@@ -2,9 +2,9 @@
 
 # 跨對話交接方式
 
-> **交接入口已固定搬至 [docs/handoff/README.md](handoff/README.md)。請先讀 [CURRENT.md](handoff/CURRENT.md) 與 [0.36.1.md](handoff/0.36.1.md)。**
+> **交接入口已固定搬至 [docs/handoff/README.md](handoff/README.md)。請先讀 [CURRENT.md](handoff/CURRENT.md) 與 [0.36.2.md](handoff/0.36.2.md)。**
 >
-> 品牌已更名 Seekah；以下內容只保留歷史根因／舊連結，不再作為目前開工 prompt。0.36.1 本機實作狀態與公司 Windows 待驗項以固定交接中心及 STATUS 為準。
+> 品牌已更名 Seekah；以下內容只保留歷史根因／舊連結，不再作為目前開工 prompt。目前程式為 0.36.2；公司 Windows 待驗項以固定交接中心及 STATUS 為準。
 
 ## 已實作：0.36.1；目前只做驗收（2026-09-23）
 

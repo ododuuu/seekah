@@ -1,0 +1,3950 @@
+{
+  "measuredAt": "2026-09-26T18:10:04.263Z",
+  "node": "v22.23.2",
+  "platform": "win32",
+  "databasePath": "C:/Users/mains/AppData/Local/LocalDocSearch/index.db",
+  "note": "唯讀同一連線依序執行；未清 OS／SQLite cache；包含第一頁 20 筆，不輸出文件內容。額外 generator wrapper 記錄各 stream 計數；trace.log 仍按產品行為追加。",
+  "queries": [
+    {
+      "query": "測試",
+      "ranking": {
+        "schemaVersion": 3,
+        "traceId": "c08f61af-a5fe-49de-8ba1-9299d8f7e6d7",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:04.264Z",
+        "completedAt": "2026-09-26T18:10:09.846Z",
+        "durationMs": 5580.252,
+        "bottleneck": "exactVerification",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "測試",
+        "normalizedQuery": "測試",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.08769999999999811,
+          "postingsLookup": 0.9189000000000078,
+          "documentEnumeration": 39.14320000000373,
+          "documentBloom": 3.416600000003143,
+          "payloadBloom": 11.28399999999833,
+          "payloadLookup": 1631.0763000000006,
+          "payloadDecompression": 1568.0757000000049,
+          "exactVerification": 5521.004800000001,
+          "resultRanking": 0.1882000000005064,
+          "snippet": 0,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.08769999999999811,
+          "postingsLookup": 0.9189000000000078,
+          "documentEnumeration": 39.14320000000373,
+          "documentBloom": 3.416600000003143,
+          "payloadBloom": 11.28399999999833,
+          "payloadLookup": 1631.0763000000006,
+          "payloadDecompression": 1568.0757000000049,
+          "exactVerification": 2321.852799999995,
+          "resultRanking": 0.1882000000005064,
+          "snippet": 0,
+          "other": 4.208599999994476
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 111,
+          "documentsAfterPruning": 109,
+          "documentsPruned": 2,
+          "documentsExactVerified": 109,
+          "documentsMatched": 96,
+          "payloadsConsidered": 2601,
+          "payloadsAfterPruning": 2601,
+          "payloadsRead": 2601,
+          "payloadsDecompressed": 2601,
+          "payloadReadPasses": 107,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 0,
+          "fullDocumentFallbacks": 107,
+          "filenameOnlyFallbacks": 2,
+          "blockExpansionRatio": 0,
+          "exactTextMs": 1074.928400000064,
+          "blocksMetadataRows": 653633,
+          "owningBlockMappingRows": 0,
+          "bloomSelectedPayloads": 0,
+          "selectedPayloadsRead": 0,
+          "fullFallbackPayloads": 2601,
+          "uniquePayloadsRead": 2601,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 2601,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 31806280,
+          "decompressedBytes": 154125816,
+          "maxBlockExpansionRatio": 0,
+          "maxExpandedPayloads": 0,
+          "maxSelectedPayloadsRead": 0,
+          "maxPayloadsReadPerPass": 825,
+          "payloadBrotliMs": 744.7490000000103,
+          "payloadDecodeParseMs": 823.3266999999946,
+          "results": 96,
+          "returnedResults": 0
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 107,
+              "executeCount": 107,
+              "prepareMs": 3.441899999996963,
+              "executeMs": 1571.9471000000015
+            },
+            "owningBlockMapping": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            },
+            "payloadBlob": {
+              "prepareCount": 107,
+              "executeCount": 107,
+              "prepareMs": 2.0943999999967815,
+              "executeMs": 49.984499999998434
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 107,
+              "payloadsRead": 2601,
+              "payloadsDecompressed": 2601,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 2601,
+              "compressedBytes": 31806280,
+              "decompressedBytes": 154125816
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "completed": {
+        "schemaVersion": 3,
+        "traceId": "c08f61af-a5fe-49de-8ba1-9299d8f7e6d7",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:04.264Z",
+        "completedAt": "2026-09-26T18:10:09.869Z",
+        "durationMs": 5602.491000000001,
+        "bottleneck": "exactVerification",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "測試",
+        "normalizedQuery": "測試",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.08769999999999811,
+          "postingsLookup": 0.9189000000000078,
+          "documentEnumeration": 39.14320000000373,
+          "documentBloom": 3.416600000003143,
+          "payloadBloom": 11.28399999999833,
+          "payloadLookup": 1642.506199999999,
+          "payloadDecompression": 1572.5842000000039,
+          "exactVerification": 5521.004800000001,
+          "resultRanking": 0.1882000000005064,
+          "snippet": 1.9169000000001688,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.08769999999999811,
+          "postingsLookup": 0.9189000000000078,
+          "documentEnumeration": 39.14320000000373,
+          "documentBloom": 3.416600000003143,
+          "payloadBloom": 11.28399999999833,
+          "payloadLookup": 1642.506199999999,
+          "payloadDecompression": 1572.5842000000039,
+          "exactVerification": 2321.852799999995,
+          "resultRanking": 0.1882000000005064,
+          "snippet": 1.9169000000001688,
+          "other": 8.592299999997522
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 111,
+          "documentsAfterPruning": 109,
+          "documentsPruned": 2,
+          "documentsExactVerified": 109,
+          "documentsMatched": 96,
+          "payloadsConsidered": 2601,
+          "payloadsAfterPruning": 2601,
+          "payloadsRead": 2619,
+          "payloadsDecompressed": 2619,
+          "payloadReadPasses": 125,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 0,
+          "fullDocumentFallbacks": 107,
+          "filenameOnlyFallbacks": 2,
+          "blockExpansionRatio": 1,
+          "exactTextMs": 1074.928400000064,
+          "blocksMetadataRows": 654014,
+          "owningBlockMappingRows": 258,
+          "bloomSelectedPayloads": 0,
+          "selectedPayloadsRead": 18,
+          "fullFallbackPayloads": 2601,
+          "uniquePayloadsRead": 2601,
+          "duplicatePayloadsRead": 18,
+          "uniquePayloadsDecompressed": 2601,
+          "duplicatePayloadsDecompressed": 18,
+          "compressedBytesRead": 31903048,
+          "decompressedBytes": 154348680,
+          "maxBlockExpansionRatio": 1,
+          "maxExpandedPayloads": 0,
+          "maxSelectedPayloadsRead": 1,
+          "maxPayloadsReadPerPass": 825,
+          "payloadBrotliMs": 747.3154000000109,
+          "payloadDecodeParseMs": 825.268799999993,
+          "results": 96,
+          "returnedResults": 20
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 143,
+              "executeCount": 143,
+              "prepareMs": 4.297299999991878,
+              "executeMs": 1575.2620000000036
+            },
+            "owningBlockMapping": {
+              "prepareCount": 36,
+              "executeCount": 36,
+              "prepareMs": 1.3136000000031345,
+              "executeMs": 2.6610000000027867
+            },
+            "payloadBlob": {
+              "prepareCount": 125,
+              "executeCount": 125,
+              "prepareMs": 3.1112999999945856,
+              "executeMs": 51.52299999999991
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 107,
+              "payloadsRead": 2601,
+              "payloadsDecompressed": 2601,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 2601,
+              "compressedBytes": 31806280,
+              "decompressedBytes": 154125816
+            },
+            "snippet": {
+              "passes": 18,
+              "payloadsRead": 18,
+              "payloadsDecompressed": 18,
+              "selectedPayloadsRead": 18,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 96768,
+              "decompressedBytes": 222864
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "passes": [
+        {
+          "documentId": 51264,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51345,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 61570,
+          "candidatePayloads": null,
+          "read": 5,
+          "expanded": 0,
+          "decompressed": 5
+        },
+        {
+          "documentId": 61572,
+          "candidatePayloads": null,
+          "read": 9,
+          "expanded": 0,
+          "decompressed": 9
+        },
+        {
+          "documentId": 84934,
+          "candidatePayloads": null,
+          "read": 5,
+          "expanded": 0,
+          "decompressed": 5
+        },
+        {
+          "documentId": 84936,
+          "candidatePayloads": null,
+          "read": 9,
+          "expanded": 0,
+          "decompressed": 9
+        },
+        {
+          "documentId": 93007,
+          "candidatePayloads": null,
+          "read": 10,
+          "expanded": 0,
+          "decompressed": 10
+        },
+        {
+          "documentId": 95322,
+          "candidatePayloads": null,
+          "read": 13,
+          "expanded": 0,
+          "decompressed": 13
+        },
+        {
+          "documentId": 95648,
+          "candidatePayloads": null,
+          "read": 825,
+          "expanded": 0,
+          "decompressed": 825
+        },
+        {
+          "documentId": 98289,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98308,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98322,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98332,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98355,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98361,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98406,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98408,
+          "candidatePayloads": null,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 106300,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 110922,
+          "candidatePayloads": null,
+          "read": 9,
+          "expanded": 0,
+          "decompressed": 9
+        },
+        {
+          "documentId": 111662,
+          "candidatePayloads": null,
+          "read": 9,
+          "expanded": 0,
+          "decompressed": 9
+        },
+        {
+          "documentId": 200349,
+          "candidatePayloads": null,
+          "read": 2,
+          "expanded": 0,
+          "decompressed": 2
+        },
+        {
+          "documentId": 219556,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 219604,
+          "candidatePayloads": null,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 219620,
+          "candidatePayloads": null,
+          "read": 13,
+          "expanded": 0,
+          "decompressed": 13
+        },
+        {
+          "documentId": 219659,
+          "candidatePayloads": null,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 219674,
+          "candidatePayloads": null,
+          "read": 12,
+          "expanded": 0,
+          "decompressed": 12
+        },
+        {
+          "documentId": 219728,
+          "candidatePayloads": null,
+          "read": 3,
+          "expanded": 0,
+          "decompressed": 3
+        },
+        {
+          "documentId": 219730,
+          "candidatePayloads": null,
+          "read": 2,
+          "expanded": 0,
+          "decompressed": 2
+        },
+        {
+          "documentId": 219742,
+          "candidatePayloads": null,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 219757,
+          "candidatePayloads": null,
+          "read": 12,
+          "expanded": 0,
+          "decompressed": 12
+        },
+        {
+          "documentId": 219772,
+          "candidatePayloads": null,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 219786,
+          "candidatePayloads": null,
+          "read": 12,
+          "expanded": 0,
+          "decompressed": 12
+        },
+        {
+          "documentId": 219888,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 219931,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 220122,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 220126,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 220212,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 220286,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 220287,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240315,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240316,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240326,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240381,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240384,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240400,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240407,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240409,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240410,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240411,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240414,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240425,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240427,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240431,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240432,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240433,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240434,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240435,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240436,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240437,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240439,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240440,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240441,
+          "candidatePayloads": null,
+          "read": 2,
+          "expanded": 0,
+          "decompressed": 2
+        },
+        {
+          "documentId": 240442,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240443,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240444,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240446,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240447,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240448,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240449,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240450,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240451,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240452,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240453,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240454,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240455,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240456,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240457,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240458,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240459,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240460,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240461,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240462,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240463,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240464,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240465,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240466,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240467,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240468,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240469,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240470,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240471,
+          "candidatePayloads": null,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 240472,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240473,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240474,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240475,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240480,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240486,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240488,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240489,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240490,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240581,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240627,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240636,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 241125,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 243186,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 243187,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 243229,
+          "candidatePayloads": null,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240441,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240471,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240316,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 241125,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240636,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240444,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240446,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240447,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240449,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240450,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240453,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240459,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240461,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240467,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240431,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240432,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240433,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240434,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        }
+      ],
+      "blockSpans": [
+        {
+          "documentId": 51264,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51345,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 61570,
+          "maxBlockSpan": 1,
+          "documentPayloads": 5
+        },
+        {
+          "documentId": 61572,
+          "maxBlockSpan": 1,
+          "documentPayloads": 9
+        },
+        {
+          "documentId": 84934,
+          "maxBlockSpan": 1,
+          "documentPayloads": 5
+        },
+        {
+          "documentId": 84936,
+          "maxBlockSpan": 1,
+          "documentPayloads": 9
+        },
+        {
+          "documentId": 93007,
+          "maxBlockSpan": 10,
+          "documentPayloads": 10
+        },
+        {
+          "documentId": 95322,
+          "maxBlockSpan": 13,
+          "documentPayloads": 13
+        },
+        {
+          "documentId": 95648,
+          "maxBlockSpan": 22,
+          "documentPayloads": 825
+        },
+        {
+          "documentId": 98289,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98308,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98322,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98332,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98355,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98361,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98406,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98408,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 106300,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 110922,
+          "maxBlockSpan": 8,
+          "documentPayloads": 9
+        },
+        {
+          "documentId": 111662,
+          "maxBlockSpan": 8,
+          "documentPayloads": 9
+        },
+        {
+          "documentId": 200349,
+          "maxBlockSpan": 1,
+          "documentPayloads": 2
+        },
+        {
+          "documentId": 219556,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 219604,
+          "maxBlockSpan": 4,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 219620,
+          "maxBlockSpan": 1,
+          "documentPayloads": 13
+        },
+        {
+          "documentId": 219659,
+          "maxBlockSpan": 4,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 219674,
+          "maxBlockSpan": 1,
+          "documentPayloads": 12
+        },
+        {
+          "documentId": 219728,
+          "maxBlockSpan": 1,
+          "documentPayloads": 3
+        },
+        {
+          "documentId": 219730,
+          "maxBlockSpan": 1,
+          "documentPayloads": 2
+        },
+        {
+          "documentId": 219742,
+          "maxBlockSpan": 4,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 219757,
+          "maxBlockSpan": 1,
+          "documentPayloads": 12
+        },
+        {
+          "documentId": 219772,
+          "maxBlockSpan": 4,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 219786,
+          "maxBlockSpan": 1,
+          "documentPayloads": 12
+        },
+        {
+          "documentId": 219888,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 219931,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 220122,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 220126,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 220212,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 220286,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 220287,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240315,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240316,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240326,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240381,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240384,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240400,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240407,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240409,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240410,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240411,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240414,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240425,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240427,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240431,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240432,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240433,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240434,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240435,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240436,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240437,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240439,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240440,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240441,
+          "maxBlockSpan": 1,
+          "documentPayloads": 2
+        },
+        {
+          "documentId": 240442,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240443,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240444,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240446,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240447,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240448,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240449,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240450,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240451,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240452,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240453,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240454,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240455,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240456,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240457,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240458,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240459,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240460,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240461,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240462,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240463,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240464,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240465,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240466,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240467,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240468,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240469,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240470,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240471,
+          "maxBlockSpan": 1,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 240472,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240473,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240474,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240475,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240480,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240486,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240488,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240489,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240490,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240581,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240627,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240636,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 241125,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 243186,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 243187,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 243229,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        }
+      ]
+    },
+    {
+      "query": "SPEC.md",
+      "ranking": {
+        "schemaVersion": 3,
+        "traceId": "50b35820-5914-418c-afd0-6990dc19b61c",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:09.872Z",
+        "completedAt": "2026-09-26T18:10:24.382Z",
+        "durationMs": 14509.801,
+        "bottleneck": "payloadLookup",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "SPEC.md",
+        "normalizedQuery": "spec.md",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom",
+          "payload-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.016200000000026193,
+          "postingsLookup": 3.105999999999767,
+          "documentEnumeration": 39.82789999998931,
+          "documentBloom": 4.319099999985156,
+          "payloadBloom": 26.795499999998356,
+          "payloadLookup": 6893.640699999991,
+          "payloadDecompression": 2579.600100000106,
+          "exactVerification": 14433.34350000002,
+          "resultRanking": 0.05319999999846914,
+          "snippet": 0,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.016200000000026193,
+          "postingsLookup": 3.105999999999767,
+          "documentEnumeration": 39.82789999998931,
+          "documentBloom": 4.319099999985156,
+          "payloadBloom": 26.795499999998356,
+          "payloadLookup": 6893.640699999991,
+          "payloadDecompression": 2579.600100000106,
+          "exactVerification": 4960.102699999924,
+          "resultRanking": 0.05319999999846914,
+          "snippet": 0,
+          "other": 2.3396000000066124
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 144,
+          "documentsAfterPruning": 144,
+          "documentsPruned": 0,
+          "documentsExactVerified": 144,
+          "documentsMatched": 85,
+          "payloadsConsidered": 4954,
+          "payloadsAfterPruning": 4640,
+          "payloadsRead": 4638,
+          "payloadsDecompressed": 4638,
+          "payloadReadPasses": 106,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 31,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 38,
+          "blockExpansionRatio": 1.0067288908183198,
+          "exactTextMs": 2174.448000000775,
+          "blocksMetadataRows": 1652374,
+          "owningBlockMappingRows": 1442468,
+          "bloomSelectedPayloads": 4640,
+          "selectedPayloadsRead": 4607,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 4638,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 4638,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 61846570,
+          "decompressedBytes": 285103909,
+          "maxBlockExpansionRatio": 1.1,
+          "maxExpandedPayloads": 18,
+          "maxSelectedPayloadsRead": 575,
+          "maxPayloadsReadPerPass": 593,
+          "payloadBrotliMs": 1289.1636000000717,
+          "payloadDecodeParseMs": 1290.4365000000344,
+          "results": 85,
+          "returnedResults": 0
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 4.04349999999431,
+              "executeMs": 3930.922400000003
+            },
+            "owningBlockMapping": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 4.618100000005143,
+              "executeMs": 1500.5836999999792
+            },
+            "payloadBlob": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 6.278899999994792,
+              "executeMs": 1011.7757999999949
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 106,
+              "payloadsRead": 4638,
+              "payloadsDecompressed": 4638,
+              "selectedPayloadsRead": 4607,
+              "expandedPayloads": 31,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 61846570,
+              "decompressedBytes": 285103909
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "completed": {
+        "schemaVersion": 3,
+        "traceId": "50b35820-5914-418c-afd0-6990dc19b61c",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:09.872Z",
+        "completedAt": "2026-09-26T18:10:24.383Z",
+        "durationMs": 14511.061099999999,
+        "bottleneck": "payloadLookup",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "SPEC.md",
+        "normalizedQuery": "spec.md",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom",
+          "payload-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.016200000000026193,
+          "postingsLookup": 3.105999999999767,
+          "documentEnumeration": 39.82789999998931,
+          "documentBloom": 4.319099999985156,
+          "payloadBloom": 26.795499999998356,
+          "payloadLookup": 6893.640699999991,
+          "payloadDecompression": 2579.600100000106,
+          "exactVerification": 14433.34350000002,
+          "resultRanking": 0.05319999999846914,
+          "snippet": 0.3567000000148255,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.016200000000026193,
+          "postingsLookup": 3.105999999999767,
+          "documentEnumeration": 39.82789999998931,
+          "documentBloom": 4.319099999985156,
+          "payloadBloom": 26.795499999998356,
+          "payloadLookup": 6893.640699999991,
+          "payloadDecompression": 2579.600100000106,
+          "exactVerification": 4960.102699999924,
+          "resultRanking": 0.05319999999846914,
+          "snippet": 0.3567000000148255,
+          "other": 3.242999999991298
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 144,
+          "documentsAfterPruning": 144,
+          "documentsPruned": 0,
+          "documentsExactVerified": 144,
+          "documentsMatched": 85,
+          "payloadsConsidered": 4954,
+          "payloadsAfterPruning": 4640,
+          "payloadsRead": 4638,
+          "payloadsDecompressed": 4638,
+          "payloadReadPasses": 106,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 31,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 38,
+          "blockExpansionRatio": 1.0067288908183198,
+          "exactTextMs": 2174.448000000775,
+          "blocksMetadataRows": 1652374,
+          "owningBlockMappingRows": 1442468,
+          "bloomSelectedPayloads": 4640,
+          "selectedPayloadsRead": 4607,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 4638,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 4638,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 61846570,
+          "decompressedBytes": 285103909,
+          "maxBlockExpansionRatio": 1.1,
+          "maxExpandedPayloads": 18,
+          "maxSelectedPayloadsRead": 575,
+          "maxPayloadsReadPerPass": 593,
+          "payloadBrotliMs": 1289.1636000000717,
+          "payloadDecodeParseMs": 1290.4365000000344,
+          "results": 85,
+          "returnedResults": 20
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 4.04349999999431,
+              "executeMs": 3930.922400000003
+            },
+            "owningBlockMapping": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 4.618100000005143,
+              "executeMs": 1500.5836999999792
+            },
+            "payloadBlob": {
+              "prepareCount": 106,
+              "executeCount": 106,
+              "prepareMs": 6.278899999994792,
+              "executeMs": 1011.7757999999949
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 106,
+              "payloadsRead": 4638,
+              "payloadsDecompressed": 4638,
+              "selectedPayloadsRead": 4607,
+              "expandedPayloads": 31,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 61846570,
+              "decompressedBytes": 285103909
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "passes": [
+        {
+          "documentId": 8722,
+          "candidatePayloads": 27,
+          "read": 27,
+          "expanded": 0,
+          "decompressed": 27
+        },
+        {
+          "documentId": 11650,
+          "candidatePayloads": 447,
+          "read": 449,
+          "expanded": 2,
+          "decompressed": 449
+        },
+        {
+          "documentId": 21042,
+          "candidatePayloads": 13,
+          "read": 13,
+          "expanded": 0,
+          "decompressed": 13
+        },
+        {
+          "documentId": 21084,
+          "candidatePayloads": 13,
+          "read": 13,
+          "expanded": 0,
+          "decompressed": 13
+        },
+        {
+          "documentId": 21126,
+          "candidatePayloads": 14,
+          "read": 14,
+          "expanded": 0,
+          "decompressed": 14
+        },
+        {
+          "documentId": 21632,
+          "candidatePayloads": 26,
+          "read": 26,
+          "expanded": 0,
+          "decompressed": 26
+        },
+        {
+          "documentId": 21633,
+          "candidatePayloads": 9,
+          "read": 9,
+          "expanded": 0,
+          "decompressed": 9
+        },
+        {
+          "documentId": 27951,
+          "candidatePayloads": 20,
+          "read": 20,
+          "expanded": 0,
+          "decompressed": 20
+        },
+        {
+          "documentId": 32647,
+          "candidatePayloads": 330,
+          "read": 330,
+          "expanded": 0,
+          "decompressed": 330
+        },
+        {
+          "documentId": 43663,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 43710,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 43712,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 43949,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 44022,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 45242,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46833,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46935,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46938,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46947,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46951,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 46970,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47026,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47028,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47347,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47358,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47359,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 47861,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 48132,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 48185,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 49068,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 49766,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 49813,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 49815,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 49953,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 50286,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 50347,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 50348,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 50509,
+          "candidatePayloads": 2,
+          "read": 2,
+          "expanded": 0,
+          "decompressed": 2
+        },
+        {
+          "documentId": 51264,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51304,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51313,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51316,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51327,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51345,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 51438,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 53308,
+          "candidatePayloads": 6,
+          "read": 6,
+          "expanded": 0,
+          "decompressed": 6
+        },
+        {
+          "documentId": 53365,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 53405,
+          "candidatePayloads": 16,
+          "read": 16,
+          "expanded": 0,
+          "decompressed": 16
+        },
+        {
+          "documentId": 53494,
+          "candidatePayloads": 104,
+          "read": 104,
+          "expanded": 0,
+          "decompressed": 104
+        },
+        {
+          "documentId": 53504,
+          "candidatePayloads": 37,
+          "read": 37,
+          "expanded": 0,
+          "decompressed": 37
+        },
+        {
+          "documentId": 61895,
+          "candidatePayloads": 50,
+          "read": 50,
+          "expanded": 0,
+          "decompressed": 50
+        },
+        {
+          "documentId": 63281,
+          "candidatePayloads": 10,
+          "read": 11,
+          "expanded": 1,
+          "decompressed": 11
+        },
+        {
+          "documentId": 64050,
+          "candidatePayloads": 5,
+          "read": 5,
+          "expanded": 0,
+          "decompressed": 5
+        },
+        {
+          "documentId": 64447,
+          "candidatePayloads": 10,
+          "read": 10,
+          "expanded": 0,
+          "decompressed": 10
+        },
+        {
+          "documentId": 64514,
+          "candidatePayloads": 3,
+          "read": 3,
+          "expanded": 0,
+          "decompressed": 3
+        },
+        {
+          "documentId": 64662,
+          "candidatePayloads": 52,
+          "read": 54,
+          "expanded": 2,
+          "decompressed": 54
+        },
+        {
+          "documentId": 64824,
+          "candidatePayloads": 68,
+          "read": 71,
+          "expanded": 3,
+          "decompressed": 71
+        },
+        {
+          "documentId": 64825,
+          "candidatePayloads": 65,
+          "read": 67,
+          "expanded": 2,
+          "decompressed": 67
+        },
+        {
+          "documentId": 64999,
+          "candidatePayloads": 31,
+          "read": 32,
+          "expanded": 1,
+          "decompressed": 32
+        },
+        {
+          "documentId": 65064,
+          "candidatePayloads": 10,
+          "read": 10,
+          "expanded": 0,
+          "decompressed": 10
+        },
+        {
+          "documentId": 65361,
+          "candidatePayloads": 31,
+          "read": 31,
+          "expanded": 0,
+          "decompressed": 31
+        },
+        {
+          "documentId": 85259,
+          "candidatePayloads": 50,
+          "read": 50,
+          "expanded": 0,
+          "decompressed": 50
+        },
+        {
+          "documentId": 86562,
+          "candidatePayloads": 17,
+          "read": 17,
+          "expanded": 0,
+          "decompressed": 17
+        },
+        {
+          "documentId": 87612,
+          "candidatePayloads": 31,
+          "read": 31,
+          "expanded": 0,
+          "decompressed": 31
+        },
+        {
+          "documentId": 87617,
+          "candidatePayloads": 4,
+          "read": 4,
+          "expanded": 0,
+          "decompressed": 4
+        },
+        {
+          "documentId": 87623,
+          "candidatePayloads": 24,
+          "read": 24,
+          "expanded": 0,
+          "decompressed": 24
+        },
+        {
+          "documentId": 87625,
+          "candidatePayloads": 24,
+          "read": 24,
+          "expanded": 0,
+          "decompressed": 24
+        },
+        {
+          "documentId": 95648,
+          "candidatePayloads": 575,
+          "read": 593,
+          "expanded": 18,
+          "decompressed": 593
+        },
+        {
+          "documentId": 98289,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98308,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98322,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98332,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98355,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98361,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98406,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 98408,
+          "candidatePayloads": 194,
+          "read": 194,
+          "expanded": 0,
+          "decompressed": 194
+        },
+        {
+          "documentId": 102699,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 108295,
+          "candidatePayloads": 31,
+          "read": 31,
+          "expanded": 0,
+          "decompressed": 31
+        },
+        {
+          "documentId": 108296,
+          "candidatePayloads": 39,
+          "read": 39,
+          "expanded": 0,
+          "decompressed": 39
+        },
+        {
+          "documentId": 110924,
+          "candidatePayloads": 56,
+          "read": 56,
+          "expanded": 0,
+          "decompressed": 56
+        },
+        {
+          "documentId": 110941,
+          "candidatePayloads": 55,
+          "read": 55,
+          "expanded": 0,
+          "decompressed": 55
+        },
+        {
+          "documentId": 110997,
+          "candidatePayloads": 290,
+          "read": 291,
+          "expanded": 1,
+          "decompressed": 291
+        },
+        {
+          "documentId": 111664,
+          "candidatePayloads": 56,
+          "read": 56,
+          "expanded": 0,
+          "decompressed": 56
+        },
+        {
+          "documentId": 111681,
+          "candidatePayloads": 55,
+          "read": 55,
+          "expanded": 0,
+          "decompressed": 55
+        },
+        {
+          "documentId": 111737,
+          "candidatePayloads": 290,
+          "read": 291,
+          "expanded": 1,
+          "decompressed": 291
+        },
+        {
+          "documentId": 115617,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 115619,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 115621,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 115650,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 115661,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 143267,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 143270,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 143443,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 143532,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 143830,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 219852,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240315,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240316,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240440,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240441,
+          "candidatePayloads": 2,
+          "read": 2,
+          "expanded": 0,
+          "decompressed": 2
+        },
+        {
+          "documentId": 240443,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240480,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240481,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240487,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240489,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        },
+        {
+          "documentId": 240490,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        }
+      ],
+      "blockSpans": [
+        {
+          "documentId": 8722,
+          "maxBlockSpan": 1,
+          "documentPayloads": 27
+        },
+        {
+          "documentId": 11650,
+          "maxBlockSpan": 182,
+          "documentPayloads": 450
+        },
+        {
+          "documentId": 21042,
+          "maxBlockSpan": 1,
+          "documentPayloads": 13
+        },
+        {
+          "documentId": 21084,
+          "maxBlockSpan": 1,
+          "documentPayloads": 13
+        },
+        {
+          "documentId": 21126,
+          "maxBlockSpan": 1,
+          "documentPayloads": 14
+        },
+        {
+          "documentId": 21632,
+          "maxBlockSpan": 1,
+          "documentPayloads": 26
+        },
+        {
+          "documentId": 21633,
+          "maxBlockSpan": 9,
+          "documentPayloads": 10
+        },
+        {
+          "documentId": 27951,
+          "maxBlockSpan": 1,
+          "documentPayloads": 20
+        },
+        {
+          "documentId": 32647,
+          "maxBlockSpan": 1,
+          "documentPayloads": 363
+        },
+        {
+          "documentId": 43663,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 43710,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 43712,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 43949,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 44022,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 45242,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46833,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46935,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46938,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46947,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46951,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 46970,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47026,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47028,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47347,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47358,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47359,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 47861,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 48132,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 48185,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 49068,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 49766,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 49813,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 49815,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 49953,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 50286,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 50347,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 50348,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 50509,
+          "maxBlockSpan": 1,
+          "documentPayloads": 2
+        },
+        {
+          "documentId": 51264,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51304,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51313,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51316,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51327,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51345,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 51438,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 53308,
+          "maxBlockSpan": 1,
+          "documentPayloads": 6
+        },
+        {
+          "documentId": 53365,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 53405,
+          "maxBlockSpan": 1,
+          "documentPayloads": 16
+        },
+        {
+          "documentId": 53494,
+          "maxBlockSpan": 1,
+          "documentPayloads": 104
+        },
+        {
+          "documentId": 53504,
+          "maxBlockSpan": 1,
+          "documentPayloads": 37
+        },
+        {
+          "documentId": 61895,
+          "maxBlockSpan": 9,
+          "documentPayloads": 51
+        },
+        {
+          "documentId": 63281,
+          "maxBlockSpan": 4,
+          "documentPayloads": 13
+        },
+        {
+          "documentId": 64050,
+          "maxBlockSpan": 3,
+          "documentPayloads": 5
+        },
+        {
+          "documentId": 64447,
+          "maxBlockSpan": 7,
+          "documentPayloads": 10
+        },
+        {
+          "documentId": 64514,
+          "maxBlockSpan": 3,
+          "documentPayloads": 3
+        },
+        {
+          "documentId": 64662,
+          "maxBlockSpan": 6,
+          "documentPayloads": 55
+        },
+        {
+          "documentId": 64824,
+          "maxBlockSpan": 9,
+          "documentPayloads": 71
+        },
+        {
+          "documentId": 64825,
+          "maxBlockSpan": 7,
+          "documentPayloads": 67
+        },
+        {
+          "documentId": 64999,
+          "maxBlockSpan": 13,
+          "documentPayloads": 32
+        },
+        {
+          "documentId": 65064,
+          "maxBlockSpan": 1,
+          "documentPayloads": 10
+        },
+        {
+          "documentId": 65361,
+          "maxBlockSpan": 2,
+          "documentPayloads": 32
+        },
+        {
+          "documentId": 85259,
+          "maxBlockSpan": 9,
+          "documentPayloads": 51
+        },
+        {
+          "documentId": 86562,
+          "maxBlockSpan": 17,
+          "documentPayloads": 17
+        },
+        {
+          "documentId": 87612,
+          "maxBlockSpan": 1,
+          "documentPayloads": 31
+        },
+        {
+          "documentId": 87617,
+          "maxBlockSpan": 1,
+          "documentPayloads": 4
+        },
+        {
+          "documentId": 87623,
+          "maxBlockSpan": 1,
+          "documentPayloads": 24
+        },
+        {
+          "documentId": 87625,
+          "maxBlockSpan": 1,
+          "documentPayloads": 24
+        },
+        {
+          "documentId": 95648,
+          "maxBlockSpan": 22,
+          "documentPayloads": 825
+        },
+        {
+          "documentId": 98289,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98308,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98322,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98332,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98355,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98361,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98406,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 98408,
+          "maxBlockSpan": 32,
+          "documentPayloads": 194
+        },
+        {
+          "documentId": 102699,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 108295,
+          "maxBlockSpan": 1,
+          "documentPayloads": 31
+        },
+        {
+          "documentId": 108296,
+          "maxBlockSpan": 1,
+          "documentPayloads": 39
+        },
+        {
+          "documentId": 110924,
+          "maxBlockSpan": 3,
+          "documentPayloads": 56
+        },
+        {
+          "documentId": 110941,
+          "maxBlockSpan": 5,
+          "documentPayloads": 56
+        },
+        {
+          "documentId": 110997,
+          "maxBlockSpan": 153,
+          "documentPayloads": 291
+        },
+        {
+          "documentId": 111664,
+          "maxBlockSpan": 3,
+          "documentPayloads": 56
+        },
+        {
+          "documentId": 111681,
+          "maxBlockSpan": 5,
+          "documentPayloads": 56
+        },
+        {
+          "documentId": 111737,
+          "maxBlockSpan": 153,
+          "documentPayloads": 291
+        },
+        {
+          "documentId": 115617,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 115619,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 115621,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 115650,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 115661,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 143267,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 143270,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 143443,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 143532,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 143830,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 219852,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240315,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240316,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240440,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240441,
+          "maxBlockSpan": 1,
+          "documentPayloads": 2
+        },
+        {
+          "documentId": 240443,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240480,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240481,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240487,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240489,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        },
+        {
+          "documentId": 240490,
+          "maxBlockSpan": 1,
+          "documentPayloads": 1
+        }
+      ]
+    },
+    {
+      "query": "Snipaste-2.11.3-x64",
+      "ranking": {
+        "schemaVersion": 3,
+        "traceId": "b0247bbc-5e8e-4156-aeea-44d008893adc",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:24.384Z",
+        "completedAt": "2026-09-26T18:10:25.001Z",
+        "durationMs": 616.6662999999971,
+        "bottleneck": "payloadDecompression",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "Snipaste-2.11.3-x64",
+        "normalizedQuery": "snipaste-2.11.3-x64",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom",
+          "payload-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.01329999999870779,
+          "postingsLookup": 5.3192999999992026,
+          "documentEnumeration": 36.066799999996874,
+          "documentBloom": 0.14549999999871943,
+          "payloadBloom": 1.798900000001595,
+          "payloadLookup": 174.90589999999793,
+          "payloadDecompression": 199.90179999998873,
+          "exactVerification": 572.545900000001,
+          "resultRanking": 0.001299999999901047,
+          "snippet": 0,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.01329999999870779,
+          "postingsLookup": 5.3192999999992026,
+          "documentEnumeration": 36.066799999996874,
+          "documentBloom": 0.14549999999871943,
+          "payloadBloom": 1.798900000001595,
+          "payloadLookup": 174.90589999999793,
+          "payloadDecompression": 199.90179999998873,
+          "exactVerification": 197.73820000001433,
+          "resultRanking": 0.001299999999901047,
+          "snippet": 0,
+          "other": 0.7753000000011525
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 2,
+          "documentsAfterPruning": 2,
+          "documentsPruned": 0,
+          "documentsExactVerified": 2,
+          "documentsMatched": 1,
+          "payloadsConsidered": 461,
+          "payloadsAfterPruning": 460,
+          "payloadsRead": 461,
+          "payloadsDecompressed": 461,
+          "payloadReadPasses": 2,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 1,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 0,
+          "blockExpansionRatio": 1.0021739130434784,
+          "exactTextMs": 110.35639999990963,
+          "blocksMetadataRows": 50493,
+          "owningBlockMappingRows": 50493,
+          "bloomSelectedPayloads": 460,
+          "selectedPayloadsRead": 460,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 461,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 461,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 5687561,
+          "decompressedBytes": 29293470,
+          "maxBlockExpansionRatio": 1.0022271714922049,
+          "maxExpandedPayloads": 1,
+          "maxSelectedPayloadsRead": 449,
+          "maxPayloadsReadPerPass": 450,
+          "payloadBrotliMs": 106.41509999995833,
+          "payloadDecodeParseMs": 93.4867000000304,
+          "results": 1,
+          "returnedResults": 0
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 2,
+              "executeCount": 2,
+              "prepareMs": 0.0878999999986263,
+              "executeMs": 86.52590000000055
+            },
+            "owningBlockMapping": {
+              "prepareCount": 2,
+              "executeCount": 2,
+              "prepareMs": 0.13660000000163564,
+              "executeMs": 34.121100000003935
+            },
+            "payloadBlob": {
+              "prepareCount": 2,
+              "executeCount": 2,
+              "prepareMs": 0.1930000000029395,
+              "executeMs": 36.046299999998155
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 2,
+              "payloadsRead": 461,
+              "payloadsDecompressed": 461,
+              "selectedPayloadsRead": 460,
+              "expandedPayloads": 1,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 5687561,
+              "decompressedBytes": 29293470
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "completed": {
+        "schemaVersion": 3,
+        "traceId": "b0247bbc-5e8e-4156-aeea-44d008893adc",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:24.384Z",
+        "completedAt": "2026-09-26T18:10:25.022Z",
+        "durationMs": 637.4101999999948,
+        "bottleneck": "payloadDecompression",
+        "inclusiveBottleneck": "exactVerification",
+        "status": "success",
+        "query": "Snipaste-2.11.3-x64",
+        "normalizedQuery": "snipaste-2.11.3-x64",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings",
+          "document-bloom",
+          "payload-bloom"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.01329999999870779,
+          "postingsLookup": 5.3192999999992026,
+          "documentEnumeration": 36.066799999996874,
+          "documentBloom": 0.14549999999871943,
+          "payloadBloom": 1.798900000001595,
+          "payloadLookup": 191.77859999999782,
+          "payloadDecompression": 200.35729999998875,
+          "exactVerification": 572.545900000001,
+          "resultRanking": 0.001299999999901047,
+          "snippet": 0.09680000000298605,
+          "other": 0
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.01329999999870779,
+          "postingsLookup": 5.3192999999992026,
+          "documentEnumeration": 36.066799999996874,
+          "documentBloom": 0.14549999999871943,
+          "payloadBloom": 1.798900000001595,
+          "payloadLookup": 191.77859999999782,
+          "payloadDecompression": 200.35729999998875,
+          "exactVerification": 197.73820000001433,
+          "resultRanking": 0.001299999999901047,
+          "snippet": 0.09680000000298605,
+          "other": 4.094199999995908
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 2,
+          "documentsAfterPruning": 2,
+          "documentsPruned": 0,
+          "documentsExactVerified": 2,
+          "documentsMatched": 1,
+          "payloadsConsidered": 461,
+          "payloadsAfterPruning": 460,
+          "payloadsRead": 462,
+          "payloadsDecompressed": 462,
+          "payloadReadPasses": 3,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 1,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 0,
+          "blockExpansionRatio": 1.002169197396963,
+          "exactTextMs": 110.35639999990963,
+          "blocksMetadataRows": 59948,
+          "owningBlockMappingRows": 51374,
+          "bloomSelectedPayloads": 460,
+          "selectedPayloadsRead": 461,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 461,
+          "duplicatePayloadsRead": 1,
+          "uniquePayloadsDecompressed": 461,
+          "duplicatePayloadsDecompressed": 1,
+          "compressedBytesRead": 5694799,
+          "decompressedBytes": 29358987,
+          "maxBlockExpansionRatio": 1.0022271714922049,
+          "maxExpandedPayloads": 1,
+          "maxSelectedPayloadsRead": 449,
+          "maxPayloadsReadPerPass": 450,
+          "payloadBrotliMs": 106.6435999999594,
+          "payloadDecodeParseMs": 93.71370000002935,
+          "results": 1,
+          "returnedResults": 1
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 4,
+              "executeCount": 4,
+              "prepareMs": 0.15079999999943539,
+              "executeMs": 99.12779999999839
+            },
+            "owningBlockMapping": {
+              "prepareCount": 4,
+              "executeCount": 4,
+              "prepareMs": 0.22180000000298605,
+              "executeMs": 36.83220000000438
+            },
+            "payloadBlob": {
+              "prepareCount": 3,
+              "executeCount": 3,
+              "prepareMs": 0.26150000000052387,
+              "executeMs": 37.11289999999644
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 2,
+              "payloadsRead": 461,
+              "payloadsDecompressed": 461,
+              "selectedPayloadsRead": 460,
+              "expandedPayloads": 1,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 5687561,
+              "decompressedBytes": 29293470
+            },
+            "snippet": {
+              "passes": 1,
+              "payloadsRead": 1,
+              "payloadsDecompressed": 1,
+              "selectedPayloadsRead": 1,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 7238,
+              "decompressedBytes": 65517
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "passes": [
+        {
+          "documentId": 7893,
+          "candidatePayloads": 11,
+          "read": 11,
+          "expanded": 0,
+          "decompressed": 11
+        },
+        {
+          "documentId": 11650,
+          "candidatePayloads": 449,
+          "read": 450,
+          "expanded": 1,
+          "decompressed": 450
+        },
+        {
+          "documentId": 7893,
+          "candidatePayloads": 1,
+          "read": 1,
+          "expanded": 0,
+          "decompressed": 1
+        }
+      ],
+      "blockSpans": [
+        {
+          "documentId": 7893,
+          "maxBlockSpan": 1,
+          "documentPayloads": 11
+        },
+        {
+          "documentId": 11650,
+          "maxBlockSpan": 182,
+          "documentPayloads": 450
+        }
+      ]
+    },
+    {
+      "query": "seekah_absent_20260927_f391a7",
+      "ranking": {
+        "schemaVersion": 3,
+        "traceId": "6d44465d-230e-4f36-8c90-b5c063f0930f",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:25.023Z",
+        "completedAt": "2026-09-26T18:10:25.065Z",
+        "durationMs": 41.64769999999771,
+        "bottleneck": "documentEnumeration",
+        "inclusiveBottleneck": "documentEnumeration",
+        "status": "success",
+        "query": "seekah_absent_20260927_f391a7",
+        "normalizedQuery": "seekah_absent_20260927_f391a7",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.011300000001938315,
+          "postingsLookup": 6.407599999998638,
+          "documentEnumeration": 34.72179999999935,
+          "documentBloom": 0,
+          "payloadBloom": 0,
+          "payloadLookup": 0,
+          "payloadDecompression": 0,
+          "exactVerification": 0,
+          "resultRanking": 0.007999999997991836,
+          "snippet": 0,
+          "other": 0.4989999999997963
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.011300000001938315,
+          "postingsLookup": 6.407599999998638,
+          "documentEnumeration": 34.72179999999935,
+          "documentBloom": 0,
+          "payloadBloom": 0,
+          "payloadLookup": 0,
+          "payloadDecompression": 0,
+          "exactVerification": 0,
+          "resultRanking": 0.007999999997991836,
+          "snippet": 0,
+          "other": 0.4989999999997963
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 0,
+          "documentsAfterPruning": 0,
+          "documentsPruned": 0,
+          "documentsExactVerified": 0,
+          "documentsMatched": 0,
+          "payloadsConsidered": 0,
+          "payloadsAfterPruning": 0,
+          "payloadsRead": 0,
+          "payloadsDecompressed": 0,
+          "payloadReadPasses": 0,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 0,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 0,
+          "blockExpansionRatio": 0,
+          "exactTextMs": 0,
+          "blocksMetadataRows": 0,
+          "owningBlockMappingRows": 0,
+          "bloomSelectedPayloads": 0,
+          "selectedPayloadsRead": 0,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 0,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 0,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 0,
+          "decompressedBytes": 0,
+          "maxBlockExpansionRatio": 0,
+          "maxExpandedPayloads": 0,
+          "maxSelectedPayloadsRead": 0,
+          "maxPayloadsReadPerPass": 0,
+          "payloadBrotliMs": 0,
+          "payloadDecodeParseMs": 0,
+          "results": 0,
+          "returnedResults": 0
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            },
+            "owningBlockMapping": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            },
+            "payloadBlob": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "completed": {
+        "schemaVersion": 3,
+        "traceId": "6d44465d-230e-4f36-8c90-b5c063f0930f",
+        "type": "search",
+        "startedAt": "2026-09-26T18:10:25.023Z",
+        "completedAt": "2026-09-26T18:10:25.065Z",
+        "durationMs": 42.22639999999592,
+        "bottleneck": "documentEnumeration",
+        "inclusiveBottleneck": "documentEnumeration",
+        "status": "success",
+        "query": "seekah_absent_20260927_f391a7",
+        "normalizedQuery": "seekah_absent_20260927_f391a7",
+        "mode": "phrase",
+        "field": "all",
+        "sort": "relevance",
+        "candidateStrategy": "postings",
+        "candidateSources": [
+          "postings"
+        ],
+        "phasesMs": {
+          "queryNormalization": 0.011300000001938315,
+          "postingsLookup": 6.407599999998638,
+          "documentEnumeration": 34.72179999999935,
+          "documentBloom": 0,
+          "payloadBloom": 0,
+          "payloadLookup": 0,
+          "payloadDecompression": 0,
+          "exactVerification": 0,
+          "resultRanking": 0.007999999997991836,
+          "snippet": 0,
+          "other": 1.0776999999980035
+        },
+        "phaseSelfMs": {
+          "queryNormalization": 0.011300000001938315,
+          "postingsLookup": 6.407599999998638,
+          "documentEnumeration": 34.72179999999935,
+          "documentBloom": 0,
+          "payloadBloom": 0,
+          "payloadLookup": 0,
+          "payloadDecompression": 0,
+          "exactVerification": 0,
+          "resultRanking": 0.007999999997991836,
+          "snippet": 0,
+          "other": 1.0776999999980035
+        },
+        "counts": {
+          "documentsInScope": 235463,
+          "documentsConsidered": 0,
+          "documentsAfterPruning": 0,
+          "documentsPruned": 0,
+          "documentsExactVerified": 0,
+          "documentsMatched": 0,
+          "payloadsConsidered": 0,
+          "payloadsAfterPruning": 0,
+          "payloadsRead": 0,
+          "payloadsDecompressed": 0,
+          "payloadReadPasses": 0,
+          "postingPayloadHits": 0,
+          "expandedPayloads": 0,
+          "fullDocumentFallbacks": 0,
+          "filenameOnlyFallbacks": 0,
+          "blockExpansionRatio": 0,
+          "exactTextMs": 0,
+          "blocksMetadataRows": 0,
+          "owningBlockMappingRows": 0,
+          "bloomSelectedPayloads": 0,
+          "selectedPayloadsRead": 0,
+          "fullFallbackPayloads": 0,
+          "uniquePayloadsRead": 0,
+          "duplicatePayloadsRead": 0,
+          "uniquePayloadsDecompressed": 0,
+          "duplicatePayloadsDecompressed": 0,
+          "compressedBytesRead": 0,
+          "decompressedBytes": 0,
+          "maxBlockExpansionRatio": 0,
+          "maxExpandedPayloads": 0,
+          "maxSelectedPayloadsRead": 0,
+          "maxPayloadsReadPerPass": 0,
+          "payloadBrotliMs": 0,
+          "payloadDecodeParseMs": 0,
+          "results": 0,
+          "returnedResults": 0
+        },
+        "diagnostics": {
+          "payloadSql": {
+            "blocksMetadata": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            },
+            "owningBlockMapping": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            },
+            "payloadBlob": {
+              "prepareCount": 0,
+              "executeCount": 0,
+              "prepareMs": 0,
+              "executeMs": 0
+            }
+          },
+          "payloadReads": {
+            "ranking": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "snippet": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            },
+            "other": {
+              "passes": 0,
+              "payloadsRead": 0,
+              "payloadsDecompressed": 0,
+              "selectedPayloadsRead": 0,
+              "expandedPayloads": 0,
+              "fullFallbackPayloads": 0,
+              "compressedBytes": 0,
+              "decompressedBytes": 0
+            }
+          }
+        }
+      },
+      "passes": [],
+      "blockSpans": []
+    }
+  ],
+  "mapping": {
+    "global": {
+      "blocks": 5313248,
+      "multiPayloadBlocks": 786,
+      "maxPayloadSpan": 182,
+      "hundredPayloadBlocks": 5
+    },
+    "plans": {
+      "blocks": [
+        {
+          "id": 4,
+          "parent": 0,
+          "notused": 61,
+          "detail": "SEARCH blocks USING INDEX sqlite_autoindex_blocks_1 (document_id=?)"
+        }
+      ],
+      "forward": [
+        {
+          "id": 4,
+          "parent": 0,
+          "notused": 62,
+          "detail": "SEARCH document_payload_blocks USING INDEX document_payload_blocks_document_block (document_id=?)"
+        },
+        {
+          "id": 14,
+          "parent": 0,
+          "notused": 0,
+          "detail": "LIST SUBQUERY 1"
+        },
+        {
+          "id": 17,
+          "parent": 14,
+          "notused": 0,
+          "detail": "SCAN json_each VIRTUAL TABLE INDEX 1:"
+        },
+        {
+          "id": 26,
+          "parent": 14,
+          "notused": 0,
+          "detail": "CREATE BLOOM FILTER"
+        }
+      ],
+      "reverse": [
+        {
+          "id": 4,
+          "parent": 0,
+          "notused": 62,
+          "detail": "SEARCH p USING INDEX sqlite_autoindex_document_payloads_1 (document_id=? AND ordinal=?)"
+        },
+        {
+          "id": 10,
+          "parent": 0,
+          "notused": 0,
+          "detail": "LIST SUBQUERY 2"
+        },
+        {
+          "id": 14,
+          "parent": 10,
+          "notused": 56,
+          "detail": "SEARCH document_payload_blocks USING COVERING INDEX sqlite_autoindex_document_payload_blocks_1 (document_id=?)"
+        },
+        {
+          "id": 23,
+          "parent": 10,
+          "notused": 0,
+          "detail": "LIST SUBQUERY 1"
+        },
+        {
+          "id": 26,
+          "parent": 23,
+          "notused": 0,
+          "detail": "SCAN json_each VIRTUAL TABLE INDEX 1:"
+        },
+        {
+          "id": 35,
+          "parent": 23,
+          "notused": 0,
+          "detail": "CREATE BLOOM FILTER"
+        },
+        {
+          "id": 49,
+          "parent": 10,
+          "notused": 0,
+          "detail": "CREATE BLOOM FILTER"
+        }
+      ]
+    }
+  }
+}

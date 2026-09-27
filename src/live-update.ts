@@ -10,11 +10,14 @@ import { RootError } from "./scanner.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
 import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, RootWatchState } from "./autoupdate-control.js";
+import { DEFAULT_QUEUE_LIMIT, LiveWorkQueue, QueuePersistError, type LiveWorkQueueOptions } from "./live-queue.js";
+import { runBackgroundReconcileBatch, DEFAULT_RECONCILE_BATCH_ENTRIES, DEFAULT_RECONCILE_BATCH_MS } from "./reconcile.js";
 
 export const DEFAULT_DEBOUNCE_MS = 1500;
 export const DEFAULT_WATCH_RESCAN_MS = 300_000;
 export const DEFAULT_RECONCILE_MS = 21_600_000;
-export const QUEUE_LIMIT = 10_000;
+export const QUEUE_LIMIT = DEFAULT_QUEUE_LIMIT;
+export const DEFAULT_WATCH_HANDLE_LIMIT = 128;
 export const HEARTBEAT_MS = 10_000;
 export const ROOT_REFRESH_MS = 10_000;
 export const WATCHER_RETRY_MS = [60_000, 300_000, 900_000] as const;
@@ -43,7 +46,19 @@ export interface LiveUpdateOptions {
   signal?: AbortSignal;
   instanceId?: string;
   startedAt?: string;
+  workQueue?: LiveWorkQueue;
+  queueLimit?: number;
+  queuePersistHook?: LiveWorkQueueOptions["persistHook"];
+  watchHandleLimit?: number;
+  reconcileBatchEntries?: number;
+  reconcileBatchMs?: number;
 }
+
+type WatchHandle = {
+  path: string;
+  recursive: boolean;
+  watcher: fs.FSWatcher;
+};
 
 type RootState = {
   root: string;
@@ -53,6 +68,8 @@ type RootState = {
   running: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
   watcher?: fs.FSWatcher;
+  handles: WatchHandle[];
+  scopeMode: "split" | "coarse";
   failed: boolean;
   offline: boolean;
   syncFailed: boolean;
@@ -65,6 +82,14 @@ type RootState = {
   lastEventAt?: string;
   lastLocalUpdateAt?: string;
   lastReconcileAt?: string;
+  reconcileGeneration?: number;
+  reconcileChecked?: number;
+  reconcileFrontier?: number;
+  reconcileFailedScopes?: number;
+  reconcileReason?: string;
+  reconcileStartedAt?: string;
+  reconcileUpdatedAt?: string;
+  lastReconcileBatchAt?: number;
 };
 
 export class WatchError extends Error {
@@ -118,6 +143,13 @@ export class LiveUpdateEngine {
   private lastEvent?: { at: string; root: string };
   private lastLocalUpdate?: { at: string; root: string; path: string };
   private lastReconcile?: { at: string; root: string; complete: boolean };
+  private eventCount = 0;
+  private localUpdateCount = 0;
+  private rootScanCount = 0;
+  private subtreeScanCount = 0;
+  private queueDegraded = false;
+  private readonly queue: LiveWorkQueue;
+  private readonly ownsQueue: boolean;
   private readonly recentErrors: string[] = [];
   private allFailed!: () => void;
   private readonly failed: Promise<void>;
@@ -133,6 +165,12 @@ export class LiveUpdateEngine {
     this.lastHeartbeatAt = new Date(this.now()).toISOString();
     this.abort = new AbortController();
     this.failed = new Promise<void>(resolve => { this.allFailed = resolve; });
+    this.ownsQueue = !options.workQueue;
+    this.queue = options.workQueue ?? new LiveWorkQueue(store.databasePath, {
+      now: () => this.now(),
+      ...(options.queueLimit !== undefined ? { limit: options.queueLimit } : {}),
+      ...(options.queuePersistHook ? { persistHook: options.queuePersistHook } : {}),
+    });
     for (const root of roots) this.states.set(root, this.newState(root));
     options.signal?.addEventListener("abort", () => this.requestStop(), { once: true });
   }
@@ -143,6 +181,11 @@ export class LiveUpdateEngine {
 
   private get debounceMs(): number {
     return resolveWatchDebounce(this.options.debounceMs);
+  }
+
+  private get watchHandleLimit(): number {
+    const value = this.options.watchHandleLimit ?? DEFAULT_WATCH_HANDLE_LIMIT;
+    return Number.isSafeInteger(value) && value >= 1 ? value : DEFAULT_WATCH_HANDLE_LIMIT;
   }
 
   private get reconcileMs(): number {
@@ -173,17 +216,35 @@ export class LiveUpdateEngine {
     return {
       root, pending: new Set(), reconcile: false, dirty: false, running: false,
       timer: undefined, failed: false, offline: false, syncFailed: false, removed: false,
+      handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
     };
   }
 
   snapshot(): LiveStatus {
-    const roots: LiveRootStatus[] = [...this.states.values()].map(state => ({
-      path: state.root,
-      watch: this.watchState(state),
-      pending: state.pending.size + (state.reconcile ? 1 : 0),
-      ...(state.lastError ? { lastError: state.lastError } : {}),
-    }));
+    const roots: LiveRootStatus[] = [...this.states.values()].map(state => {
+      const reconcile = this.queue.reconcileStatus(state.root);
+      return {
+        path: state.root,
+        watch: this.watchState(state),
+        pending: state.pending.size + (state.reconcile ? 1 : 0),
+        scopeMode: state.scopeMode,
+        handles: state.handles.length,
+        ...(state.lastError ? { lastError: state.lastError } : {}),
+        ...(reconcile ? {
+          reconcile: {
+            generation: reconcile.generation,
+            phase: reconcile.phase,
+            reason: reconcile.reason,
+            checked: reconcile.checked,
+            frontierCount: reconcile.frontier.length,
+            failedScopes: reconcile.failedScopes.length,
+            startedAt: new Date(reconcile.startedAtMs).toISOString(),
+            updatedAt: new Date(reconcile.updatedAtMs).toISOString(),
+          },
+        } : {}),
+      };
+    });
     return {
       schemaVersion: 1,
       instanceId: this.options.instanceId ?? "",
@@ -196,9 +257,21 @@ export class LiveUpdateEngine {
       ready: this.phase !== "starting",
       roots,
       pendingCount: roots.reduce((sum, item) => sum + item.pending, 0),
+      eventCount: this.eventCount,
+      localUpdateCount: this.localUpdateCount,
+      rootScanCount: this.rootScanCount,
+      subtreeScanCount: this.subtreeScanCount,
+      queuePendingCount: this.queue.pendingCount(),
+      queueDegraded: this.queueDegraded,
+      ...(this.queue.oldestCreatedAtMs() != null
+        ? { oldestQueuedAt: new Date(this.queue.oldestCreatedAtMs()!).toISOString() }
+        : {}),
       ...(this.lastEvent ? { lastEvent: this.lastEvent } : {}),
       ...(this.lastLocalUpdate ? { lastLocalUpdate: this.lastLocalUpdate } : {}),
       ...(this.lastReconcile ? { lastReconcile: this.lastReconcile } : {}),
+      ...(this.lastReconcile && this.reconcileMs
+        ? { nextReconcileAt: new Date(Date.parse(this.lastReconcile.at) + this.reconcileMs).toISOString() }
+        : {}),
       recentErrors: [...this.recentErrors],
       ...(this.logError ? { logError: "AUTOUPDATE_LOG_ERROR" as const } : {}),
     };
@@ -207,7 +280,7 @@ export class LiveUpdateEngine {
   private watchState(state: RootState): RootWatchState {
     if (state.removed) return "removed";
     if (state.offline) return "offline";
-    if (state.failed) return "degraded";
+    if (state.failed || this.queueDegraded) return "degraded";
     return "active";
   }
 
@@ -282,18 +355,22 @@ export class LiveUpdateEngine {
     if (state.rescanTimer) this.clearTimer(state.rescanTimer);
     state.rescanTimer = undefined;
     if (state.failed) this.attach(state);
-    const reconcile = state.reconcile;
+    const reconcileRequested = state.reconcile;
     const pending = [...state.pending];
-    if (reconcile) {
-      state.reconcile = false;
-      state.pending.clear();
-    } else if (!pending.length) {
+    const queued = this.queue.listPaths(state.root);
+    const hasEvents = pending.length > 0 || queued.length > 0;
+    const reconcileDue = !state.lastReconcileBatchAt || this.now() - state.lastReconcileBatchAt >= 5_000;
+    const initialForegroundSync = this.options.mode !== "background" && this.options.syncNow !== false && !state.lastReconcileAt;
+    const batchReconcile = this.options.mode === "background" && reconcileRequested && (!hasEvents || reconcileDue);
+    const fullReconcile = reconcileRequested && this.options.mode !== "background";
+    if (!reconcileRequested && !hasEvents) {
       state.running = false;
       this.armRescan(state);
       return;
     }
     const inner: LocalUpdateOptions = {
       lockHeld: true,
+      stableMs: this.debounceMs,
       ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
       ...(this.options.now ? { now: this.options.now } : {}),
       signal: this.abort.signal,
@@ -308,51 +385,96 @@ export class LiveUpdateEngine {
     let writerBusy = false;
     let release: (() => void) | undefined;
     try {
-      try {
-        release = acquireWriteLock(this.store.databasePath);
-      } catch (error) {
-        if (error instanceof IndexBusyError) {
-          this.log(`INDEX_BUSY：${state.root}：稍後重試同步。`);
-          writerBusy = true;
-          state.dirty = true;
-          if (reconcile) state.reconcile = true;
-          else for (const item of pending) absorb(state.pending, item);
+      if (batchReconcile) {
+        this.phase = "reconciling";
+        const existing = this.queue.reconcileStatus(state.root);
+        if (!existing || existing.phase !== "active") this.rootScanCount++;
+        const result = await runBackgroundReconcileBatch(state.root, this.store, this.queue, {
+          signal: this.abort.signal,
+          ...(this.options.now ? { now: this.options.now } : {}),
+          ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
+          maxEntries: this.options.reconcileBatchEntries ?? DEFAULT_RECONCILE_BATCH_ENTRIES,
+          maxMs: this.options.reconcileBatchMs ?? DEFAULT_RECONCILE_BATCH_MS,
+        });
+        state.reconcileGeneration = result.generation;
+        state.reconcileChecked = result.checked;
+        state.reconcileFrontier = result.frontierCount;
+        state.reconcileFailedScopes = result.failedScopes.length;
+        const current = this.queue.reconcileStatus(state.root);
+        if (current) {
+          state.reconcileReason = current.reason;
+          state.reconcileStartedAt = new Date(current.startedAtMs).toISOString();
+          state.reconcileUpdatedAt = new Date(current.updatedAtMs).toISOString();
+        }
+        state.lastReconcileBatchAt = this.now();
+        state.reconcile = !result.done || result.pendingAfter;
+        state.syncFailed = !result.complete;
+        if (result.done) {
+          this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: result.complete };
+          state.lastReconcileAt = this.lastReconcile.at;
+        }
+        this.log(`背景校正：${state.root}；檢查 ${result.checked}；更新 ${result.updated}；移除 ${result.removed}；剩餘範圍 ${result.frontierCount}；完整：${result.complete ? "是" : "否"}`);
+        state.busyAttempt = 0;
+      } else {
+        try {
+          release = acquireWriteLock(this.store.databasePath);
+        } catch (error) {
+          if (error instanceof IndexBusyError) {
+            this.log(`INDEX_BUSY：${state.root}：稍後重試同步。`);
+            writerBusy = true;
+            state.dirty = true;
+            if (fullReconcile) state.reconcile = true;
+            else for (const item of pending) absorb(state.pending, item);
+            return;
+          }
+          throw error;
+        }
+        if (!this.store.roots().includes(state.root)) {
+          this.dropRoot(state, true);
           return;
         }
-        throw error;
-      }
-      if (!this.store.roots().includes(state.root)) {
-        this.dropRoot(state, true);
-        return;
-      }
-      if (reconcile) {
-        this.phase = "reconciling";
-        const report = await this.syncFn()(state.root, this.store, syncOptions);
-        state.syncFailed = !report.complete;
-        this.printReport(report);
-        this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
-        state.lastReconcileAt = this.lastReconcile.at;
-      } else {
-        this.phase = "updating";
-        let updated = 0, unchanged = 0, removed = 0, complete = true;
-        for (const filePath of pending) {
-          if (this.stopping) break;
-          if (state.reconcile) { state.dirty = true; break; }
-          const classified = await this.applyOne(state, filePath, inner, syncOptions);
-          updated += classified.updated;
-          unchanged += classified.unchanged;
-          removed += classified.removed;
-          complete = complete && classified.complete;
-          if (classified.path) {
-            this.lastLocalUpdate = { at: new Date(this.now()).toISOString(), root: state.root, path: classified.path };
-            state.lastLocalUpdateAt = this.lastLocalUpdate.at;
+        if (fullReconcile) {
+          this.phase = "reconciling";
+          this.rootScanCount++;
+          const upTo = this.queue.maxGeneration(state.root);
+          const report = await this.syncFn()(state.root, this.store, syncOptions);
+          state.syncFailed = !report.complete;
+          this.printReport(report);
+          this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
+          state.lastReconcileAt = this.lastReconcile.at;
+          this.ackUpTo(state.root, upTo);
+          if (!state.dirty) state.reconcile = false;
+          else if (!initialForegroundSync) {
+            state.pending.clear();
+            state.reconcile = true;
+          } else {
+            state.reconcile = false;
           }
+        } else {
+          this.phase = "updating";
+          let updated = 0, unchanged = 0, removed = 0, complete = true;
+          const work = queued.length
+            ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath }))
+            : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath) }));
+          for (const item of work) {
+            if (this.stopping) break;
+            const classified = await this.applyOne(state, item.filePath, inner, syncOptions);
+            updated += classified.updated;
+            unchanged += classified.unchanged;
+            removed += classified.removed;
+            complete = complete && classified.complete;
+            if (classified.path) {
+              this.lastLocalUpdate = { at: new Date(this.now()).toISOString(), root: state.root, path: classified.path };
+              state.lastLocalUpdateAt = this.lastLocalUpdate.at;
+            }
+            if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
+          }
+          const finished = new Set(work.map(item => item.filePath));
+          state.pending = new Set([...state.pending].filter(item => !finished.has(item)));
+          this.printLocal(state.root, updated, unchanged, removed, Math.round((this.now() - started) * 100) / 100, complete);
+          if (!complete) state.syncFailed = true;
         }
-        state.pending = new Set([...state.pending].filter(item => !pending.includes(item)));
-        this.printLocal(state.root, updated, unchanged, removed, Math.round((this.now() - started) * 100) / 100, complete);
-        if (!complete) state.syncFailed = true;
       }
-      state.busyAttempt = 0;
     } catch (error) {
       if (error instanceof OperationCancelledError) {
         state.dirty = true;
@@ -360,7 +482,7 @@ export class LiveUpdateEngine {
         this.log(`INDEX_BUSY：${state.root}：稍後重試同步。`);
         writerBusy = true;
         state.dirty = true;
-        if (reconcile) state.reconcile = true;
+        if (batchReconcile || fullReconcile) state.reconcile = true;
         else for (const item of pending) absorb(state.pending, item);
       } else if (error instanceof RootError || error instanceof IgnoreConfigurationError) {
         state.syncFailed = true;
@@ -378,7 +500,10 @@ export class LiveUpdateEngine {
       this.refreshRoots();
       if (writerBusy) this.scheduleBusy(state);
       else {
-        if (state.dirty || state.pending.size || state.reconcile) this.schedule(state);
+        if (state.dirty || state.pending.size || state.reconcile) {
+          if (state.reconcile && batchReconcile && !state.dirty) this.scheduleReconcileBatch(state);
+          else this.schedule(state);
+        }
         this.armRescan(state);
       }
     }
@@ -395,18 +520,23 @@ export class LiveUpdateEngine {
       info = await fs.promises.lstat(filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        this.localUpdateCount++;
         const del = await (this.options.applyFileDelete ?? applyFileDelete)(filePath, state.root, this.store, localOpts);
         return { updated: 0, unchanged: 0, removed: del.removed, complete: del.complete, path: filePath };
       }
+      this.localUpdateCount++;
       const change = await applyPathChange(filePath, state.root, this.store, localOpts);
       return { updated: change.updated, unchanged: change.unchanged, removed: change.removed, complete: change.complete, path: filePath };
     }
     if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
     if (info.isDirectory()) {
+      if (samePath(filePath, state.root)) this.rootScanCount++;
+      else this.subtreeScanCount++;
       const report = await this.syncFn()(filePath, this.store, { ...syncOptions, requireRegistered: false });
       this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
       return { updated: report.updated, unchanged: report.unchanged, removed: report.removed, complete: report.complete, path: filePath };
     }
+    this.localUpdateCount++;
     const update = await (this.options.applyFileUpdate ?? applyFileUpdate)(filePath, state.root, this.store, localOpts);
     return { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: filePath };
   }
@@ -420,6 +550,15 @@ export class LiveUpdateEngine {
       state.timer = undefined;
       this.enqueueReady(state.root);
     }, delay);
+  }
+
+  private scheduleReconcileBatch(state: RootState): void {
+    if (this.stopping || state.removed || state.running) return;
+    if (state.timer) this.clearTimer(state.timer);
+    state.timer = this.setTimer(() => {
+      state.timer = undefined;
+      this.enqueueReady(state.root);
+    }, 0);
   }
 
   private schedule(state: RootState): void {
@@ -461,7 +600,8 @@ export class LiveUpdateEngine {
     if (state.rescanTimer) this.clearTimer(state.rescanTimer);
     if (state.retryTimer) this.clearTimer(state.retryTimer);
     state.pending.clear();
-    try { state.watcher?.close(); } catch { /* ignore */ }
+    try { this.queue.isolateRoot(state.root); } catch (error) { this.onQueueFailure(state, error); }
+    this.closeHandles(state);
     if (announce) {
       const parent = this.store.findMergedParent(state.root);
       this.log(parent
@@ -477,7 +617,7 @@ export class LiveUpdateEngine {
     state.lastError = error instanceof Error ? error.message : "未知錯誤";
     if (state.timer) this.clearTimer(state.timer);
     state.timer = undefined;
-    try { state.watcher?.close(); } catch { /* 已失效的監看器仍需清理 */ }
+    this.closeHandles(state);
     this.log(`監看錯誤：${state.root}：${state.lastError}`);
     this.rememberError("WATCH_ERROR", state.lastError);
     if (this.reconcileMs) {
@@ -489,18 +629,45 @@ export class LiveUpdateEngine {
 
   private attach(state: RootState): void {
     const recovering = state.failed;
-    const watchFn = this.options.watch ?? fs.watch;
+    this.closeHandles(state);
+    const children = this.listChildDirectories(state.root);
+    const needed = 1 + children.length;
+    const available = this.watchHandleLimit - this.totalHandles();
+    if (needed > available) {
+      this.attachCoarse(state, recovering, `句柄上限 ${this.watchHandleLimit}`);
+      return;
+    }
     try {
-      const watcher = watchFn(state.root, { recursive: true }, (_event, filename) => {
-        if (this.stopping || state.failed || state.removed) return;
-        this.handleEvent(state, filename);
-      });
-      state.watcher = watcher;
+      this.attachSplit(state, children, recovering);
+    } catch (error) {
+      this.closeHandles(state);
+      this.attachCoarse(state, recovering, error instanceof Error ? error.message : "分割監看失敗");
+    }
+  }
+
+  private attachSplit(state: RootState, children: string[], recovering: boolean): void {
+    this.attachWatch(state, state.root, false);
+    for (const child of children) this.attachWatch(state, child, true);
+    state.scopeMode = "split";
+    state.failed = false;
+    state.offline = false;
+    state.retryAttempt = 0;
+    this.logWatch(state, recovering);
+    if (recovering && this.options.mode === "background") {
+      state.reconcile = true;
+      this.schedule(state);
+    }
+  }
+
+  private attachCoarse(state: RootState, recovering: boolean, reason: string): void {
+    try {
+      this.closeHandles(state);
+      this.attachWatch(state, state.root, true);
+      state.scopeMode = "coarse";
       state.failed = false;
       state.offline = false;
       state.retryAttempt = 0;
-      watcher.on("error", error => this.failRoot(state, error));
-      this.log(`${recovering ? "監看恢復" : "監看中"}：${state.root}（防抖 ${this.debounceMs} ms）`);
+      this.log(`${recovering ? "監看恢復" : "監看中"}：${state.root}（範圍 coarse，句柄 ${state.handles.length}，防抖 ${this.debounceMs} ms；${reason}）`);
       if (recovering && this.options.mode === "background") {
         state.reconcile = true;
         this.schedule(state);
@@ -514,28 +681,209 @@ export class LiveUpdateEngine {
     }
   }
 
-  private handleEvent(state: RootState, filename: string | Buffer | null | undefined): void {
+  private attachWatch(state: RootState, dir: string, recursive: boolean): WatchHandle {
+    const watchFn = this.options.watch ?? fs.watch;
+    const watcher = watchFn(dir, { recursive }, (_event, filename) => {
+      if (this.stopping || state.failed || state.removed) return;
+      this.handleEvent(state, filename, dir, recursive);
+    });
+    const handle: WatchHandle = { path: dir, recursive, watcher };
+    watcher.on("error", error => {
+      if (samePath(dir, state.root)) this.failRoot(state, error);
+      else this.failHandle(state, handle, error);
+    });
+    state.handles.push(handle);
+    if (samePath(dir, state.root)) state.watcher = watcher;
+    return handle;
+  }
+
+  private logWatch(state: RootState, recovering: boolean): void {
+    this.log(`${recovering ? "監看恢復" : "監看中"}：${state.root}（範圍 ${state.scopeMode}，句柄 ${state.handles.length}，防抖 ${this.debounceMs} ms）`);
+  }
+
+  private totalHandles(): number {
+    let total = 0;
+    for (const item of this.states.values()) total += item.handles.length;
+    return total;
+  }
+
+  private closeHandles(state: RootState): void {
+    for (const handle of state.handles) {
+      try { handle.watcher.close(); } catch { /* 回收失效句柄 */ }
+    }
+    state.handles = [];
+    delete state.watcher;
+  }
+
+  private listChildDirectories(root: string): string[] {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const children: string[] = [];
+    for (const entry of entries) {
+      if (shouldIgnoreWatchPath(entry.name, root)) continue;
+      if (entry.isSymbolicLink()) continue;
+      if (!entry.isDirectory()) continue;
+      children.push(path.join(root, entry.name));
+    }
+    return children;
+  }
+
+  private failHandle(state: RootState, handle: WatchHandle, error: unknown): void {
+    if (state.removed || this.stopping) return;
+    const message = error instanceof Error ? error.message : "未知錯誤";
+    this.log(`監看錯誤：${handle.path}：${message}`);
+    this.rememberError("WATCH_SCOPE_ERROR", message);
+    this.persistPath(state, handle.path);
+    absorb(state.pending, handle.path);
+    this.schedule(state);
+    try { handle.watcher.close(); } catch { /* ignore */ }
+    state.handles = state.handles.filter(item => item !== handle);
+    if (samePath(handle.path, state.root)) {
+      this.failRoot(state, error);
+      return;
+    }
+    try {
+      this.attachWatch(state, handle.path, true);
+    } catch {
+      this.closeHandles(state);
+      this.attachCoarse(state, false, "子範圍失敗");
+      this.persistScope(state, "scope-fallback");
+      this.markReconcile(state);
+      this.schedule(state);
+    }
+  }
+
+  private ensureChildWatch(state: RootState, dir: string): void {
+    if (state.scopeMode !== "split") return;
+    if (state.handles.some(handle => samePath(handle.path, dir))) return;
+    if (this.totalHandles() >= this.watchHandleLimit) {
+      this.closeHandles(state);
+      this.attachCoarse(state, false, "句柄上限");
+      this.persistScope(state, "scope-fallback");
+      this.markReconcile(state);
+      this.schedule(state);
+      return;
+    }
+    try {
+      this.attachWatch(state, dir, true);
+    } catch {
+      this.closeHandles(state);
+      this.attachCoarse(state, false, "新目錄 attach 失敗");
+      this.persistScope(state, "scope-fallback");
+      this.markReconcile(state);
+      this.schedule(state);
+    }
+  }
+
+  private releaseChildWatch(state: RootState, dir: string): void {
+    const handle = state.handles.find(item => samePath(item.path, dir));
+    if (!handle || samePath(handle.path, state.root)) return;
+    this.persistPath(state, dir);
+    absorb(state.pending, dir);
+    this.schedule(state);
+    try { handle.watcher.close(); } catch { /* ignore */ }
+    state.handles = state.handles.filter(item => item !== handle);
+  }
+
+  private handleEvent(state: RootState, filename: string | Buffer | null | undefined, watchDir = state.root, _recursive = true): void {
     const label = filename ? String(filename) : "";
-    if (label && shouldIgnoreWatchPath(label, state.root)) return;
+    if (label && shouldIgnoreWatchPath(label, watchDir)) return;
+    this.eventCount++;
     const at = new Date(this.now()).toISOString();
     state.lastEventAt = at;
     this.lastEvent = { at, root: state.root };
-    if (this.options.verbose) this.log(`變更：${state.root}${label ? path.sep + label : ""} @${this.now()}`);
+    if (this.options.verbose) this.log(`變更：${watchDir}${label ? path.sep + label : ""} @${this.now()}`);
     if (!label) {
-      this.markReconcile(state);
+      if (samePath(watchDir, state.root)) {
+        this.persistScope(state, "unknown-filename");
+        this.markReconcile(state);
+      } else {
+        this.persistPath(state, watchDir);
+        absorb(state.pending, watchDir);
+      }
       this.schedule(state);
       return;
     }
-    const abs = path.resolve(state.root, label);
+    const abs = path.resolve(watchDir, label);
     if (!coversPath(state.root, abs) && !samePath(state.root, abs)) return;
     if (samePath(abs, state.root) || isIgnoreFile(abs) || path.basename(abs) === IGNORE_FILE) {
+      this.persistScope(state, "root-or-ignore");
       this.markReconcile(state);
       this.schedule(state);
       return;
     }
+    let info: fs.Stats | undefined;
+    try { info = fs.lstatSync(abs); } catch { this.releaseChildWatch(state, abs); }
+    if (info?.isDirectory() && !info.isSymbolicLink() && samePath(path.dirname(abs), state.root)) {
+      this.ensureChildWatch(state, abs);
+    }
+    if (!this.persistPath(state, abs)) return;
     absorb(state.pending, abs);
-    if (state.pending.size > QUEUE_LIMIT) this.markReconcile(state);
+    if (this.overflowRoot(state)) this.markReconcile(state);
     this.schedule(state);
+  }
+
+  private persistPath(state: RootState, abs: string): boolean {
+    try {
+      this.queue.acceptPath(state.root, path.relative(state.root, abs));
+      return true;
+    } catch (error) {
+      this.onQueueFailure(state, error);
+      return false;
+    }
+  }
+
+  private persistScope(state: RootState, reason: string): void {
+    try { this.queue.markDirtyScope(state.root, reason); }
+    catch (error) { this.onQueueFailure(state, error); }
+  }
+
+  private overflowRoot(state: RootState): boolean {
+    try { return this.queue.overflowIfNeeded(state.root); }
+    catch (error) {
+      this.onQueueFailure(state, error);
+      return false;
+    }
+  }
+
+  private ackPath(root: string, relPath: string, generation: number): void {
+    try { this.queue.ack(root, relPath, generation); }
+    catch (error) {
+      this.queueDegraded = true;
+      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗");
+    }
+  }
+
+  private ackUpTo(root: string, generation: number): void {
+    try { this.queue.ackUpTo(root, generation); }
+    catch (error) {
+      this.queueDegraded = true;
+      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗");
+    }
+  }
+
+  private onQueueFailure(state: RootState, error: unknown): void {
+    this.queueDegraded = true;
+    const message = error instanceof QueuePersistError || error instanceof Error ? error.message : "工作佇列無法落盤。";
+    this.rememberError("QUEUE_PERSIST_FAILED", message);
+    this.failRoot(state, error instanceof Error ? error : new QueuePersistError(message));
+  }
+
+  private hydrateFromQueue(): void {
+    for (const state of this.states.values()) {
+      if (this.queue.reopened) {
+        try { this.queue.markDowntimeGap(state.root); }
+        catch (error) { this.onQueueFailure(state, error); continue; }
+        state.reconcile = true;
+      } else if (this.queue.hasScope(state.root)) state.reconcile = true;
+      for (const item of this.queue.listPaths(state.root)) {
+        absorb(state.pending, path.resolve(state.root, item.relPath));
+      }
+    }
   }
 
   private markReconcile(state: RootState): void {
@@ -590,12 +938,21 @@ export class LiveUpdateEngine {
       this.lastHeartbeatAt = new Date(this.now()).toISOString();
       this.armHeartbeat();
       this.armRootRefresh();
+      this.hydrateFromQueue();
       if (this.options.syncNow !== false) {
         for (const state of this.states.values()) {
           if (this.stopping) break;
           if (state.failed && !this.reconcileMs) continue;
           this.log(`啟動同步：${state.root}`);
           state.reconcile = true;
+          this.running = true;
+          try { await this.runRoot(state); }
+          finally { this.running = false; }
+        }
+      } else {
+        for (const state of this.states.values()) {
+          if (this.stopping) break;
+          if (!state.reconcile && !state.pending.size) continue;
           this.running = true;
           try { await this.runRoot(state); }
           finally { this.running = false; }
@@ -614,11 +971,12 @@ export class LiveUpdateEngine {
         if (state.timer) this.clearTimer(state.timer);
         if (state.rescanTimer) this.clearTimer(state.rescanTimer);
         if (state.retryTimer) this.clearTimer(state.retryTimer);
-        try { state.watcher?.close(); } catch { /* ignore */ }
+        this.closeHandles(state);
       }
       await Promise.allSettled(this.active);
+      if (this.ownsQueue) this.queue.close();
     }
-    return [...this.states.values()].some(state => !state.removed && (state.failed || state.syncFailed)) ? 3 : 0;
+    return [...this.states.values()].some(state => !state.removed && (state.failed || state.syncFailed || this.queueDegraded)) ? 3 : 0;
   }
 }
 

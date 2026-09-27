@@ -80,8 +80,10 @@ export function buildHelpText(): string {
     "Seekah — 本機文件搜尋",
     "主要入口：seekah／seekah.cmd；下列 docsearch 命令保留相容，參數完全相同。",
     "",
-    "  docsearch index [root] [--verbose] [--profile <新檔案>]",
+    "  docsearch index [root] [--verbose] [--profile <新檔案>]    # 立即完整校正",
     "  docsearch search <query> [--all-terms] [--page <正整數>] [--page-size <1～100>] [--limit <正整數>] [--type <格式清單>] [--root <路徑>] [--verbose]",
+    "    --verbose（search）：stderr 輸出一行 SEARCH_TRACE <JSON>，供診斷查詢 phase、counts 與候選來源。",
+    "    每次完成的 search trace 也追加至索引資料目錄 trace.log；Workbench 頂列 Trace 可開啟獨立診斷頁。",
     "  docsearch context [query] (--out <新檔案>|--clipboard) [--all-terms] [--format json|md] [--passages <1～10>] [--select <文件代碼,...>] [--type <格式>] [--root <路徑>] [--limit <1～500>]",
     "  docsearch open <文件代碼> [--dry-run]",
     "  docsearch reveal <文件代碼> [--dry-run]",
@@ -89,9 +91,10 @@ export function buildHelpText(): string {
     "  docsearch status [--issues] [--types]",
     "  docsearch rebuild [root] [--verbose]",
     "  docsearch watch [root] [--debounce <毫秒>] [--rescan <毫秒>] [--verbose]",
-    "  docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>]",
-    "  docsearch autoupdate status",
-    "  docsearch autoupdate stop",
+    "  docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>] # 初次索引後的日常變更",
+    "  docsearch autoupdate status [--data-dir <資料目錄>]",
+    "  docsearch autoupdate stop [--data-dir <資料目錄>]",
+    "  docsearch autoupdate startup enable|disable|status",
     "  docsearch tui",
     "  docsearch ui [--no-open]",
     "  docsearch mcp",
@@ -100,7 +103,7 @@ export function buildHelpText(): string {
     "",
     "search 在互動終端預設每頁 20 筆，可用 n／p 翻頁、/ 關鍵字縮小結果、back 撤回、reset 重設、q 結束；單頁與零結果仍可操作。非互動輸出可用 --page 與 --page-size。--limit 保留為單次輸出的相容選項。",
     "index 可將涵蓋的既有子根合併為上層登錄；已包含於上層的子目錄只同步該子樹。--root 可為已登錄根目錄或其下子樹／已合併原子根。",
-    "普通 index 沿用既有索引。安裝目錄或版本改變不會清空資料，也不必 rebuild。--profile <新檔案> 寫入不含路徑與正文的本機診斷，拒絕覆寫。",
+    "普通 index 是立即完整校正：會枚舉根目錄並比對既有索引。日常新增／修改／刪除請先 index 一次，再 autoupdate start。--profile <新檔案> 寫入不含路徑與正文的本機診斷（含 enumerate／stat／parse／compress／bloom／write／commit），拒絕覆寫；請用目前 shell 已展開的路徑。",
     `docsearch tui 為 ${productVersion} 全螢幕介面。/help 可翻頁；./help、./quit、./q、./exit 會改成對應命令並提示標準寫法。/quit、/q、/exit 與 EOF 退出 0，Ctrl+C 退出 130。`,
     "Windows 磁碟根目錄請用 D:/ ；加引號時請寫 D:/，不要讓路徑以反斜線結尾。",
     "context 預設 100、最高 500。--type 例如 pdf,docx,xml（可有前導點、忽略大小寫）。",
@@ -110,7 +113,7 @@ export function buildHelpText(): string {
     "查詢預設為整段子字串；--all-terms 要求空白分隔詞全部出現在同一文件。AND、*、? 不作進階查詢語法。",
     "context 內可用 s <查詢> 跨查詢累積選取，b 查看已選清單，r <編號> 移除。",
     "status 預設顯示容量與問題彙總；--issues 列出文件問題與各根同步診斷，--types 依副檔名統計。",
-    "autoupdate start 在關閉原終端後繼續更新；不安裝服務、不開機自啟。重開機後 status 會顯示已停止。",
+    "autoupdate start 在關閉原終端後繼續更新；不安裝服務、不要求管理員權限。登入啟動需明確執行 autoupdate startup enable，預設關閉。",
     "mcp 以本機 stdio 提供唯讀搜尋、已選上下文與索引狀態；stdout 專供 MCP 協定。",
     "ui 只綁定 127.0.0.1，提供索引搜尋、拖曳臨時文件、預覽與可選 OpenAI／xAI API；Ctrl+C 關閉並清除臨時資料。",
     "setup codex 安全註冊目前安裝的本機 MCP；同名異設定不覆寫。doctor 只讀檢查 Node、CLI、索引與 MCP App。",
@@ -169,6 +172,10 @@ function printSearchResults(results: readonly SearchResult[], verbose: boolean, 
     write(`  修改：${new Date(result.modifiedAtMs).toISOString()}`);
     if (verbose) write(`  排序：等級 ${result.rank}；同級按修改時間 ${result.modifiedAtMs} 由新到舊，再按完整路徑固定字串順序：${result.path}`);
   }
+}
+
+function printSearchTrace(trace: unknown): void {
+  console.error(`SEARCH_TRACE ${JSON.stringify(trace)}`);
 }
 
 export async function main(args: readonly string[]): Promise<number> {
@@ -621,8 +628,8 @@ export async function main(args: readonly string[]): Promise<number> {
     }
     if (command === "status") {
       const format = store.formatStatus();
-      console.log(`索引格式：文字儲存 ${format.contentStorageVersion ?? "舊版"}；payload Bloom ${format.payloadBloomVersion ?? "未完成"}`);
-      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（已完成 ${format.completedDocuments}/${format.totalDocuments} 份文件）；請執行 index 接續，不必刪庫。`);
+      console.log(`索引格式：文字儲存 ${format.contentStorageVersion ?? "舊版"}；payload Bloom ${format.payloadBloomVersion ?? "未完成"}；ngram postings ${format.ngramIndexVersion ?? "未完成"}`);
+      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（payload Bloom ${format.completedDocuments}/${format.totalDocuments}；ngram postings ${format.ngramCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。`);
       else console.log("儲存格式升級：已完成。");
       console.log(format.mappingIndexReady ? "輔助索引：document_payload_blocks.block_id 已就緒。" : "輔助索引：待下一次寫入程序升級；唯讀狀態不會強行寫入。");
       const pendingText = format.textUpgradeByExtension.map(item => `${item.extension}=${item.count}`).join("、");
@@ -678,17 +685,20 @@ export async function main(args: readonly string[]): Promise<number> {
     if (session.originalTotal === 0) {
       console.log(Object.values(store.counts()).every(count => count === 0)
         ? "索引內沒有支援的文件；請確認根目錄、排除規則與同步狀態。" : "沒有符合的結果。");
+      if (verbose) printSearchTrace(session.trace);
       if (!interactive) return 0;
     } else if (limitSpecified) {
       const page = session.page(1, limit);
       console.log(`符合 ${page.total} 份文件；顯示前 ${page.results.length} 份（--limit 單次輸出）。`);
       printSearchResults(page.results, verbose);
+      if (verbose) printSearchTrace(session.trace);
       return 0;
     }
     if (!interactive) {
       const page = session.page(searchPage, searchPageSize);
       console.log(`符合 ${page.total} 份文件；第 ${page.page}/${page.pageCount} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`);
       printSearchResults(page.results, verbose);
+      if (verbose) printSearchTrace(session.trace);
       if (page.page < page.pageCount) console.log(`提示：尚有結果；使用 --page ${page.page + 1} --page-size ${page.pageSize} 查看下一頁。`);
       return 0;
     }
@@ -699,7 +709,10 @@ export async function main(args: readonly string[]): Promise<number> {
     try {
       return await runSearchSession(session, {
         pageSize: searchPageSize,
-        renderResults: (results, write) => printSearchResults(results, verbose, write),
+        renderResults: (results, write) => {
+          printSearchResults(results, verbose, write);
+          if (verbose) printSearchTrace(session.trace);
+        },
       }, {
         write: text => console.log(text),
         writeError: text => console.error(text),

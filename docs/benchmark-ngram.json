@@ -1,0 +1,338 @@
+{
+  "generatedAt": "2026-09-26T08:16:05.949Z",
+  "platform": "win32",
+  "release": "10.0.26200",
+  "arch": "x64",
+  "node": "v22.23.2",
+  "version": "0.36.2",
+  "dataset": {
+    "documents": 2400,
+    "deterministic": true,
+    "content": "common/trigram/rare/long-phrase synthetic text"
+  },
+  "method": "每個 scenario 獨立 Node process；index 為直接 upsert；query 每個 2 次暖機後取 5 次；baseline 將 ngram_index_version 設為 0，使用既有 Bloom/payload fallback；ngram 使用 FTS5 unigram/trigram postings。",
+  "memoryMethod": "worker 由 scripts/measure-process.mjs 以 5ms 取樣 sampledPeakRss，maxRssKiB 為 Node resourceUsage OS 峰值。",
+  "scenarios": {
+    "baseline": {
+      "mode": "baseline",
+      "documentCount": 2400,
+      "indexMs": 16723.8721,
+      "databaseBytes": 8044544,
+      "queries": {
+        "rare": {
+          "query": "rare-token-1873",
+          "count": 1,
+          "resultHash": "f00f161ed2dcd9ea4f38b6ebe97c503862fc4d57717bfb3707100fba8ff55734",
+          "firstPaths": [
+            "document-1873.txt"
+          ],
+          "lastPaths": [
+            "document-1873.txt"
+          ],
+          "p50Ms": 84.27579999999944,
+          "p95Ms": 87.74449999999706,
+          "samplesMs": [
+            87.06629999999859,
+            87.74449999999706,
+            83.90849999999773,
+            84.27579999999944,
+            72.51380000000063
+          ]
+        },
+        "common": {
+          "query": "共同詞",
+          "count": 2400,
+          "resultHash": "84dcd2bd2ee320f13e9702a1eb115cf0c353410f6c5495379b4a9c49cceb0049",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1.txt",
+            "document-10.txt"
+          ],
+          "lastPaths": [
+            "document-997.txt",
+            "document-998.txt",
+            "document-999.txt"
+          ],
+          "p50Ms": 3664.5037999999986,
+          "p95Ms": 3681.9502000000066,
+          "samplesMs": [
+            3624.1841999999997,
+            3573.118199999997,
+            3664.5037999999986,
+            3678.9605999999985,
+            3681.9502000000066
+          ]
+        },
+        "twoChar": {
+          "query": "測試",
+          "count": 142,
+          "resultHash": "7386cdb10748df55f6d4968e370d7139a16cf199f12936fd5b2324d1d71ccf23",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1003.txt",
+            "document-102.txt"
+          ],
+          "lastPaths": [
+            "document-952.txt",
+            "document-969.txt",
+            "document-986.txt"
+          ],
+          "p50Ms": 280.6952999999994,
+          "p95Ms": 291.8248999999996,
+          "samplesMs": [
+            282.7219000000041,
+            262.98619999999937,
+            280.6952999999994,
+            291.8248999999996,
+            231.0135999999984
+          ]
+        },
+        "threeChar": {
+          "query": "測試詞",
+          "count": 142,
+          "resultHash": "7386cdb10748df55f6d4968e370d7139a16cf199f12936fd5b2324d1d71ccf23",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1003.txt",
+            "document-102.txt"
+          ],
+          "lastPaths": [
+            "document-952.txt",
+            "document-969.txt",
+            "document-986.txt"
+          ],
+          "p50Ms": 287.1519000000044,
+          "p95Ms": 343.207699999999,
+          "samplesMs": [
+            343.207699999999,
+            228.0271999999968,
+            104.33050000000367,
+            299.37860000000364,
+            287.1519000000044
+          ]
+        },
+        "longPhrase": {
+          "query": "long phrase alpha beta gamma delta epsilon zeta",
+          "count": 2400,
+          "resultHash": "84dcd2bd2ee320f13e9702a1eb115cf0c353410f6c5495379b4a9c49cceb0049",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1.txt",
+            "document-10.txt"
+          ],
+          "lastPaths": [
+            "document-997.txt",
+            "document-998.txt",
+            "document-999.txt"
+          ],
+          "p50Ms": 3621.90159999999,
+          "p95Ms": 3712.503700000001,
+          "samplesMs": [
+            3621.90159999999,
+            3533.628800000006,
+            3712.503700000001,
+            3429.7988999999943,
+            3696.5005999999994
+          ]
+        }
+      },
+      "rss": {
+        "maxRssKiB": 141252,
+        "sampledPeakRss": 140681216,
+        "sampleIntervalMs": 5
+      }
+    },
+    "ngram": {
+      "mode": "ngram",
+      "documentCount": 2400,
+      "indexMs": 23656.9221,
+      "databaseBytes": 8544256,
+      "queries": {
+        "rare": {
+          "query": "rare-token-1873",
+          "count": 1,
+          "resultHash": "f00f161ed2dcd9ea4f38b6ebe97c503862fc4d57717bfb3707100fba8ff55734",
+          "firstPaths": [
+            "document-1873.txt"
+          ],
+          "lastPaths": [
+            "document-1873.txt"
+          ],
+          "p50Ms": 3.5345000000015716,
+          "p95Ms": 4.195800000001327,
+          "samplesMs": [
+            3.3918999999987136,
+            3.775499999999738,
+            3.5345000000015716,
+            3.5001999999985856,
+            4.195800000001327
+          ]
+        },
+        "common": {
+          "query": "共同詞",
+          "count": 2400,
+          "resultHash": "84dcd2bd2ee320f13e9702a1eb115cf0c353410f6c5495379b4a9c49cceb0049",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1.txt",
+            "document-10.txt"
+          ],
+          "lastPaths": [
+            "document-997.txt",
+            "document-998.txt",
+            "document-999.txt"
+          ],
+          "p50Ms": 3744.597600000001,
+          "p95Ms": 3883.089,
+          "samplesMs": [
+            3776.9141999999993,
+            3883.089,
+            3744.597600000001,
+            3643.9751000000033,
+            3741.4916999999987
+          ]
+        },
+        "twoChar": {
+          "query": "測試",
+          "count": 142,
+          "resultHash": "7386cdb10748df55f6d4968e370d7139a16cf199f12936fd5b2324d1d71ccf23",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1003.txt",
+            "document-102.txt"
+          ],
+          "lastPaths": [
+            "document-952.txt",
+            "document-969.txt",
+            "document-986.txt"
+          ],
+          "p50Ms": 205.97789999999804,
+          "p95Ms": 215.6504000000059,
+          "samplesMs": [
+            215.6504000000059,
+            185.25709999999526,
+            205.88060000000405,
+            205.97789999999804,
+            208.3119000000006
+          ]
+        },
+        "threeChar": {
+          "query": "測試詞",
+          "count": 142,
+          "resultHash": "7386cdb10748df55f6d4968e370d7139a16cf199f12936fd5b2324d1d71ccf23",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1003.txt",
+            "document-102.txt"
+          ],
+          "lastPaths": [
+            "document-952.txt",
+            "document-969.txt",
+            "document-986.txt"
+          ],
+          "p50Ms": 187.34330000000045,
+          "p95Ms": 220.64130000000296,
+          "samplesMs": [
+            220.64130000000296,
+            187.34330000000045,
+            106.84879999999976,
+            167.62139999999636,
+            200.38280000000668
+          ]
+        },
+        "longPhrase": {
+          "query": "long phrase alpha beta gamma delta epsilon zeta",
+          "count": 2400,
+          "resultHash": "84dcd2bd2ee320f13e9702a1eb115cf0c353410f6c5495379b4a9c49cceb0049",
+          "firstPaths": [
+            "document-0.txt",
+            "document-1.txt",
+            "document-10.txt"
+          ],
+          "lastPaths": [
+            "document-997.txt",
+            "document-998.txt",
+            "document-999.txt"
+          ],
+          "p50Ms": 3676.6744000000035,
+          "p95Ms": 3735.3948999999993,
+          "samplesMs": [
+            3548.2690000000002,
+            3735.3948999999993,
+            3722.7130000000034,
+            3615.942299999995,
+            3676.6744000000035
+          ]
+        }
+      },
+      "rss": {
+        "maxRssKiB": 138000,
+        "sampledPeakRss": 140161024,
+        "sampleIntervalMs": 5
+      }
+    }
+  },
+  "comparison": {
+    "indexMsRatio": 1.414560094608712,
+    "indexSizeDeltaBytes": 499712,
+    "rss": {
+      "baselineMaxRssKiB": 141252,
+      "ngramMaxRssKiB": 138000,
+      "baselineSampledPeakRss": 140681216,
+      "ngramSampledPeakRss": 140161024
+    },
+    "queries": {
+      "rare": {
+        "baselineP50Ms": 84.27579999999944,
+        "ngramP50Ms": 3.5345000000015716,
+        "baselineP95Ms": 87.74449999999706,
+        "ngramP95Ms": 4.195800000001327,
+        "p95Ratio": 0.04781838177893164,
+        "resultCount": 1
+      },
+      "common": {
+        "baselineP50Ms": 3664.5037999999986,
+        "ngramP50Ms": 3744.597600000001,
+        "baselineP95Ms": 3681.9502000000066,
+        "ngramP95Ms": 3883.089,
+        "p95Ratio": 1.0546283325613672,
+        "resultCount": 2400
+      },
+      "twoChar": {
+        "baselineP50Ms": 280.6952999999994,
+        "ngramP50Ms": 205.97789999999804,
+        "baselineP95Ms": 291.8248999999996,
+        "ngramP95Ms": 215.6504000000059,
+        "p95Ratio": 0.7389718971890548,
+        "resultCount": 142
+      },
+      "threeChar": {
+        "baselineP50Ms": 287.1519000000044,
+        "ngramP50Ms": 187.34330000000045,
+        "baselineP95Ms": 343.207699999999,
+        "ngramP95Ms": 220.64130000000296,
+        "p95Ratio": 0.6428798071838236,
+        "resultCount": 142
+      },
+      "longPhrase": {
+        "baselineP50Ms": 3621.90159999999,
+        "ngramP50Ms": 3676.6744000000035,
+        "baselineP95Ms": 3712.503700000001,
+        "ngramP95Ms": 3735.3948999999993,
+        "p95Ratio": 1.0061659736527666,
+        "resultCount": 2400
+      }
+    }
+  },
+  "correctness": {
+    "resultPathsEqual": true,
+    "queryNames": [
+      "rare",
+      "common",
+      "twoChar",
+      "threeChar",
+      "longPhrase"
+    ]
+  },
+  "limitation": "合成文字、固定文件數；baseline 是同一版本停用 FTS5 的 fallback 對照，不代表其他 SQLite/磁碟配置。"
+}

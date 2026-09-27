@@ -10,6 +10,8 @@ import {
 } from "./model.js";
 import { throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
+import { createTraceLog, type TraceLog } from "./trace-log.js";
+import type { SearchTrace, SearchTraceRecorder } from "./search-trace.js";
 import { RootError } from "./scanner.js";
 
 export type DataDirSource = "LOCALDOCSEARCH_DATA_DIR" | "LOCALAPPDATA" | "XDG_DATA_HOME" | "home-fallback";
@@ -17,6 +19,7 @@ export interface RemovalResult {
   removed: number;
   protected: number;
 }
+export interface TrashedRoot { path: string; deletedAt: string; documentCount: number }
 
 export function describeDatabaseLocation(
   env: NodeJS.ProcessEnv = process.env,
@@ -83,6 +86,7 @@ export function indexArtifactPaths(databasePath: string): string[] {
     `${resolved}-wal`, `${resolved}-shm`, `${resolved}-journal`,
     `${resolved}.writer.sqlite`, `${resolved}.writer.sqlite-wal`, `${resolved}.writer.sqlite-shm`, `${resolved}.writer.sqlite-journal`,
     `${resolved}.live.sqlite`, `${resolved}.live.sqlite-wal`, `${resolved}.live.sqlite-shm`, `${resolved}.live.sqlite-journal`,
+    `${resolved}.work.sqlite`, `${resolved}.work.sqlite-wal`, `${resolved}.work.sqlite-shm`, `${resolved}.work.sqlite-journal`,
     path.join(dir, "autoupdate.json"),
     path.join(dir, "autoupdate.json.tmp"),
     path.join(dir, "autoupdate.log"),
@@ -90,6 +94,13 @@ export function indexArtifactPaths(databasePath: string): string[] {
     path.join(dir, "autoupdate.log.2"),
     path.join(dir, "autoupdate.log.3"),
     path.join(dir, "autoupdate.log.4"),
+    path.join(dir, "indexing.json"),
+    path.join(dir, "indexing.json.tmp"),
+    path.join(dir, "trace.log"),
+    path.join(dir, "trace.log.1"),
+    path.join(dir, "trace.log.2"),
+    path.join(dir, "trace.log.3"),
+    path.join(dir, "trace.log.4"),
   ];
 }
 
@@ -120,8 +131,57 @@ export interface StoredBlockRow {
 }
 
 type StoredBlockDatabaseRow = StoredBlockRow & { id: number };
+type SelectedBlockMetadataRow = {
+  id: number;
+  ordinal: number | null;
+  heading: string | null;
+  content: string | null;
+  location_kind: TextBlock["locationKind"] | null;
+  location_value: string | null;
+};
 const textChunkBytes = 64 * 1024;
 const bloomBytes = 1024;
+const NGRAM_INDEX_VERSION = "1";
+const NGRAM_MIGRATION_VERSION = "ngram_1";
+const UNIGRAM_TABLE = "search_unigrams";
+const TRIGRAM_TABLE = "search_trigrams";
+
+function normalizeSearchText(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
+}
+
+function unigramToken(value: string): string {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === undefined) throw new Error("無法建立 unigram token。");
+  return `u${codePoint.toString(16)}`;
+}
+
+function unigramText(value: string): string {
+  return [...value].map(unigramToken).join(" ");
+}
+
+function trigramValues(value: string): string[] {
+  const characters = [...normalizeSearchText(value)];
+  const grams = new Set<string>();
+  for (let index = 0; index + 3 <= characters.length; index++) grams.add(characters.slice(index, index + 3).join(""));
+  return [...grams];
+}
+
+function ftsMatch(value: string, useUnigrams: boolean): string {
+  const terms = useUnigrams
+    ? [...new Set([...normalizeSearchText(value)].map(unigramToken))]
+    : trigramValues(value);
+  return terms.map(term => `"${term.replaceAll('"', '""')}"`).join(" AND ");
+}
+
+function searchableDocumentText(filename: string, blocks: Iterable<Pick<StoredBlockRow, "heading" | "content">>): string {
+  const fields = [filename];
+  for (const block of blocks) {
+    if (block.heading) fields.push(block.heading);
+    fields.push(block.content);
+  }
+  return fields.join("\n");
+}
 
 function bloomHash(value: string, seed: number): number {
   let hash = seed;
@@ -133,19 +193,28 @@ function buildBloom(blocks: readonly TextBlock[]): Uint8Array {
   const bloom = new Uint8Array(bloomBytes);
   for (const block of blocks) {
     const value = `${block.heading ?? ""}\u0000${block.content}`.normalize("NFKC").toLowerCase();
-    for (let index = 0; index + 2 < value.length; index++) {
-      const gram = value.slice(index, index + 3);
-      for (const seed of [0x811c9dc5, 0x9e3779b9]) { const bit = bloomHash(gram, seed) % (bloomBytes * 8); bloom[bit >>> 3]! |= 1 << (bit & 7); }
+    for (const width of [2, 3]) {
+      for (let index = 0; index + width <= value.length; index++) {
+        const gram = value.slice(index, index + width);
+        for (const seed of [0x811c9dc5, 0x9e3779b9]) {
+          const bit = bloomHash(gram, seed) % (bloomBytes * 8);
+          bloom[bit >>> 3]! |= 1 << (bit & 7);
+        }
+      }
     }
   }
   return bloom;
 }
 
-function bloomMayContain(bloom: Uint8Array, term: string): boolean {
-  if (term.length < 3) return true;
-  for (let index = 0; index + 2 < term.length; index++) {
-    const gram = term.slice(index, index + 3);
-    for (const seed of [0x811c9dc5, 0x9e3779b9]) { const bit = bloomHash(gram, seed) % (bloomBytes * 8); if (!(bloom[bit >>> 3]! & (1 << (bit & 7)))) return false; }
+function bloomMayContain(bloom: Uint8Array, term: string, shortTermsReady = true): boolean {
+  if (term.length < 2 || (term.length === 2 && !shortTermsReady)) return true;
+  const width = term.length === 2 ? 2 : 3;
+  for (let index = 0; index + width <= term.length; index++) {
+    const gram = term.slice(index, index + width);
+    for (const seed of [0x811c9dc5, 0x9e3779b9]) {
+      const bit = bloomHash(gram, seed) % (bloomBytes * 8);
+      if (!(bloom[bit >>> 3]! & (1 << (bit & 7)))) return false;
+    }
   }
   return true;
 }
@@ -192,6 +261,7 @@ export interface SearchCandidate {
 export interface StreamingCandidate {
   document: StoredDocumentRow;
   blocks: Iterable<StoredBlockRow>;
+  pruned?: boolean;
 }
 
 export interface StoredIssue {
@@ -222,6 +292,9 @@ export interface UpsertTimings {
 export interface IndexFormatStatus {
   contentStorageVersion: string | null;
   payloadBloomVersion: string | null;
+  ngramIndexVersion: string | null;
+  ngramCompletedDocuments: number;
+  ngramTablesReady: boolean;
   needsUpgrade: boolean;
   completedDocuments: number;
   totalDocuments: number;
@@ -254,6 +327,14 @@ export const INDEX_STORAGE_FILES = [
   { suffix: ".writer.sqlite-wal", label: ".writer.sqlite -wal" },
   { suffix: ".writer.sqlite-shm", label: ".writer.sqlite -shm" },
   { suffix: ".writer.sqlite-journal", label: ".writer.sqlite -journal" },
+  { suffix: ".live.sqlite", label: ".live.sqlite" },
+  { suffix: ".live.sqlite-wal", label: ".live.sqlite -wal" },
+  { suffix: ".live.sqlite-shm", label: ".live.sqlite -shm" },
+  { suffix: ".live.sqlite-journal", label: ".live.sqlite -journal" },
+  { suffix: ".work.sqlite", label: ".work.sqlite" },
+  { suffix: ".work.sqlite-wal", label: ".work.sqlite -wal" },
+  { suffix: ".work.sqlite-shm", label: ".work.sqlite -shm" },
+  { suffix: ".work.sqlite-journal", label: ".work.sqlite -journal" },
 ] as const;
 
 export interface StorageFileEntry {
@@ -301,7 +382,7 @@ export function collectIndexStorage(
   const present = files.filter(item => !item.missing);
   const incomplete = present.some(item => item.unknown);
   const totalBytes = incomplete ? null : present.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
-  const liveSidecars = new Set(["-wal", "-shm", "-journal", ".writer.sqlite-wal", ".writer.sqlite-shm", ".writer.sqlite-journal"]);
+  const liveSidecars = new Set(["-wal", "-shm", "-journal", ".writer.sqlite-wal", ".writer.sqlite-shm", ".writer.sqlite-journal", ".live.sqlite-wal", ".live.sqlite-shm", ".live.sqlite-journal", ".work.sqlite-wal", ".work.sqlite-shm", ".work.sqlite-journal"]);
   const approximate = files.some(item => !item.missing && liveSidecars.has(item.suffix));
   return { files, totalBytes, incomplete, approximate };
 }
@@ -325,6 +406,9 @@ export class IndexStore {
   private documentByPathSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private documentByIdSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private parseVersionKnown: boolean | null = null;
+  private shortTermsReady = false;
+  private latestSearchTrace: SearchTrace | null = null;
+  private traceLog: TraceLog | undefined;
   private cachedWrites: {
     upsertDocument: ReturnType<DatabaseSync["prepare"]>;
     bindRoot: ReturnType<DatabaseSync["prepare"]>;
@@ -333,6 +417,12 @@ export class IndexStore {
     deletePayloadBlocks: ReturnType<DatabaseSync["prepare"]>;
     deletePayloadBlooms: ReturnType<DatabaseSync["prepare"]>;
     deleteBloom: ReturnType<DatabaseSync["prepare"]>;
+    deleteNgramUnigrams: ReturnType<DatabaseSync["prepare"]>;
+    deleteNgramTrigrams: ReturnType<DatabaseSync["prepare"]>;
+    deleteNgramMigration: ReturnType<DatabaseSync["prepare"]>;
+    insertNgramUnigrams: ReturnType<DatabaseSync["prepare"]>;
+    insertNgramTrigrams: ReturnType<DatabaseSync["prepare"]>;
+    insertNgramMigration: ReturnType<DatabaseSync["prepare"]>;
     insertBlock: ReturnType<DatabaseSync["prepare"]>;
     lastId: ReturnType<DatabaseSync["prepare"]>;
     insertPayload: ReturnType<DatabaseSync["prepare"]>;
@@ -348,6 +438,7 @@ export class IndexStore {
       this.db = new DatabaseSync(databasePath, databaseOptions({ readOnly: true }));
       this.db.exec("PRAGMA query_only = ON");
       this.db.exec("PRAGMA busy_timeout = 0");
+      this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
       return;
     }
     mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -359,9 +450,11 @@ export class IndexStore {
       this.initializeSchema();
       if (fresh) {
         this.db.exec(`INSERT OR REPLACE INTO metadata(key, value) VALUES
-          ('content_storage_version', '2'), ('payload_bloom_version', '1'), ('multi_root_version', '1'), ('root_merge_version', '1')`);
+          ('content_storage_version', '2'), ('payload_bloom_version', '2'), ('multi_root_version', '1'),
+          ('root_merge_version', '1'), ('ngram_index_version', '${NGRAM_INDEX_VERSION}')`);
       }
     } finally { release(); }
+    this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
   }
 
   private initializeSchema(): void {
@@ -411,6 +504,14 @@ export class IndexStore {
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         PRIMARY KEY(version, document_id)
       );
+      CREATE VIRTUAL TABLE IF NOT EXISTS search_unigrams USING fts5(
+        text, content='', contentless_delete=1, detail=none,
+        tokenize='unicode61 remove_diacritics 0'
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS search_trigrams USING fts5(
+        text, content='', contentless_delete=1, detail=none,
+        tokenize='trigram'
+      );
       CREATE TABLE IF NOT EXISTS roots (path TEXT PRIMARY KEY, report TEXT);
       CREATE TABLE IF NOT EXISTS document_roots (
         document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
@@ -429,6 +530,11 @@ export class IndexStore {
         document_count INTEGER NOT NULL,
         PRIMARY KEY (parent_path, former_path)
       );
+      CREATE TABLE IF NOT EXISTS root_trash (
+        path TEXT PRIMARY KEY,
+        deleted_at TEXT NOT NULL,
+        document_count INTEGER NOT NULL
+      );
     `);
     this.ensureColumn("documents", "parse_version", "INTEGER");
   }
@@ -443,18 +549,30 @@ export class IndexStore {
   formatStatus(): IndexFormatStatus {
     const contentStorageVersion = this.metadata("content_storage_version");
     const payloadBloomVersion = this.metadata("payload_bloom_version");
+    const ngramIndexVersion = this.metadata("ngram_index_version");
+    const ngramTablesReady = this.hasNgramTables();
     const totalDocuments = this.hasTable("documents")
       ? Number((this.db.prepare("SELECT count(*) AS count FROM documents").get() as { count: number }).count) : 0;
     const completedDocuments = this.hasTable("index_migration_documents")
-      ? Number((this.db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_1'").get() as { count: number }).count) : 0;
+      ? Number((this.db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = 'payload_bloom_2'").get() as { count: number }).count) : 0;
+    const ngramCompletedDocuments = this.hasTable("index_migration_documents")
+      ? Number((this.db.prepare(`SELECT count(*) AS count FROM index_migration_documents WHERE version = ?`).get(NGRAM_MIGRATION_VERSION) as { count: number }).count) : 0;
     const pending = this.textUpgradePending();
-    return { contentStorageVersion, payloadBloomVersion,
-      needsUpgrade: contentStorageVersion !== "2" || payloadBloomVersion !== "1" || this.metadata("multi_root_version") !== "1"
-        || this.metadata("root_merge_version") !== "1",
+    return { contentStorageVersion, payloadBloomVersion, ngramIndexVersion, ngramCompletedDocuments, ngramTablesReady,
+      needsUpgrade: contentStorageVersion !== "2" || payloadBloomVersion !== "2" || this.metadata("multi_root_version") !== "1"
+        || this.metadata("root_merge_version") !== "1" || ngramIndexVersion !== NGRAM_INDEX_VERSION || !ngramTablesReady,
       completedDocuments, totalDocuments,
       mappingIndexReady: this.mappingIndexReady(),
       textUpgradePending: pending.total,
       textUpgradeByExtension: pending.byExtension };
+  }
+
+  ngramIndexReady(): boolean {
+    return this.metadata("ngram_index_version") === NGRAM_INDEX_VERSION && this.hasNgramTables();
+  }
+
+  private hasNgramTables(): boolean {
+    return this.hasTable(UNIGRAM_TABLE) && this.hasTable(TRIGRAM_TABLE);
   }
 
   async upgrade(options: UpgradeOptions = {}): Promise<void> {
@@ -464,11 +582,12 @@ export class IndexStore {
       throwIfAborted(options.signal);
       if (this.metadata("content_storage_version") !== "2") {
         options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式" });
-        this.migratePayloads();
+        await this.migratePayloads(options);
       }
       if (this.metadata("multi_root_version") !== "1") this.migrateMultiRoot();
       if (this.metadata("root_merge_version") !== "1") this.migrateRootMerge();
-      if (this.metadata("payload_bloom_version") !== "1") await this.migratePayloadBlooms(options);
+      if (this.metadata("payload_bloom_version") !== "2") await this.migratePayloadBlooms(options);
+      if (!this.ngramIndexReady()) await this.migrateNgramIndex(options);
     } finally { release?.(); }
   }
 
@@ -503,6 +622,70 @@ export class IndexStore {
 
   roots(): string[] {
     return (this.db.prepare("SELECT path FROM roots ORDER BY path").all() as { path: string }[]).map(row => row.path);
+  }
+  trashRoots(): TrashedRoot[] {
+    if (!this.hasTable("root_trash")) return [];
+    const rows = this.db.prepare("SELECT path, deleted_at AS deletedAt, document_count AS documentCount FROM root_trash ORDER BY deleted_at DESC")
+      .all() as unknown as { path: string; deletedAt: string; documentCount: number }[];
+    return rows.map(row => ({ path: row.path, deletedAt: row.deletedAt, documentCount: Number(row.documentCount) }));
+  }
+
+  deleteConfirmationEnabled(): boolean {
+    return this.metadata("ui_delete_confirmation") !== "false";
+  }
+
+  setDeleteConfirmationEnabled(enabled: boolean): void {
+    if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('ui_delete_confirmation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(enabled ? "true" : "false");
+  }
+
+  moveRootsToTrash(roots: readonly string[]): TrashedRoot[] {
+    const release = acquireWriteLock(this.databasePath);
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const unique = [...new Set(roots)];
+        const now = new Date().toISOString();
+        const result: TrashedRoot[] = [];
+        const writes = this.writes();
+        for (const root of unique) {
+          if (!this.roots().includes(root)) throw new RootError("只能刪除目前已登錄的根目錄。");
+          const documentCount = this.documentCountForRoot(root);
+          this.db.prepare("INSERT OR REPLACE INTO root_trash(path, deleted_at, document_count) VALUES (?, ?, ?)")
+            .run(root, now, documentCount);
+          const documents = this.db.prepare("SELECT document_id FROM document_roots WHERE root_path = ?").all(root) as { document_id: number }[];
+          for (const document of documents) {
+            writes.deleteNgramUnigrams.run(document.document_id);
+            writes.deleteNgramTrigrams.run(document.document_id);
+          }
+          this.db.prepare("DELETE FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").run(root);
+          this.db.prepare("DELETE FROM root_merge_history WHERE parent_path = ? OR former_path = ?").run(root, root);
+          this.db.prepare("DELETE FROM roots WHERE path = ?").run(root);
+          result.push({ path: root, deletedAt: now, documentCount });
+        }
+        if (this.getRoot() && !this.roots().includes(this.getRoot()!)) {
+          this.db.prepare("DELETE FROM metadata WHERE key = 'root' OR key LIKE 'last_%'").run();
+          const next = this.roots()[0];
+          if (next) this.setRoot(next);
+        }
+        this.db.exec("COMMIT");
+        return result;
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    } finally { release(); }
+  }
+
+  purgeTrashRoots(roots: readonly string[]): number {
+    if (this.readOnly) throw new Error("唯讀索引不能清空垃圾桶。");
+    const unique = [...new Set(roots)];
+    if (!unique.length || !this.hasTable("root_trash")) return 0;
+    const release = acquireWriteLock(this.databasePath);
+    try {
+      const statement = this.db.prepare("DELETE FROM root_trash WHERE path = ?");
+      let removed = 0;
+      for (const root of unique) removed += Number(statement.run(root).changes);
+      return removed;
+    } finally { release(); }
   }
 
   registerRoot(root: string): void { this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(root); }
@@ -616,6 +799,12 @@ export class IndexStore {
   private removeRootLocked(root: string): number {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const writes = this.writes();
+      const documents = this.db.prepare("SELECT document_id FROM document_roots WHERE root_path = ?").all(root) as { document_id: number }[];
+      for (const document of documents) {
+        writes.deleteNgramUnigrams.run(document.document_id);
+        writes.deleteNgramTrigrams.run(document.document_id);
+      }
       const result = this.db.prepare("DELETE FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").run(root);
       this.db.prepare("DELETE FROM roots WHERE path = ?").run(root);
       if (this.getRoot() === root) {
@@ -718,6 +907,12 @@ export class IndexStore {
         deletePayloadBlocks: this.db.prepare("DELETE FROM document_payload_blocks WHERE document_id = ?"),
         deletePayloadBlooms: this.db.prepare("DELETE FROM document_payload_blooms WHERE document_id = ?"),
         deleteBloom: this.db.prepare("DELETE FROM document_blooms WHERE document_id = ?"),
+        deleteNgramUnigrams: this.db.prepare(`DELETE FROM ${UNIGRAM_TABLE} WHERE rowid = ?`),
+        deleteNgramTrigrams: this.db.prepare(`DELETE FROM ${TRIGRAM_TABLE} WHERE rowid = ?`),
+        deleteNgramMigration: this.db.prepare("DELETE FROM index_migration_documents WHERE version = ? AND document_id = ?"),
+        insertNgramUnigrams: this.db.prepare(`INSERT INTO ${UNIGRAM_TABLE}(rowid, text) VALUES (?, ?)`),
+        insertNgramTrigrams: this.db.prepare(`INSERT INTO ${TRIGRAM_TABLE}(rowid, text) VALUES (?, ?)`),
+        insertNgramMigration: this.db.prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES (?, ?)"),
         insertBlock: this.db.prepare("INSERT INTO blocks (document_id, ordinal, heading, content, location_kind, location_value) VALUES (?, ?, ?, ?, ?, ?)"),
         lastId: this.db.prepare("SELECT last_insert_rowid() AS id"),
         insertPayload: this.db.prepare("INSERT INTO document_payloads (document_id, ordinal, payload) VALUES (?, ?, ?)"),
@@ -728,6 +923,21 @@ export class IndexStore {
     }
     return this.cachedWrites;
   }
+  private replaceNgramDocument(
+    documentId: number,
+    text: string,
+    writes = this.writes(),
+  ): void {
+    writes.deleteNgramUnigrams.run(documentId);
+    writes.deleteNgramTrigrams.run(documentId);
+    writes.deleteNgramMigration.run(NGRAM_MIGRATION_VERSION, documentId);
+    if (!this.ngramIndexReady()) return;
+    const normalized = normalizeSearchText(text);
+    writes.insertNgramUnigrams.run(documentId, unigramText(normalized));
+    writes.insertNgramTrigrams.run(documentId, normalized);
+    writes.insertNgramMigration.run(NGRAM_MIGRATION_VERSION, documentId);
+  }
+
 
   touchMetadata(document: DocumentRecord, root?: string): void {
     this.db.exec("BEGIN IMMEDIATE");
@@ -738,6 +948,7 @@ export class IndexStore {
         document.modifiedAtMs, Date.now(), document.status, document.errorCode, document.errorMessage, parseVersion);
       const row = this.getDocument(document.path)!;
       if (root) writes.bindRoot.run(row.id, root);
+      this.replaceNgramDocument(row.id, document.filename, writes);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -778,6 +989,7 @@ export class IndexStore {
       const bloomWrite = performance.now();
       writes.upsertBloom.run(row.id, bloom);
       if (timings) timings.writeMs += performance.now() - bloomWrite;
+      this.replaceNgramDocument(row.id, searchableDocumentText(document.filename, document.blocks), writes);
       const commitStarted = performance.now();
       this.db.exec("COMMIT");
       if (timings) timings.commitMs += performance.now() - commitStarted;
@@ -795,7 +1007,8 @@ export class IndexStore {
   ): RemovalResult {
     let removed = 0;
     let protectedCount = 0;
-    const rows = (root ? this.db.prepare("SELECT path FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").all(root) : this.db.prepare("SELECT path FROM documents").all()) as { path: string }[];
+    const rows = (root ? this.db.prepare("SELECT id, path FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").all(root) : this.db.prepare("SELECT id, path FROM documents").all()) as { id: number; path: string }[];
+    const writes = this.writes();
     const remove = this.db.prepare("DELETE FROM documents WHERE path = ?");
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -806,6 +1019,8 @@ export class IndexStore {
           protectedCount++;
           continue;
         }
+        writes.deleteNgramUnigrams.run(row.id);
+        writes.deleteNgramTrigrams.run(row.id);
         remove.run(row.path);
         removed++;
       }
@@ -820,6 +1035,12 @@ export class IndexStore {
   removeDocument(filePath: string): boolean {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const row = this.db.prepare("SELECT id FROM documents WHERE path = ?").get(filePath) as { id: number } | undefined;
+      if (row) {
+        const writes = this.writes();
+        writes.deleteNgramUnigrams.run(row.id);
+        writes.deleteNgramTrigrams.run(row.id);
+      }
       const result = this.db.prepare("DELETE FROM documents WHERE path = ?").run(filePath);
       this.db.exec("COMMIT");
       return Number(result.changes) > 0;
@@ -832,6 +1053,14 @@ export class IndexStore {
   clearDocuments(root?: string): void {
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const documents = root
+        ? this.db.prepare("SELECT document_id AS id FROM document_roots WHERE root_path = ?").all(root) as { id: number }[]
+        : this.db.prepare("SELECT id FROM documents").all() as { id: number }[];
+      const writes = this.writes();
+      for (const document of documents) {
+        writes.deleteNgramUnigrams.run(document.id);
+        writes.deleteNgramTrigrams.run(document.id);
+      }
       if (root) this.db.prepare("DELETE FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").run(root);
       else this.db.exec("DELETE FROM documents");
       this.db.exec("COMMIT");
@@ -844,6 +1073,23 @@ export class IndexStore {
   /** SQLite connection-local marker that changes after another connection commits. */
   dataVersion(): number {
     return (this.db.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+  }
+  recordSearchTrace(trace: SearchTrace, persist = false): void {
+    this.latestSearchTrace = trace;
+    if (persist) (this.traceLog ??= createTraceLog(dataDirectory(this.databasePath))).write(trace);
+  }
+
+  lastSearchTrace(): SearchTrace | null {
+    const trace = this.latestSearchTrace;
+    if (!trace) return null;
+    return {
+      ...trace,
+      candidateSources: [...trace.candidateSources],
+      phasesMs: { ...trace.phasesMs },
+      phaseSelfMs: { ...trace.phaseSelfMs },
+      counts: { ...trace.counts },
+      diagnostics: structuredClone(trace.diagnostics),
+    };
   }
 
   private documentWhere(types?: readonly string[], root?: string, subtree?: string): { sql: string; values: string[] } {
@@ -872,28 +1118,92 @@ export class IndexStore {
       .all(...values) as unknown as StoredDocumentRow[];
     return documents.map(document => ({ document, blocks: this.blocksFor(document.id) }));
   }
-
-  *streamCandidates(types?: readonly string[], root?: string, terms?: readonly string[], allTerms = false, subtree?: string): Generator<StreamingCandidate> {
-    const { sql, values } = this.documentWhere(types, root, subtree);
-    const documents = this.db.prepare(`SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents${sql}`);
-    const bloom = this.db.prepare("SELECT bloom FROM document_blooms WHERE document_id = ?");
-    const payloadBlooms = this.db.prepare("SELECT payload_ordinal, bloom FROM document_payload_blooms WHERE document_id = ? ORDER BY payload_ordinal");
-    for (const document of documents.iterate(...values) as Iterable<StoredDocumentRow>) {
-      yield this.candidateFromBlooms(document, bloom, payloadBlooms, terms, allTerms);
+  // FTS5 rowids are document IDs; payload ordinals are pruned separately by payload Bloom summaries.
+  private postingDocumentIds(terms: readonly string[] | undefined, allTerms: boolean, trace?: SearchTraceRecorder): Set<number> | undefined {
+    if (!terms?.length || !this.ngramIndexReady()) return undefined;
+    const started = performance.now();
+    try {
+      const required = allTerms ? terms : [terms[0]!];
+      let result: Set<number> | undefined;
+      for (const term of required) {
+        const characters = [...normalizeSearchText(term)];
+        if (!characters.length) return new Set();
+        const useUnigrams = characters.length < 3;
+        const query = ftsMatch(term, useUnigrams);
+        if (!query) return new Set();
+        const table = useUnigrams ? UNIGRAM_TABLE : TRIGRAM_TABLE;
+        const rows = this.db.prepare(`SELECT rowid FROM ${table} WHERE ${table} MATCH ?`).all(query) as { rowid: number }[];
+        const ids = new Set(rows.map(row => Number(row.rowid)));
+        if (!result) result = ids;
+        else for (const id of result) if (!ids.has(id)) result.delete(id);
+        if (!result.size) return result;
+      }
+      return result ?? new Set();
+    } finally {
+      trace?.addPhase("postingsLookup", performance.now() - started);
     }
   }
 
-  *streamCandidatesByIds(ids: readonly number[], terms?: readonly string[], allTerms = false): Generator<StreamingCandidate> {
-    if (!ids.length) return;
+  *streamCandidates(types?: readonly string[], root?: string, terms?: readonly string[], allTerms = false,
+    subtree?: string, trace?: SearchTraceRecorder): Generator<StreamingCandidate> {
+    const postingIds = this.postingDocumentIds(terms, allTerms, trace);
+    if (postingIds) trace?.addCandidateSource("postings");
+    else if (terms?.length) trace?.addCandidateSource("bloom-fallback");
+    else trace?.addCandidateSource("document-scan");
+    const base = this.documentWhere(types, root, subtree);
+    if (trace) {
+      const started = performance.now();
+      const row = this.db.prepare(`SELECT count(*) AS count FROM documents${base.sql}`).get(...base.values) as { count: number };
+      trace.addPhase("documentEnumeration", performance.now() - started);
+      trace.setCount("documentsInScope", Number(row.count));
+    }
+    if (postingIds && !postingIds.size) return;
+    const sql = postingIds
+      ? `${base.sql ? `${base.sql} AND` : " WHERE"} id IN (SELECT value FROM json_each(?))`
+      : base.sql;
+    const values = postingIds ? [...base.values, JSON.stringify([...postingIds])] : base.values;
+    const documents = this.db.prepare(`SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents${sql}`);
     const bloom = this.db.prepare("SELECT bloom FROM document_blooms WHERE document_id = ?");
     const payloadBlooms = this.db.prepare("SELECT payload_ordinal, bloom FROM document_payload_blooms WHERE document_id = ? ORDER BY payload_ordinal");
+    const iterator = (documents.iterate(...values) as Iterable<StoredDocumentRow>)[Symbol.iterator]();
+    while (true) {
+      const started = performance.now();
+      const next = iterator.next();
+      trace?.addPhase("documentEnumeration", performance.now() - started);
+      if (next.done) return;
+      const document = next.value;
+      trace?.increment("documentsConsidered");
+      yield this.candidateFromBlooms(document, bloom, payloadBlooms, terms, allTerms, trace);
+    }
+  }
+
+  *streamCandidatesByIds(ids: readonly number[], terms?: readonly string[], allTerms = false,
+    trace?: SearchTraceRecorder): Generator<StreamingCandidate> {
+    trace?.addCandidateSource("restricted-ids");
+    if (!ids.length) {
+      trace?.setCount("documentsInScope", 0);
+      return;
+    }
+    const uniqueIds = [...new Set(ids)];
+    trace?.setCount("documentsInScope", uniqueIds.length);
+    const postingIds = this.postingDocumentIds(terms, allTerms, trace);
+    if (postingIds) trace?.addCandidateSource("postings");
+    else if (terms?.length) trace?.addCandidateSource("bloom-fallback");
+    if (!postingIds && !terms?.length) trace?.addCandidateSource("document-scan");
+    const selected = uniqueIds.filter(id => !postingIds || postingIds.has(id));
+    if (!selected.length) return;
+    const bloom = this.db.prepare("SELECT bloom FROM document_blooms WHERE document_id = ?");
+    const payloadBlooms = this.db.prepare("SELECT payload_ordinal, bloom FROM document_payload_blooms WHERE document_id = ? ORDER BY payload_ordinal");
+    const started = performance.now();
     const rows = this.db.prepare(`SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents
-      WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(ids)])) as unknown as StoredDocumentRow[];
+      WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(selected)) as unknown as StoredDocumentRow[];
+    trace?.addPhase("documentEnumeration", performance.now() - started);
     const byId = new Map(rows.map(row => [row.id, row]));
-    for (const id of ids) {
+    for (const id of selected) {
       const document = byId.get(id);
       if (!document) continue;
-      yield this.candidateFromBlooms(document, bloom, payloadBlooms, terms, allTerms);
+      trace?.increment("documentsConsidered");
+      yield this.candidateFromBlooms(document, bloom, payloadBlooms, terms, allTerms, trace);
     }
   }
 
@@ -903,10 +1213,25 @@ export class IndexStore {
     payloadBlooms: { all(id: number): unknown },
     terms?: readonly string[],
     allTerms = false,
+    trace?: SearchTraceRecorder,
   ): StreamingCandidate {
+    const documentBloomStarted = performance.now();
     const row = bloom.get(document.id) as { bloom: Uint8Array } | undefined;
-    const possible = !terms || !row || (allTerms ? terms.some(term => bloomMayContain(row.bloom, term)) : bloomMayContain(row.bloom, terms[0]!));
-    if (!possible) return { document, blocks: [] };
+    if (row) trace?.addCandidateSource("document-bloom");
+    const filename = document.filename.normalize("NFKC").toLowerCase();
+    const requiredTerms = !terms ? [] : allTerms
+      ? terms.filter(term => !filename.includes(term))
+      : filename.includes(terms[0]!) ? [] : terms;
+    const possible = !terms || !row || (allTerms
+      ? requiredTerms.every(term => bloomMayContain(row.bloom, term, this.shortTermsReady))
+      : requiredTerms.length === 0 || bloomMayContain(row.bloom, requiredTerms[0]!, this.shortTermsReady));
+    trace?.addPhase("documentBloom", performance.now() - documentBloomStarted);
+    if (!possible) {
+      trace?.increment("documentsPruned");
+      return { document, blocks: [], pruned: true };
+    }
+    trace?.increment("documentsAfterPruning");
+    const payloadBloomStarted = performance.now();
     const summaries = payloadBlooms.all(document.id) as { payload_ordinal: number; bloom: Uint8Array }[];
     // Missing payload summaries are an old/incomplete index: retain the
     // document-level fallback rather than risking a false negative.
@@ -914,76 +1239,202 @@ export class IndexStore {
       ? undefined
       : summaries.filter(summary => bloomMayContainAny(summary.bloom, allTerms ? terms : [terms[0]!]))
         .map(summary => summary.payload_ordinal);
+    trace?.addPhase("payloadBloom", performance.now() - payloadBloomStarted);
+    trace?.increment("payloadsConsidered", summaries.length);
+    trace?.increment("payloadsAfterPruning", candidates?.length ?? summaries.length);
+    trace?.increment("bloomSelectedPayloads", candidates?.length ?? 0);
+    if (terms?.some(term => term.length >= 3)) trace?.addCandidateSource("payload-bloom");
     // A trigram may straddle two compressed payloads.  The document bloom
     // has already established that the document is possible, so an empty
     // payload set must conservatively read it rather than lose that match.
-    return { document, blocks: candidates?.length ? this.streamBlocksFor(document.id, candidates) : this.streamBlocksFor(document.id) };
+    return { document, blocks: candidates?.length
+      ? this.streamBlocksFor(document.id, candidates, trace)
+      : this.streamBlocksFor(document.id, undefined, trace) };
   }
 
-  candidateByPath(filePath: string): SearchCandidate | undefined {
+  candidateByPath(filePath: string, trace?: SearchTraceRecorder): SearchCandidate | undefined {
+    const started = performance.now();
     const document = this.db.prepare("SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents WHERE path = ?")
       .get(filePath) as StoredDocumentRow | undefined;
+    trace?.addPhase("documentEnumeration", performance.now() - started);
     if (!document) return undefined;
-    const blocks = this.blocksFor(document.id);
+    trace?.increment("documentsConsidered");
+    trace?.increment("documentsAfterPruning");
+    const blocks = this.blocksFor(document.id, trace);
     return { document, blocks };
   }
 
-  blockSource(documentId: number, ordinal: number, source: "heading" | "content"): string | null {
-    const block = this.db.prepare("SELECT id FROM blocks WHERE document_id = ? AND ordinal = ?").get(documentId, ordinal) as { id: number } | undefined;
-    if (!block) return null;
-    const payloads = this.db.prepare("SELECT payload_ordinal FROM document_payload_blocks WHERE document_id = ? AND block_id = ? ORDER BY payload_ordinal")
-      .all(documentId, block.id) as { payload_ordinal: number }[];
+  blockSource(documentId: number, ordinal: number, source: "heading" | "content", trace?: SearchTraceRecorder): string | null {
+    const started = performance.now();
+    const blockQuery = this.db.prepare("SELECT id FROM blocks WHERE document_id = ? AND ordinal = ?");
+    trace?.recordPayloadSql("blocksMetadata", "prepare", performance.now() - started);
+    let executeStarted = performance.now();
+    const block = blockQuery.get(documentId, ordinal) as { id: number } | undefined;
+    trace?.recordPayloadSql("blocksMetadata", "execute", performance.now() - executeStarted);
+    if (block) trace?.increment("blocksMetadataRows");
+    if (!block) {
+      trace?.addPhase("payloadLookup", performance.now() - started);
+      return null;
+    }
+    const prepareStarted = performance.now();
+    const mappingQuery = this.db.prepare("SELECT payload_ordinal FROM document_payload_blocks WHERE document_id = ? AND block_id = ? ORDER BY payload_ordinal");
+    trace?.recordPayloadSql("owningBlockMapping", "prepare", performance.now() - prepareStarted);
+    executeStarted = performance.now();
+    const payloads = mappingQuery.all(documentId, block.id) as { payload_ordinal: number }[];
+    trace?.recordPayloadSql("owningBlockMapping", "execute", performance.now() - executeStarted);
+    trace?.increment("owningBlockMappingRows", payloads.length);
+    trace?.addPhase("payloadLookup", performance.now() - started);
     // Legacy/incomplete maps remain readable through the full-document path.
-    for (const blockSource of this.streamBlocksFor(documentId, payloads.length ? payloads.map(row => row.payload_ordinal) : undefined)) {
+    for (const blockSource of this.streamBlocksFor(documentId, payloads.length ? payloads.map(row => row.payload_ordinal) : undefined, trace, true)) {
       if (blockSource.ordinal === ordinal) return source === "heading" ? blockSource.heading : blockSource.content;
     }
     return null;
   }
 
-  private blocksFor(documentId: number): StoredBlockRow[] {
-    return [...this.streamBlocksFor(documentId)];
+  private blocksFor(documentId: number, trace?: SearchTraceRecorder): StoredBlockRow[] {
+    return [...this.streamBlocksFor(documentId, undefined, trace)];
+  }
+  private readAllBlockMetadata(documentId: number, trace?: SearchTraceRecorder): StoredBlockDatabaseRow[] {
+    const started = performance.now();
+    const blocksQuery = this.db.prepare("SELECT id, ordinal, heading, content, location_kind, location_value FROM blocks WHERE document_id = ? ORDER BY ordinal");
+    trace?.recordPayloadSql("blocksMetadata", "prepare", performance.now() - started);
+    const executeStarted = performance.now();
+    const blocks = blocksQuery.all(documentId) as unknown as StoredBlockDatabaseRow[];
+    trace?.recordPayloadSql("blocksMetadata", "execute", performance.now() - executeStarted);
+    trace?.increment("blocksMetadataRows", blocks.length);
+    return blocks;
   }
 
-  private *streamBlocksFor(documentId: number, candidatePayloads?: readonly number[]): Generator<StoredBlockRow> {
-    const blocks = this.db.prepare("SELECT id, ordinal, heading, content, location_kind, location_value FROM blocks WHERE document_id = ? ORDER BY ordinal")
-      .all(documentId) as unknown as StoredBlockDatabaseRow[];
-    let selectedIds: Set<number> | undefined;
-    if (candidatePayloads) {
-      if (!candidatePayloads.length) return;
-      // 用單一 JSON 參數傳遞集合，避免大型文件超過 SQLite 綁定參數上限。
-      selectedIds = new Set((this.db.prepare(`SELECT DISTINCT block_id FROM document_payload_blocks
-        WHERE document_id = ? AND payload_ordinal IN (SELECT value FROM json_each(?))`)
-        .all(documentId, JSON.stringify(candidatePayloads)) as { block_id: number }[]).map(row => row.block_id));
-      // An incomplete map must never hide content; this only occurs while an
-      // interrupted old-index migration is being recovered.
-      if (!selectedIds.size) selectedIds = undefined;
+  private selectedBlockMetadata(documentId: number, candidateJson: string,
+    trace?: SearchTraceRecorder): SelectedBlockMetadataRow[] {
+    const started = performance.now();
+    const blocksQuery = this.db.prepare(`WITH selected AS MATERIALIZED (
+      SELECT DISTINCT m.block_id
+      FROM json_each(?) AS seed
+      CROSS JOIN document_payload_blocks AS m
+      WHERE m.document_id = ?
+        AND m.payload_ordinal = seed.value
+    )
+    SELECT s.block_id AS id,
+      b.ordinal, b.heading, b.content, b.location_kind, b.location_value
+    FROM selected AS s
+    LEFT JOIN blocks AS b
+      ON b.id = s.block_id AND b.document_id = ?`);
+    trace?.recordPayloadSql("blocksMetadata", "prepare", performance.now() - started);
+    const executeStarted = performance.now();
+    const rows = blocksQuery.all(candidateJson, documentId, documentId) as unknown as SelectedBlockMetadataRow[];
+    trace?.recordPayloadSql("blocksMetadata", "execute", performance.now() - executeStarted);
+    trace?.increment("blocksMetadataRows", rows.length);
+    return rows;
+  }
+
+  private *streamBlocksFor(documentId: number, candidatePayloads?: readonly number[],
+    trace?: SearchTraceRecorder, snippet = false): Generator<StoredBlockRow> {
+    const lookupStarted = performance.now();
+    let blocks: StoredBlockDatabaseRow[] | undefined;
+    let selectedMetadataRows: SelectedBlockMetadataRow[] | undefined;
+    let selectedPayloads: readonly number[] | undefined;
+    let candidateJson = "";
+    if (candidatePayloads === undefined) {
+      blocks = this.readAllBlockMetadata(documentId, trace);
+    } else {
+      if (!candidatePayloads.length) {
+        trace?.addPhase("payloadLookup", performance.now() - lookupStarted);
+        return;
+      }
+      selectedPayloads = [...new Set(candidatePayloads)];
+      trace?.increment("candidatePayloadOrdinals", selectedPayloads.length);
+      candidateJson = JSON.stringify(selectedPayloads);
+      selectedMetadataRows = this.selectedBlockMetadata(documentId, candidateJson, trace);
+      if (!selectedMetadataRows.length) {
+        selectedMetadataRows = undefined;
+        blocks = this.readAllBlockMetadata(documentId, trace);
+      }
     }
     let payloads: { ordinal: number; payload: Uint8Array }[];
-    if (selectedIds) {
-      payloads = this.db.prepare(`SELECT p.ordinal, p.payload FROM document_payloads p WHERE p.document_id = ? AND p.ordinal IN (
-        SELECT DISTINCT payload_ordinal FROM document_payload_blocks WHERE document_id = ?
-        AND block_id IN (SELECT value FROM json_each(?))
-      ) ORDER BY p.ordinal`).all(documentId, documentId, JSON.stringify([...selectedIds])) as { ordinal: number; payload: Uint8Array }[];
+    if (selectedMetadataRows) {
+      const prepareStarted = performance.now();
+      const payloadQuery = this.db.prepare(`WITH selected AS MATERIALIZED (
+        SELECT DISTINCT m.block_id
+        FROM json_each(?) AS seed
+        CROSS JOIN document_payload_blocks AS m
+        WHERE m.document_id = ?
+          AND m.payload_ordinal = seed.value
+      )
+      SELECT p.ordinal, p.payload
+      FROM document_payloads AS p
+      WHERE p.document_id = ?
+        AND p.ordinal IN (
+          SELECT DISTINCT m.payload_ordinal
+          FROM selected AS s
+          CROSS JOIN document_payload_blocks AS m
+            INDEXED BY document_payload_blocks_document_block
+          WHERE m.document_id = ?
+            AND m.block_id = s.block_id
+        )
+      ORDER BY p.ordinal`);
+      trace?.recordPayloadSql("payloadBlob", "prepare", performance.now() - prepareStarted);
+      const executeStarted = performance.now();
+      payloads = payloadQuery.all(candidateJson, documentId, documentId, documentId) as { ordinal: number; payload: Uint8Array }[];
+      trace?.recordPayloadSql("payloadBlob", "execute", performance.now() - executeStarted);
     } else {
-      payloads = this.db.prepare("SELECT ordinal, payload FROM document_payloads WHERE document_id = ? ORDER BY ordinal").all(documentId) as { ordinal: number; payload: Uint8Array }[];
+      const prepareStarted = performance.now();
+      const payloadQuery = this.db.prepare("SELECT ordinal, payload FROM document_payloads WHERE document_id = ? ORDER BY ordinal");
+      trace?.recordPayloadSql("payloadBlob", "prepare", performance.now() - prepareStarted);
+      const executeStarted = performance.now();
+      payloads = payloadQuery.all(documentId) as { ordinal: number; payload: Uint8Array }[];
+      trace?.recordPayloadSql("payloadBlob", "execute", performance.now() - executeStarted);
+      trace?.increment("fullDocumentFallbacks");
+    }
+    trace?.recordPayloadReadPass(documentId, payloads, selectedMetadataRows ? selectedPayloads : undefined, snippet);
+    trace?.addPhase("payloadLookup", performance.now() - lookupStarted);
+    let selectedMetadata: Map<number, StoredBlockDatabaseRow | null> | undefined;
+    if (selectedMetadataRows) {
+      selectedMetadata = new Map<number, StoredBlockDatabaseRow | null>();
+      for (const row of selectedMetadataRows) {
+        if (row.ordinal === null) {
+          selectedMetadata.set(row.id, null);
+          continue;
+        }
+        // The SQLite row already has the StoredBlockDatabaseRow fields; avoid a second object allocation.
+        const block = row as unknown as StoredBlockDatabaseRow;
+        selectedMetadata.set(row.id, block);
+      }
+      selectedMetadataRows = undefined;
+      trace?.increment("owningBlocksFound", selectedMetadata.size);
     }
     if (!payloads.length) {
-      for (const block of blocks) {
-        if (selectedIds && !selectedIds.has(block.id)) continue;
+      const inlineBlocks = selectedMetadata
+        ? [...selectedMetadata.values()]
+          .filter((block): block is StoredBlockDatabaseRow => block !== null)
+          .sort((a, b) => a.ordinal - b.ordinal)
+        : blocks!;
+      for (const block of inlineBlocks) {
         if (!block.content) throw new Error("索引文字 payload 遺失，請執行 rebuild。");
-        yield { ordinal: block.ordinal, heading: block.heading, content: block.content, location_kind: block.location_kind, location_value: block.location_value };
+        yield { ordinal: block.ordinal, heading: block.heading, content: block.content,
+          location_kind: block.location_kind, location_value: block.location_value };
       }
       return;
     }
-    const metadata = new Map(blocks.map(block => [block.id, block]));
+    const metadata = selectedMetadata ?? new Map(blocks!.map(block => [block.id, block]));
     let pending: { id: number; content: string } | null = null;
     for (const payload of payloads) {
-      for (const [id, content] of JSON.parse(brotliDecompressSync(payload.payload).toString("utf8")) as [number, string][]) {
-        if (selectedIds && !selectedIds.has(id)) continue;
+      const decompressStarted = performance.now();
+      const decompressed = brotliDecompressSync(payload.payload);
+      const decodeStarted = performance.now();
+      const values = JSON.parse(decompressed.toString("utf8")) as [number, string][];
+      const decodeEnded = performance.now();
+      trace?.increment("payloadBrotliMs", decodeStarted - decompressStarted);
+      trace?.increment("payloadDecodeParseMs", decodeEnded - decodeStarted);
+      trace?.addPhase("payloadDecompression", decodeEnded - decompressStarted);
+      trace?.recordPayloadDecompression(documentId, payload.ordinal, decompressed.byteLength, snippet);
+      for (const [id, content] of values) {
+        if (selectedMetadata && !selectedMetadata.has(id)) continue;
         if (pending && pending.id !== id) {
           const block = metadata.get(pending.id);
-          if (!block) throw new Error("索引文字 payload 指向未知區塊，請執行 rebuild。");
-          yield { ordinal: block.ordinal, heading: block.heading, content: pending.content, location_kind: block.location_kind, location_value: block.location_value };
+          if (!block) throw new Error("索引 payload 指向未知區塊，請執行 rebuild。");
+          yield { ordinal: block.ordinal, heading: block.heading, content: pending.content,
+            location_kind: block.location_kind, location_value: block.location_value };
           pending = null;
         }
         if (pending) pending.content += content;
@@ -992,10 +1443,13 @@ export class IndexStore {
     }
     if (pending) {
       const block = metadata.get(pending.id);
-      if (!block) throw new Error("索引文字 payload 指向未知區塊，請執行 rebuild。");
-      yield { ordinal: block.ordinal, heading: block.heading, content: pending.content, location_kind: block.location_kind, location_value: block.location_value };
+      if (!block) throw new Error("索引 payload 指向未知區塊，請執行 rebuild。");
+      yield { ordinal: block.ordinal, heading: block.heading, content: pending.content,
+        location_kind: block.location_kind, location_value: block.location_value };
     }
   }
+
+
 
   private writeDocumentPayloads(documentId: number, entries: { id: number; ordinal: number; content: string }[], timings?: UpsertTimings): void {
     const writes = this.writes();
@@ -1027,40 +1481,70 @@ export class IndexStore {
     flush();
   }
 
-  private migratePayloads(): void {
+  private async migratePayloads(options: UpgradeOptions): Promise<void> {
     if (this.metadata("content_storage_version") === "2") return;
-    const rows = this.db.prepare("SELECT id, document_id, ordinal, content FROM blocks ORDER BY document_id, ordinal").all() as { id: number; document_id: number; ordinal: number; content: string }[];
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const clear = this.db.prepare("UPDATE blocks SET content = '' WHERE id = ?");
-      const legacy = this.db.prepare("SELECT payload FROM block_payloads WHERE block_id = ? ORDER BY ordinal");
-      const groups = new Map<number, { id: number; ordinal: number; content: string }[]>();
-      for (const row of rows) {
-        const old = row.content || Buffer.concat((legacy.all(row.id) as { payload: Uint8Array }[]).map(item => brotliDecompressSync(item.payload))).toString("utf8");
-        const group = groups.get(row.document_id) ?? []; group.push({ id: row.id, ordinal: row.ordinal, content: old }); groups.set(row.document_id, group);
-      }
-      for (const [documentId, entries] of groups) this.writeDocumentPayloads(documentId, entries);
-      this.db.exec("DELETE FROM block_payloads");
-      for (const row of rows) clear.run(row.id);
-      this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('content_storage_version', '2')").run();
-      this.db.exec("COMMIT");
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-  }
-
-  private async migratePayloadBlooms(options: UpgradeOptions): Promise<void> {
-    if (this.metadata("payload_bloom_version") === "1") return;
     const documents = this.db.prepare(`SELECT d.id, d.path FROM documents d
       WHERE NOT EXISTS (SELECT 1 FROM index_migration_documents m
-        WHERE m.version = 'payload_bloom_1' AND m.document_id = d.id)
+        WHERE m.version = 'content_storage_2' AND m.document_id = d.id)
       ORDER BY d.id`).all() as { id: number; path: string }[];
     const total = Number((this.db.prepare("SELECT count(*) AS count FROM documents").get() as { count: number }).count);
     let completed = total - documents.length;
-    options.onProgress?.({ stage: "upgrade", message: "建立 payload 搜尋摘要", current: completed, total });
+    options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式", current: completed, total });
+    const blocksQuery = this.db.prepare("SELECT id, ordinal, content FROM blocks WHERE document_id = ? ORDER BY ordinal");
+    const legacyQuery = this.db.prepare("SELECT payload FROM block_payloads WHERE block_id = ? ORDER BY ordinal");
+    const writes = this.writes();
+    for (const document of documents) {
+      throwIfAborted(options.signal);
+      options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式", current: completed, total, path: document.path });
+      const blocks = blocksQuery.all(document.id) as { id: number; ordinal: number; content: string }[];
+      const entries = blocks.map(block => ({
+        id: block.id,
+        ordinal: block.ordinal,
+        content: block.content || Buffer.concat((legacyQuery.all(block.id) as { payload: Uint8Array }[]).map(item => brotliDecompressSync(item.payload))).toString("utf8"),
+      }));
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        writes.deletePayloadBlocks.run(document.id);
+        writes.deletePayloads.run(document.id);
+        writes.deletePayloadBlooms.run(document.id);
+        this.writeDocumentPayloads(document.id, entries);
+        this.db.prepare("DELETE FROM block_payloads WHERE block_id IN (SELECT id FROM blocks WHERE document_id = ?)").run(document.id);
+        this.db.prepare("UPDATE blocks SET content = '' WHERE document_id = ?").run(document.id);
+        this.db.prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES ('content_storage_2', ?)").run(document.id);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+      completed++;
+      options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式", current: completed, total, path: document.path });
+      await yieldToEvents();
+    }
+    throwIfAborted(options.signal);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('content_storage_version', '2')").run();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private async migratePayloadBlooms(options: UpgradeOptions): Promise<void> {
+    if (this.metadata("payload_bloom_version") === "2") return;
+    const documents = this.db.prepare(`SELECT d.id, d.path FROM documents d
+      WHERE NOT EXISTS (SELECT 1 FROM index_migration_documents m
+        WHERE m.version = 'payload_bloom_2' AND m.document_id = d.id)
+      ORDER BY d.id`).all() as { id: number; path: string }[];
+    const total = Number((this.db.prepare("SELECT count(*) AS count FROM documents").get() as { count: number }).count);
+    let completed = total - documents.length;
+    options.onProgress?.({ stage: "upgrade", message: "建立短詞搜尋摘要", current: completed, total });
     const blocksQuery = this.db.prepare("SELECT id, heading FROM blocks WHERE document_id = ? ORDER BY ordinal");
     const payloadsQuery = this.db.prepare("SELECT ordinal, payload FROM document_payloads WHERE document_id = ? ORDER BY ordinal");
     for (const document of documents) {
       throwIfAborted(options.signal);
-      options.onProgress?.({ stage: "upgrade", message: "建立 payload 搜尋摘要", current: completed, total, path: document.path });
+      options.onProgress?.({ stage: "upgrade", message: "建立短詞搜尋摘要", current: completed, total, path: document.path });
       const blocks = blocksQuery.all(document.id) as { id: number; heading: string | null }[];
       const metadata = new Map(blocks.map(block => [block.id, block]));
       const payloads = payloadsQuery.all(document.id) as { ordinal: number; payload: Uint8Array }[];
@@ -1070,6 +1554,7 @@ export class IndexStore {
         this.db.prepare("DELETE FROM document_payload_blooms WHERE document_id = ?").run(document.id);
         const insertBlock = this.db.prepare("INSERT INTO document_payload_blocks(document_id, payload_ordinal, block_id) VALUES (?, ?, ?)");
         const insertBloom = this.db.prepare("INSERT INTO document_payload_blooms(document_id, payload_ordinal, bloom) VALUES (?, ?, ?)");
+        const documentContent = new Map<number, string>();
         let payloadIndex = 0;
         for (const payload of payloads) {
           throwIfAborted(options.signal);
@@ -1078,6 +1563,7 @@ export class IndexStore {
           for (const [blockId, fragment] of values) {
             if (!metadata.has(blockId)) throw new Error("索引 payload 指向未知區塊，無法安全升級。");
             content.set(blockId, (content.get(blockId) ?? "") + fragment);
+            documentContent.set(blockId, (documentContent.get(blockId) ?? "") + fragment);
           }
           for (const blockId of content.keys()) insertBlock.run(document.id, payload.ordinal, blockId);
           insertBloom.run(document.id, payload.ordinal, buildBloom([...content].map(([blockId, value], ordinal) => ({
@@ -1085,21 +1571,69 @@ export class IndexStore {
           }))));
           payloadIndex++;
           if (payloadIndex % 16 === 0) {
-            options.onProgress?.({ stage: "upgrade", message: `建立 payload 搜尋摘要（payload ${payloadIndex}/${payloads.length}）`,
+            options.onProgress?.({ stage: "upgrade", message: `建立短詞搜尋摘要（payload ${payloadIndex}/${payloads.length}）`,
               current: completed, total, path: document.path });
             await yieldToEvents();
           }
         }
-        this.db.prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES ('payload_bloom_1', ?)").run(document.id);
+        this.db.prepare("INSERT INTO document_blooms(document_id, bloom) VALUES (?, ?) ON CONFLICT(document_id) DO UPDATE SET bloom=excluded.bloom")
+          .run(document.id, buildBloom(blocks.map((block, ordinal) => ({
+            ordinal, heading: block.heading, content: documentContent.get(block.id) ?? "", locationKind: "line" as const, locationValue: "",
+          }))));
+        this.db.prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES ('payload_bloom_2', ?)").run(document.id);
         this.db.exec("COMMIT");
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
       completed++;
-      options.onProgress?.({ stage: "upgrade", message: "建立 payload 搜尋摘要", current: completed, total, path: document.path });
+      options.onProgress?.({ stage: "upgrade", message: "建立短詞搜尋摘要", current: completed, total, path: document.path });
       await yieldToEvents();
     }
     throwIfAborted(options.signal);
-    this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('payload_bloom_version', '1')").run();
-    options.onProgress?.({ stage: "upgrade", message: "payload 搜尋摘要升級完成", current: total, total });
+    this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('payload_bloom_version', '2')").run();
+    this.shortTermsReady = true;
+    options.onProgress?.({ stage: "upgrade", message: "短詞搜尋摘要升級完成", current: total, total });
+  }
+  private async migrateNgramIndex(options: UpgradeOptions): Promise<void> {
+    if (this.ngramIndexReady()) return;
+    if (!this.hasNgramTables()) throw new Error("SQLite FTS5 搜尋索引不可用，無法安全升級。");
+    const documents = this.db.prepare(`SELECT d.id, d.path, d.filename FROM documents d
+      WHERE NOT EXISTS (SELECT 1 FROM index_migration_documents m
+        WHERE m.version = ? AND m.document_id = d.id)
+      ORDER BY d.id`).all(NGRAM_MIGRATION_VERSION) as { id: number; path: string; filename: string }[];
+    const total = Number((this.db.prepare("SELECT count(*) AS count FROM documents").get() as { count: number }).count);
+    let completed = total - documents.length;
+    options.onProgress?.({ stage: "upgrade", message: "建立 unigram／trigram 搜尋 postings", current: completed, total });
+    const writes = this.writes();
+    for (const document of documents) {
+      throwIfAborted(options.signal);
+      options.onProgress?.({ stage: "upgrade", message: "建立 unigram／trigram 搜尋 postings", current: completed, total, path: document.path });
+      const blocks = [...this.streamBlocksFor(document.id)];
+      const normalized = normalizeSearchText(searchableDocumentText(document.filename, blocks));
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        writes.deleteNgramUnigrams.run(document.id);
+        writes.deleteNgramTrigrams.run(document.id);
+        writes.insertNgramUnigrams.run(document.id, unigramText(normalized));
+        writes.insertNgramTrigrams.run(document.id, normalized);
+        writes.insertNgramMigration.run(NGRAM_MIGRATION_VERSION, document.id);
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+      completed++;
+      options.onProgress?.({ stage: "upgrade", message: "建立 unigram／trigram 搜尋 postings", current: completed, total, path: document.path });
+      await yieldToEvents();
+    }
+    throwIfAborted(options.signal);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('ngram_index_version', ?)").run(NGRAM_INDEX_VERSION);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    options.onProgress?.({ stage: "upgrade", message: "unigram／trigram 搜尋 postings 升級完成", current: total, total });
   }
 
   counts(): Record<string, number> {

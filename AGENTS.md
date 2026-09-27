@@ -12,7 +12,7 @@
 - 本儲存庫是正式的 Seekah（原 LocalDocSearch）產品，不得與上層工作區的教材網站混用。
 - 除非使用者明確變更，否則維持已決定的 Node.js 與 TypeScript 技術方向。
 - 所有文件處理都必須留在本機，不得將文件內容上傳至外部服務。
-- 核心 CLI 穩定前，不得加入 MCP、AI、embedding、OCR、GUI 或舊版 Office 格式。
+- 不得自行加入 OCR、embedding、LAN 暴露或未規格化的新格式。MCP、TUI、本機 GUI 與可選 AI API 已依後續 SPEC 交付；新增行為必須先寫入 SPEC／DECISIONS。
 - 不得自行改變產品行為；預定行為寫入 `docs/SPEC.md`，設計決策寫入 `docs/DECISIONS.md`。
 - 每次只實作 `docs/STATUS.md` 指定的進行中里程碑。
 - 每項行為變更都必須新增或更新自動測試。

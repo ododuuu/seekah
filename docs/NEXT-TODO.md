@@ -4,14 +4,21 @@
 - [x] 核准 TUI 規格與互動稿存入 [design/](design/SEEKAH-TUI.md)，交接集中 [handoff/CURRENT.md](handoff/CURRENT.md)。
 - [x] 在 0.36.1 落地核准的整體排版與完整焦點／鍵盤操作，不只增加 /select 或 /next；已以 80×24、120×40 render fixture 與真實 PTY 終端轉錄驗收。
 
-更新：2026-09-24。0.36.1 為程式基線；當前優先依 SPEC §47 實作 0.36.2 GUI，0.37.0 暫緩。公司 Windows 未驗項保留。
+更新：2026-09-26。程式基線為 0.36.2；0.37.0 已開工。階段 7、階段 1～6（日常局部更新、持久 queue、有界 scopes、可接續分批校正、登入啟動、all-terms pruning）已完成；本批另完成 FTS5 unigram／trigram postings 後端，package 尚未升版。公司 Windows 未驗項保留。
 
-## 當前優先：0.36.2 GUI
+## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
+
+- [x] A／B／C1／C2／D 在真實 store snapshot 上建置、2,000 查詢差分、延遲、成本模型與 migration 等價；見 [PROTOTYPE-RESULTS.md](research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md)。
+- [ ] 現行產品 bug：含 NUL（U+0000）且 ≥3 字的查詢丟出 FTS5 `unterminated string`；是否先修待決定。
+- [ ] ADR 前補證：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
+- [ ] 使用者依結果撰寫／核准 ADR 後，才寫 implementation SPEC。
+
+## 已完成：0.36.2 GUI
 
 - [x] 使用者核准工作台設計；SPEC §47、D059 與固定交接完成。
-- [ ] 正式三區 GUI、搜尋／分頁／選取、命中預覽、臨時文件與真實唯讀狀態。
-- [ ] 連線設定、精確上下文、失效確認、複製／送出與實際回答。
-- [ ] 正式瀏覽器尺寸／無障礙／安全驗收、完整回歸、升版與 GitHub 交付；詳見 handoff/0.36.2.md。
+- [x] 正式三區 GUI、搜尋／分頁／選取、命中預覽、臨時文件與真實唯讀狀態。
+- [x] 精確上下文只供本機預覽／複製（D066）；GUI 不提供 Provider、送出或 AI 回答。
+- [x] 本機瀏覽器操作、聚焦回歸、package 升至 0.36.2 並推送 GitHub；詳見 handoff/0.36.2.md。公司 Windows 實機複驗仍屬 P0。
 
 ## 已完成：0.36.1 correctness／UX
 
@@ -22,18 +29,25 @@
 - [x] README、STATUS、DECISIONS、HANDOFF 與 `0.36.1-VALIDATION.md` 已更新；package／lockfile 升至 0.36.1。
 - [ ] 公司 Windows 以無機密測試樹驗證 sibling 權限失敗、系統目錄排除及 80×24／120×40 TUI；不得以本機 PTY 代替。
 
-## 暫緩：0.37.0 performance／daily incremental
+## 進行中：0.37.0 performance／daily incremental／GUI 加入根目錄
 
-- [ ] 以正確 CMD／PowerShell profile 路徑取得 full reconciliation 的 enumerate、stat／compare、parser、compression／Bloom、write／commit 成本；相同資料至少三次，不以目前總耗時猜各階段比例。
-- [ ] 驗證並產品化既有 `autoupdate`：啟動校正完成後，單檔新增／修改／刪除只走事件路徑或最小子樹，不掃 30 萬檔；status 顯示 daemon 健康、最近局部事件、上次／下次完整校正與降級原因。
-- [ ] 明確文件化：`index` 是立即完整校正；`autoupdate start` 是已初次索引使用者的日常路徑。保留啟動、預設 6 小時、overflow／未知事件、ignore／roots 變更的完整校正安全網。
-- [ ] 測停止 daemon 期間的新增／修改／刪除，確認下次 start 的完整校正補回。持久事件 queue 只能保護 daemon 已觀察的事件，不得宣稱能補未執行期間。
-- [ ] 為 mixed long＋short `--all-terms` 建 benchmark；以所有 Bloom 可表示的必要長詞安全排除文件候選，候選文件仍全文精確核對。加入中英短詞、跨 block、舊／缺 Bloom、全部短詞與結果集合等價測試。
-- [ ] 按 SPEC §46.7 建獨立本機工作狀態庫：queue 世代、commit 後 ack、冪等重播、10,000 路徑上限與 dirty scope 降級；測 crash、落盤失敗、新事件與舊 ack 競態。
-- [ ] 拆分 root 直屬與子目錄 watcher scopes，handle 上限與粗 scope fallback；只對可定位的漏失做局部補掃，保留 Node 無法可靠回報 overflow 的安全網。
-- [ ] 按 §46.8 實作 directory frontier／generation、可中斷分批校正、事件優先與公平排程，釋放批次間 writer lock；測掃描與事件交錯的安全刪除、離線 gap、重啟與失敗 sibling。
-- [ ] `autoupdate startup enable|disable|status`：明確 opt-in 的目前使用者 Startup 捷徑，冪等／擁有權／路徑安全／政策拒絕；不得提權或安裝 Service。
-- [ ] 更新 README、0.37.0 驗證文件與 Windows 普通帳號驗收流程；USN 已依 D056 移出本版，勿再研究或要求管理員。parser 分流不重做，Paperless managed library 不納入。
+- [x] 0.37.0 版本契約寫入 SPEC §46.0～§46.11（含 GUI 加入根目錄畫面、忙碌拒絕與驗收）。
+- [x] **實作工作台加入新資料夾**（SPEC §46.11／D068／D072）：已有索引時，索引狀態頁按「選擇資料夾」開啟本機資料夾選擇器，選完後按「確認並建立索引」才開始；重用 `POST /api/index`；進行中可見拒絕 409，取消或未確認不送出。無效路徑既有根不變；臨時文件仍不入永久索引。公司 Windows 人工選取真實資料夾待驗。
+- [x] **實作工作台根目錄刪除與垃圾桶**（SPEC §46.11.6／D073）：已索引根目錄可勾選／全選後移除至垃圾桶；預設確認對話框支援「下次不再提醒」，設定可重新開啟；來源不刪除；垃圾桶可重新索引還原或永久刪除 metadata。聚焦工作台測試與 Chromium UI smoke 已完成。
+- [x] **階段 1 基線（2026-09-25）**：`--profile` 寫入 enumerate／stat／parse／compress／bloom／write／commit；本機合成資料三次量測。檔案事件走 `applyPathChange`／局部更新，status 顯示事件／局部更新／根目錄掃描與下次完整校正。公司大型庫 profile 仍待實機。
+- [x] 驗證既有 `autoupdate`：啟動校正完成後，單檔新增／修改／刪除走事件路徑；20 次 add／modify／delete 的 fake watcher 基線 root scan 為 0，搜尋可見延遲 < 15 秒。未知 filename 仍校正整根。status 含最後事件、局部更新、上次／下次完整校正。
+- [x] 文件化：`index` 是立即完整校正；`autoupdate start` 是已初次索引使用者的日常路徑。USER-GUIDE／CLI help／README 已更新。
+- [x] 持久事件 queue（階段 2）：獨立 `.work.sqlite`、世代 ack、downtime gap、10,000 路徑 dirty scope、落盤失敗降級。停止期間未落盤的變更仍靠下次啟動校正補回。
+- [x] mixed long＋short `--all-terms`：以所有不在檔名中的必要長詞安全排除文件候選；混合短詞仍全文精確核對。覆蓋中英文字、檔名命中、跨 block／payload、舊／缺 Bloom、全部短詞與結果集合等價；固定資料 benchmark 證據仍補於驗證文件。
+- [x] 按 SPEC §46.7 前半建獨立本機工作狀態庫：queue 世代、commit 後 ack、冪等重播、10,000 路徑上限與 dirty scope；測 crash、落盤失敗、新事件與舊 ack 競態、根隔離。
+- [x] 拆分 root 直屬與子目錄 watcher scopes，handle 上限 128 與 coarse fallback；可定位的未知事件只補掃該子樹。
+- [x] 按 §46.8 實作 directory frontier／generation、可中斷分批校正、事件優先與公平排程，釋放批次間 writer lock；測掃描與事件交錯的安全刪除、離線 gap、重啟與失敗 sibling。
+- [x] `autoupdate startup enable|disable|status`：Windows 目前使用者 Startup 捷徑，冪等／擁有權／路徑安全／政策拒絕；不得提權或安裝 Service。公司 Windows 真正登出登入仍待實機。
+- [x] 更新 README、USER-GUIDE、0.37.0 驗證文件與交接狀態；[ ] 公司 Windows 普通帳號驗收流程仍待實機。USN 已依 D056 移出本版，勿再研究或要求管理員。parser 分流不重做，Paperless managed library 不納入。
+
+- [x] **FTS5 ngram postings 搜尋後端（本批，SPEC §48／D076）**：unigram／trigram postings 作第一候選來源；exact／phrase／all-terms／檔名／snippet／stable reference、64 KiB payload 邊界與既有 pruning 保留。upsert／replace／delete 清理 postings；舊索引逐文件可取消／接續 migration；Workbench 對待升級 index 回 202 並自動重送。`m38`、既有 payload／Workbench focused tests、Chromium 202→resubmit smoke 與 baseline benchmark 已完成；最終 `npm test` 298 項為 293 通過、2 既有 win32 環境失敗、3 略過。
+- [x] **搜尋與 answer Diagnostics／Performance Trace（SPEC §49／D077-D078-D080）**：沿用既有 trace/log 契約；搜尋完整接入 postings／restricted ids、document／payload Bloom、payload lookup／decompression、exact verification、ranking、snippet 與 passage lookup；answer 接入 context／preview validation、provider／fallback、response parsing。search schema 3 提供 `phasesMs` inclusive、`phaseSelfMs` self、self／inclusive bottleneck、`payloadReadPasses`、`postingPayloadHits`、`expandedPayloads`、`fullDocumentFallbacks`、`filenameOnlyFallbacks`、`blockExpansionRatio`；實證 postings 只傳 document IDs，block reconstruction 不是每 payload N+1，page reread 會使 `payloadsRead` 與 `payloadsConsidered` 分離。程式內、MCP／Workbench response、`WorkbenchHandle.lastAnswerTrace()`、CLI `search --verbose`、獨立 `/traces` UI 與 `/api/traces` 可見；m38／m39 focused regression、logger rotation、Trace UI Chromium smoke 與編譯 CLI 實際 smoke 成功；公司 Windows 大型庫仍待。
+- [x] **Workbench 索引可回應／可恢復（SPEC §47.6／D079）**：手動索引由 worker thread 執行，`indexing.json` 原子保存狀態與進度；dead PID 重開顯示中斷並保留已提交文件；UI 每 750 ms 輪詢且保留 busy／locked 前次狀態。`m35`／`m37` 18 項與 1,200 份 Chromium smoke 通過；公司大型格式／30 萬檔 profile 仍待。
 
 ## P0：外部環境與真實資料證據
 

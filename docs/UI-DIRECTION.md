@@ -19,6 +19,10 @@
 
 Web UI 的 port、瀏覽器啟動、CSRF／token、CSP、生命週期及公司端點防護風險已由 loopback、fragment token、Host／Origin、嚴格 CSP、Ctrl+C 清理與自動測試建立第一版邊界；Windows 端點政策仍需公司實機驗證。
 
+## localhost 工作台視覺基準
+
+正式桌面工作台以 `design/ui-directions/paperless-inspired.html` 為視覺基準：58px 品牌列、246px 側欄、Paperless 式高密度文件清單、分割文件詳細頁、表格式根目錄管理，以及一致的垃圾桶與 modal 對話框。正式介面只呈現 server 真實提供的資料與操作；demo 中沒有後端契約的分數、完整文件內容或單檔刪除不得偽造。
+
 ## 建議分期
 
 1. 使用者後續明確要求同版完成；0.32.0 已交付 XLSM／ODT／RTF／CSV 與純 Node 終端互動介面。
