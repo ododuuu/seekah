@@ -1,8 +1,15 @@
-# 目前交接：Seekah 0.37.0 進行中（階段 7、1、2、3、4、5、6 已完成）
+# 目前交接：Seekah 0.38.0（block 級 FTS5 位置索引搜尋後端）
 
 更新：2026-09-27。
 
-**使用者已決定開始實作 0.37.0。package 仍為 0.36.2，待全部階段完成才升版。階段 7、1、2、3、4、5、6 與 desktop workbench clean cutover 已完成；本批另完成 SPEC §48／D076 FTS5 ngram postings，沒有 package 版本升級。公司 Windows 人工驗收尚未回報。**
+**package 為 0.38.0。本版以 block 級 FTS5 位置索引取代 Bloom／文件級 postings 候選（SPEC §50／D081），並包含從未單獨發布的 0.37.0 各階段。公司 Windows 人工驗收尚未回報。**
+
+- 從 [0.38.0.md](0.38.0.md) 開始：範圍、已完成、限制與下一步。
+- [0.38.0 驗證](../0.38.0-VALIDATION.md)：測試結果、真實 store 複本遷移與 benchmark、未驗證項。
+- [搜尋架構研究與 prototype](../research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md)：選擇 C2-hybrid 的證據。
+- 本批已檢視並更新使用手冊：舊索引升級（Workbench 202、CLI 寫入命令、唯讀 fallback）、索引大小變化、trace schema 4 的欄位說明。
+
+## 0.37.0 歷史交接（已併入 0.38.0）
 
 程式與 package／lockfile 仍為 0.36.2。正式工作台是 desktop-only 的 Paperless-inspired 資訊架構：58 px topbar、約 246 px 左導覽、中央文件頁與獨立明細 route；Preview list／Table 共用查詢與選取，已選上下文由 overlay drawer 開啟。根目錄、垃圾桶、臨時文件、設定與精確本機預覽均使用真實 loopback API；GUI 不顯示 Provider、model、API Key、AI question、送出或 answer。TUI 另依 SPEC §45.8／D063 改為 session-local 單欄 workflow。
 

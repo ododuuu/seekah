@@ -7,11 +7,13 @@ import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync } from "node:zlib";
 import { createSearchResultSet, search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { createLegacyStore } from "./legacy-index.js";
 
 test("M23 more than 32766 candidate payloads preserve a complete cross-payload block", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-many-payloads-"));
   const database = path.join(temp, "index.db");
-  let store = new IndexStore(database);
+  // Pre-0.38.0 payload Bloom path (still used until the block index migration finishes).
+  let store = createLegacyStore(database);
   try {
     store.upsert({ path: path.join(temp, "large.txt"), filename: "large.txt", extension: ".txt", sizeBytes: 1, modifiedAtMs: 1,
       status: "indexed", errorCode: null, errorMessage: null,
@@ -89,7 +91,8 @@ test("M23 keeps a phrase split at a payload boundary searchable", async () => {
 test("metadata mapping pruning only materializes selected block metadata", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-selected-metadata-"));
   const database = path.join(temp, "index.db");
-  let writer: IndexStore | undefined = new IndexStore(database);
+  // Pre-0.38.0 payload Bloom path (still used until the block index migration finishes).
+  let writer: IndexStore | undefined = createLegacyStore(database);
   try {
     const marker = "needle-739";
     const blocks = Array.from({ length: 256 }, (_, ordinal) => {

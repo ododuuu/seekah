@@ -628,8 +628,8 @@ export async function main(args: readonly string[]): Promise<number> {
     }
     if (command === "status") {
       const format = store.formatStatus();
-      console.log(`索引格式：文字儲存 ${format.contentStorageVersion ?? "舊版"}；payload Bloom ${format.payloadBloomVersion ?? "未完成"}；ngram postings ${format.ngramIndexVersion ?? "未完成"}`);
-      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（payload Bloom ${format.completedDocuments}/${format.totalDocuments}；ngram postings ${format.ngramCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。`);
+      console.log(`索引格式：文字儲存 ${format.contentStorageVersion ?? "舊版"}；block 搜尋索引 ${format.blockIndexVersion ?? "未完成"}${format.legacySearchStructures ? "；舊版 Bloom／文件 postings 仍保留（遷移完成後移除）" : ""}`);
+      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（block 搜尋索引 ${format.blockIndexCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。升級前搜尋使用舊路徑，結果相同但較慢。`);
       else console.log("儲存格式升級：已完成。");
       console.log(format.mappingIndexReady ? "輔助索引：document_payload_blocks.block_id 已就緒。" : "輔助索引：待下一次寫入程序升級；唯讀狀態不會強行寫入。");
       const pendingText = format.textUpgradeByExtension.map(item => `${item.extension}=${item.count}`).join("、");

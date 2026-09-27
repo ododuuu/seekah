@@ -663,7 +663,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           const ready = await openStore(options.databasePath, store => !store.formatStatus().needsUpgrade);
           if (!ready) {
             startIndex(undefined, true);
-            json(response, 202, { pendingUpgrade: true, message: "索引搜尋 postings 尚未完成；背景升級完成後會自動搜尋。" });
+            json(response, 202, { pendingUpgrade: true, message: "block 搜尋索引尚未完成；背景升級完成後會自動搜尋。" });
             return;
           }
         }

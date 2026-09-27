@@ -39,7 +39,8 @@ Seekah 只在 `127.0.0.1` 啟動本機工作台。若瀏覽器沒有自動開啟
 
 1. 在頂列或文件頁搜尋欄輸入關鍵字，選擇 `phrase` 或 `all-terms`，按「搜尋」。
 2. 每列顯示檔名、格式、完整路徑、命中原因、位置與 server 片段。Preview list／Table 只是兩種顯示，不會改變查詢或選取集合。
-   舊索引第一次搜尋任意非空查詢時，工作台會在背景建立 unigram／trigram postings；API 暫回 202，畫面保留原查詢並在完成後自動重送。CLI `search`、`status` 與 MCP 是唯讀，不會偷偷升級；它們在 migration 未完成時使用保守舊候選路徑。
+   0.38.0 起，搜尋使用 block 級搜尋索引，排序前不必解壓文件正文。0.38.0 以前建立的索引第一次在工作台搜尋時，會在背景建立這個索引：API 暫回 202，畫面保留原查詢並在完成後自動重送。CLI 的 `index` 等寫入命令也會先完成升級。升級逐批提交、可中斷，下次會從中斷處接續；完成後會移除舊版 Bloom 與文件級 postings。
+   索引檔約變為原本的 2.4 倍（實例：23.5 萬份文件 1.37 GiB → 約 3.3 GiB），SQLite 檔案不會自動縮小。本機 23.5 萬份文件的一次性升級約 35 分鐘。CLI `search`、`status` 與 MCP 是唯讀，不會偷偷升級；升級完成前它們使用舊候選路徑，結果相同但較慢。
 3. 點「檢視」進入明細；在結果、明細或上下文抽屜按「開啟檔案」／「顯示位置」，只送出該結果的 stable reference，不送任意路徑。
 4. 開啟前，Seekah 會用搜尋結果的文件代碼重新確認檔案仍位於已索引根目錄、不是連結、是可讀的一般檔案。檔案已移動、刪除或索引過期時會拒絕操作，請重新搜尋或重新索引。
 
@@ -75,7 +76,8 @@ node dist/src/cli.js search "付款 例外 規格" --all-terms
 node dist/src/cli.js search "合約" --verbose
 node dist/src/cli.js status
 ```
-加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 3 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
+加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 4 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
+0.38.0 的 `candidateStrategy` 為 `block-index`（結果內搜尋為 `block-index+restricted-ids`）；`indexPostingRows` 是檔名／heading／block 索引回傳列數，`indexCandidateBlocks` 是命中的 content block 數，`indexVerifiedBlocks` 只在含 U+0000 的查詢回讀正文驗證時大於 0。排序階段的 `payloadsRead` 應為 0，只剩當頁 snippet 的回讀。以下 payload 欄位說明適用於升級完成前的舊路徑：
 `postings` 只回傳文件 ID，不回傳 payload ordinal；payload-level pruning 與 block reconstruction 的數字分別看 `payloadsAfterPruning`、`expandedPayloads` 與 `blockExpansionRatio`。`payloadsRead` 是所有實際 stream pass 的總和，page materialization 可能重新讀取同一文件，因此不必等於或小於 `payloadsConsidered`。
 診斷慢查詢時，`diagnostics.payloadSql` 分開顯示 metadata、owning-block mapping、blob 查詢的 prepare／execute 次數與時間；execute 含 SQLite 回傳 JS rows／blob 的成本，不等於純磁碟 I/O。`blocksMetadataRows` 是 metadata query 回傳列數，`owningBlockMappingRows` 只含獨立 `blockSource` mapping rows；filtered ranking／snippet 的 selected CTE 內部 mapping 不重複計數。`candidatePayloadOrdinals`、`owningBlocksFound`、`blockExpansionInputPayloads` 可對照候選 payload、selected owners 與 block expansion 輸入。`diagnostics.payloadReads` 分開 ranking、snippet 回讀與其他讀取；`uniquePayloadsRead`／`duplicatePayloadsRead` 可辨識跨 pass 重讀。`compressedBytesRead`／`decompressedBytes` 包含實際重讀／解壓量；`payloadBrotliMs` 與 `payloadDecodeParseMs` 是 decompression phase 的子計時，不能再相加到總 phase。`exactTextMs` 是 block 正規化／比對，不等於包含重建與 Map 成本的 exact self。詳細量測與限制見 [0.37.0 驗證](0.37.0-VALIDATION.md)。
 

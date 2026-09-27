@@ -1,5 +1,31 @@
 # 設計決策紀錄
 
+## D081：0.38.0 搜尋改用 block 級 FTS5 位置索引（C2-hybrid），Bloom 與文件級 postings 退為遷移期 fallback
+
+- 日期：2026-09-27。依據 `research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md`：在真實 235,463 份文件 store 的唯讀 snapshot 上，比較 A（現況）、B（payload 級 postings）、C1（block 級 `detail=none`）、C2（block 級 `detail=full`）、D（fts5vocab 最稀有 trigram）五種索引。使用者於 2026-09-27 授權「依你認為最好的做法實作並發布」，本 ADR 據此核准。
+- 根因：文件級 postings 只能指出「哪份文件」，候選確定後必須解壓並逐 block 驗證整份文件；成本與候選文件 bytes 成正比，實測約 42 ms／MB（R² 0.98）。固定 1 KiB Bloom 在 64 KiB payload 上已飽和，無法定位文件內位置。
+- 決定：content 以 block 為 FTS row（rowid＝`blocks.id`）。
+  - 三個以上 code point：trigram `detail=full`，以 phrase 查詢證明連續出現，排序前不讀正文。
+  - 一、二個 code point：`detail=none` 的 unigram／bigram token，本身就是精確判斷。
+  - 檔名與 heading 各自有小型 trigram／unigram／bigram 表，候選以明文驗證。
+  - rank、代表 block、all-terms 覆蓋度、`field`／`sort`／篩選語意完全不變。
+  - payload 只在當頁 snippet 與 passages 讀取。
+- 證據：2,000 查詢差分與暴力 ground truth 完全相同（含 snippet）。`SPEC.md` 12.8 s→4 ms，`測試` 5.2 s→2 ms，`ing` 39.5 s→0.86 s。kill／resume 與 delete／reinsert 均與 clean build 等價。
+- 代價：store 約從 1.37 GiB 增至約 2.9 GiB；每文件刪除成本與 block 數成正比。命中十萬筆以上的查詢（例如單字 `e`）仍約 3 s，瓶頸在結果集大小；total count／top-K 另行決策，本版不改分頁與總數語意。
+- 否決：
+  - B：常見 ASCII 查詢仍 O(bytes)。
+  - C1：≥3 字仍需讀正文，`ing` 仍約 5.9 s。可作為大小預算不足時的備案。
+  - D：fts5vocab instance 會把 offset 全部送進 JS，常見詞比原生 phrase 慢約 8 倍。
+  - 外部 sidecar：沒有必要承擔部署與跨庫一致性風險。
+  - 以 unigram `detail=full` 做短詞：大小是 token 表的兩倍，精確度相同。
+- 相容：舊 index 仍保留 D076 路徑，直到 writer 以逐文件 marker（`block_index_1`）完成遷移；唯讀 CLI／MCP 不遷移，未完成時只走舊路徑。
+  - 遷移完成時，同一交易刪除 `document_blooms`、`document_payload_blooms`、`search_unigrams`、`search_trigrams`，之後的寫入不再產生它們。
+  - fresh index 從不建立這些結構；DB 檔不做 VACUUM，釋放的 page 由新索引重用。
+  - 舊路徑程式碼只為遷移期保留，日後可移除。
+- trigram 表一律使用 `case_sensitive 1`：實作時的差分測試發現，預設 trigram 會再做一次 case folding，把 `ΣΟΦΟΣ`→`σοφος` 查詢誤配到 `σοφοσreport`（JS 的 final sigma 取決於上下文），prototype 的查詢集沒有抽到這種情況。由於文字與查詢已先由 JS 正規化，關閉 folding 後 phrase 就是精確的 code point 子字串。
+- 含 U+0000 的 ≥3 字查詢無法寫成 FTS5 字串（SQLite 會截斷），改以 unigram token AND 取候選後讀正文驗證；舊路徑的同一錯誤一併改走保守 fallback，不再丟出 `unterminated string`。
+- 版本：0.37.0 從未發布，因此 0.38.0 同時包含 0.37.0 各階段與本搜尋後端；公司 Windows 驗收仍未回報，不得宣稱通過。
+
 ## D080：搜尋效能診斷先補 payload／nested phase 可觀測性，不改搜尋架構
 
 - 日期：2026-09-26。使用者提供的 `測試`／`SPEC.md` trace 顯示 postings 查詢只有毫秒級，主要成本落在 payload lookup、Brotli／JSON 解壓與 exact verification；先證明候選傳遞與 fallback，再決定是否優化，不新增第二套 index、不把猜測當根因。

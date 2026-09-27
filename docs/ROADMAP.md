@@ -2,7 +2,7 @@
 
 更新：2026-09-25。以自己每天用得順為成功標準，作品集／在職碩為加值，星數不是目標。
 
-目前程式基線與 package：**0.36.2**。0.37.0 的 GUI 加入根目錄、日常局部更新、持久 queue、有界 watcher scopes、可接續分批校正、普通使用者登入啟動與 mixed all-terms pruning 已實作；只剩公司 Windows／真實 Host 人工驗收。沒有 0.38.0。本版起以版本號作唯一里程碑名稱，不再新增 M 編號。
+目前程式基線與 package：**0.38.0**。0.38.0 以 block 級 FTS5 位置索引取代 Bloom／文件級 postings 候選（SPEC §50），並包含 0.37.0 的 GUI 加入根目錄、日常局部更新、持久 queue、有界 watcher scopes、可接續分批校正、普通使用者登入啟動與 mixed all-terms pruning；公司 Windows／真實 Host 人工驗收仍待回報。本版起以版本號作唯一里程碑名稱，不再新增 M 編號。
 
 ## 目標與界線
 

@@ -1,8 +1,17 @@
 # 專案狀態
 
-最後更新：2026-09-27（0.37.0 進行中；desktop workbench clean cutover 已完成。package 仍為 0.36.2）
+最後更新：2026-09-27（package 0.38.0：block 級 FTS5 位置索引搜尋後端；併入 0.37.0 各階段）
 
 ## 目前狀態
+
+- **2026-09-27 0.38.0**：依 SPEC §50／D081 實作 C2-hybrid 搜尋後端。
+  - 索引：content 用 block 級 trigram `detail=full`（`case_sensitive 1`）phrase 加 unigram／bigram token；檔名與 heading 各自建表。排序前不讀正文，payload 只供當頁 snippet／passages。
+  - 遷移：舊 index 由 writer 逐批遷移（`block_index_1`，可取消接續），完成後刪除 Bloom 與文件級 postings；唯讀 CLI／MCP 在遷移前走舊路徑。
+  - 修正：含 U+0000 查詢的 `unterminated string` 錯誤。
+  - 實作期發現：預設 trigram tokenizer 會把 final sigma 折疊而多出命中，已改為 `case_sensitive 1`，並寫入 D081。
+  - 測試：新增 m40（新舊路徑差分等價、刪除清理與 id 重用、U+0000、長壽 writer 在他處完成遷移後繼續寫入）；`npm test` 結果見 `0.38.0-VALIDATION.md`（M26 path coverage、M36 profile chmod 兩項既有 win32 環境失敗仍在）。
+  - 真實 235,463 文件 store 複本：遷移後 10 個 benchmark 查詢的結果 hash 全與 0.37 產品相同，排序階段 payload 讀取為 0；延遲與大小見 `benchmark-block-index-2026-09-27.json`。
+  - 本機 win32 證據，不是公司 Windows 驗收。
 
 - **目前 package 仍為 0.36.2；0.37.0 已開工。** CURRENT 進行中版本為 0.37.0。索引／autoupdate 階段 1–7 已完成；desktop workbench 已依 SPEC §47.9／D074 完成 clean cutover。公司 Windows 真實資料與大型庫 profile 尚未完成。
 - 2026-09-27 搜尋架構 prototype（研究，未改 `src/`、未改產品行為）：依 `PROTOTYPE-HANDOFF.md`，在真實 235,463 文件 store 的唯讀 snapshot 上建置並比較 A（現況）／B（payload 級 postings）／C1（block 級 FTS5 `detail=none`）／C2（block 級 `detail=full`）／D（fts5vocab 最稀有 trigram）。2,000 查詢差分測試對暴力 ground truth：B／C1／C2／D 的結果、排序與 snippet 全部相同；A 有 1 個含 NUL 查詢的既有錯誤（`unterminated string`，未修）。本機 p50：`SPEC.md` A 12.8 s → C2 4 ms，`測試` 5.2 s → 2 ms，`ing` 39.5 s → 0.86 s。C2 store 估計 3.33 GiB（現況 1.37 GiB）；建議進 ADR 的 C2-hybrid（trigram `full`＋C1 unigram／bigram token）約 2.9 GiB。A 的成本斜率實測約 42 ms／MB（非 20）。kill／resume 與 delete／reinsert 等價已驗證。結果與待辦見 `research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md`，程式在 `scripts/prototype-search/`。ADR 尚未撰寫、未核准；不是公司 Windows 驗收。

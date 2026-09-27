@@ -314,10 +314,190 @@ function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockR
   return { result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
     modifiedAtMs: document.modified_at_ms, heading: block?.heading ?? null,
     location: block?.location_value ?? null, snippet: "", rank: effectiveRank,
-    reason: mode === "all-terms" ? ["", "內容（全部關鍵字）", "標題（全部關鍵字）", "檔名包含（全部關鍵字）", "檔名完全符合"][effectiveRank]!
-      : ["", "內容", "標題", "檔名包含", "檔名完全符合"][effectiveRank]!,
+    reason: rankReason(mode, effectiveRank),
     filenameOnly: !block, status: document.status, snippetTruncated: false },
     documentId: document.id, ordinal: block?.ordinal ?? null, sourceKind };
+}
+
+function rankReason(mode: SearchMode, rank: number): string {
+  return mode === "all-terms" ? ["", "內容（全部關鍵字）", "標題（全部關鍵字）", "檔名包含（全部關鍵字）", "檔名完全符合"][rank]!
+    : ["", "內容", "標題", "檔名包含", "檔名完全符合"][rank]!;
+}
+
+type IndexedRank = { rank: number; sourceKind: RankedSearchResult["sourceKind"]; ordinal: number | null };
+
+/**
+ * SPEC §50.2: the same ranking as rankDocument(), computed from the block
+ * index instead of reading document content. Filename and heading candidates
+ * are verified on their plain text; content hits are exact.
+ */
+function indexedHits(store: IndexStore, query: string, terms: readonly string[], mode: SearchMode, field: SearchField,
+  types: readonly string[] | undefined, root: string | undefined, subtree: string | undefined,
+  statuses: readonly DocumentStatus[] | undefined, restrictIds: readonly number[] | undefined,
+  trace: SearchTraceRecorder): RankedSearchResult[] {
+  trace.addCandidateSource("block-index");
+  const restrict = restrictIds ? [...new Set(restrictIds)] : undefined;
+  const allowed = restrict ? new Set(restrict) : undefined;
+  if (restrict) trace.addCandidateSource("restricted-ids");
+  trace.setCount("documentsInScope", restrict ? restrict.length : store.documentsInScope(types, root, subtree));
+  const documents = new Map<number, StoredDocumentRow>();
+  const fetched = new Set<number>();
+  const load = (ids: Iterable<number>) => {
+    const missing = [...ids].filter(id => !fetched.has(id) && (!allowed || allowed.has(id)));
+    for (const id of missing) fetched.add(id);
+    if (!missing.length) return;
+    // Restricted ids (search within results) ignore type／root scope, as streamCandidatesByIds does.
+    const rows = restrict ? store.indexDocuments(missing, undefined, undefined, undefined, trace)
+      : store.indexDocuments(missing, types, root, subtree, trace);
+    for (const row of rows) {
+      if (statuses?.length && !statuses.includes(row.status)) continue;
+      documents.set(Number(row.id), row);
+    }
+  };
+  const verify = <T>(work: () => T): T => {
+    const phase = trace.beginPhase("exactVerification");
+    try { return work(); } finally { trace.endPhase(phase); }
+  };
+  const ranks = new Map<number, IndexedRank>();
+
+  // Filename: 4 exact, 3 contains every term; it wins over any block hit.
+  if (field !== "content") {
+    let candidates: Set<number> | undefined;
+    for (const term of terms) {
+      const ids = store.indexFilenameCandidates(term, trace);
+      candidates = candidates ? new Set(ids.filter(id => candidates!.has(id))) : new Set(ids);
+      if (!candidates.size) break;
+    }
+    load(candidates ?? []);
+    verify(() => {
+      for (const id of candidates ?? []) {
+        const document = documents.get(id);
+        if (!document) continue;
+        trace.increment("documentsExactVerified");
+        const filename = normalize(document.filename);
+        const rank = filename === query ? 4 : includesAll(filename, terms) ? 3 : 0;
+        if (rank) ranks.set(id, { rank, sourceKind: "filename", ordinal: null });
+      }
+    });
+  }
+
+  if (field !== "filename") {
+    // Distinct headings (first ordinal) that really contain each term.
+    const headingHits = new Map<string, { documentId: number; ordinal: number; heading: string; normalized: string }[]>();
+    for (const term of new Set(terms)) {
+      const candidates = store.indexHeadingCandidates(term, trace);
+      headingHits.set(term, verify(() => candidates
+        .filter(row => !allowed || allowed.has(row.documentId))
+        .map(row => ({ ...row, normalized: normalize(row.heading) }))
+        .filter(row => row.normalized.includes(term))));
+    }
+    const headingAll = new Map<number, number>();
+    for (const row of headingHits.get(terms[0]!)!) {
+      if (!includesAll(row.normalized, terms)) continue;
+      const previous = headingAll.get(row.documentId);
+      if (previous === undefined || row.ordinal < previous) headingAll.set(row.documentId, row.ordinal);
+    }
+    const contentAll = store.indexContentFirstBlocks(terms, restrict, trace);
+    const blockRank = (documentId: number): IndexedRank | undefined => {
+      const heading = headingAll.get(documentId);
+      if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
+      const content = contentAll.get(documentId);
+      return content === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: content };
+    };
+
+    if (mode === "phrase") {
+      const candidates = new Set([...headingAll.keys(), ...contentAll.keys()].filter(id => !ranks.has(id)));
+      load(candidates);
+      for (const id of candidates) {
+        if (!documents.has(id)) continue;
+        trace.increment("documentsExactVerified");
+        ranks.set(id, blockRank(id)!);
+      }
+    } else {
+      // all-terms: every term not in the filename must occur in some heading or block.
+      const present = new Map<string, Set<number>>();
+      for (const term of new Set(terms)) {
+        const set = new Set(headingHits.get(term)!.map(row => row.documentId));
+        const single = terms.length === 1 ? contentAll : store.indexContentFirstBlocks([term], restrict, trace);
+        for (const id of single.keys()) set.add(id);
+        present.set(term, set);
+      }
+      const candidates = new Set<number>();
+      for (const set of present.values()) for (const id of set) if (!ranks.has(id)) candidates.add(id);
+      load(candidates);
+      const representatives: number[] = [];
+      verify(() => {
+        for (const id of candidates) {
+          const document = documents.get(id);
+          if (!document) continue;
+          trace.increment("documentsExactVerified");
+          const filename = normalize(document.filename);
+          const unmatched = terms.filter(term => field === "content" || !filename.includes(term));
+          if (!unmatched.every(term => present.get(term)!.has(id))) continue;
+          const ranked = blockRank(id);
+          if (ranked) ranks.set(id, ranked);
+          else representatives.push(id);
+        }
+      });
+      if (representatives.length) {
+        // Coverage representative: heading source when the heading holds any term,
+        // otherwise block content; best coverage, then heading, then smallest ordinal.
+        const best = new Map<number, { coverage: number; headingHit: boolean; ordinal: number }>();
+        const offer = (documentId: number, candidate: { coverage: number; headingHit: boolean; ordinal: number }) => {
+          const current = best.get(documentId);
+          if (!current || candidate.coverage > current.coverage || (candidate.coverage === current.coverage
+            && (Number(candidate.headingHit) > Number(current.headingHit)
+              || (candidate.headingHit === current.headingHit && candidate.ordinal < current.ordinal)))) best.set(documentId, candidate);
+        };
+        const wanted = new Set(representatives);
+        const headingSeen = new Set<string>();
+        for (const rows of headingHits.values()) {
+          for (const row of rows) {
+            const key = `${row.documentId}:${row.ordinal}:${row.heading}`;
+            if (!wanted.has(row.documentId) || headingSeen.has(key)) continue;
+            headingSeen.add(key);
+            offer(row.documentId, { coverage: terms.filter(term => row.normalized.includes(term)).length, headingHit: true, ordinal: row.ordinal });
+          }
+        }
+        const contentTerms = new Map<string, { documentId: number; ordinal: number; terms: Set<string> }>();
+        for (const term of new Set(terms)) {
+          for (const block of store.indexContentBlocks([term], representatives, trace)) {
+            // A block whose heading holds any term is represented by its heading (offered above).
+            if (block.heading && terms.some(item => normalize(block.heading!).includes(item))) continue;
+            const key = `${block.documentId}:${block.ordinal}`;
+            let entry = contentTerms.get(key);
+            if (!entry) contentTerms.set(key, entry = { documentId: block.documentId, ordinal: block.ordinal, terms: new Set() });
+            entry.terms.add(term);
+          }
+        }
+        for (const entry of contentTerms.values()) {
+          offer(entry.documentId, { coverage: terms.filter(term => entry.terms.has(term)).length, headingHit: false, ordinal: entry.ordinal });
+        }
+        for (const [id, candidate] of best) {
+          ranks.set(id, { rank: 1, sourceKind: candidate.headingHit ? "heading" : "content", ordinal: candidate.ordinal });
+        }
+      }
+    }
+  }
+
+  const blockKeys = [...ranks].filter(([, ranked]) => ranked.ordinal !== null).map(([id, ranked]) => [id, ranked.ordinal!] as const);
+  const display = store.indexBlockDisplay(blockKeys);
+  trace.setCount("documentsConsidered", fetched.size);
+  const order = restrict ?? [...ranks.keys()];
+  const results: RankedSearchResult[] = [];
+  for (const id of order) {
+    const ranked = ranks.get(id);
+    const document = documents.get(id);
+    if (!ranked || !document) continue;
+    const block = ranked.ordinal === null ? undefined : display.get(`${id}:${ranked.ordinal}`);
+    if (ranked.sourceKind === "filename") trace.increment("filenameOnlyFallbacks");
+    trace.increment("documentsMatched");
+    results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
+      modifiedAtMs: document.modified_at_ms, heading: block?.heading ?? null, location: block?.location ?? null, snippet: "",
+      rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: !block, status: document.status, snippetTruncated: false },
+    documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
+  }
+  return results;
 }
 
 export function collectHits(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
@@ -329,24 +509,30 @@ export function collectHits(store: IndexStore, rawQuery: string, types?: readonl
     const { query, terms } = queryTerms(rawQuery, mode);
     recorder.addPhase("queryNormalization", performance.now() - normalizationStarted);
     recorder.setNormalizedQuery(query);
-    const results: RankedSearchResult[] = [];
-    const source = restrictIds
-      ? store.streamCandidatesByIds(restrictIds, terms, mode === "all-terms", recorder)
-      : store.streamCandidates(types, root, terms, mode === "all-terms", subtree, recorder);
-    for (const { document, blocks, pruned } of source) {
-      if (statuses?.length && !statuses.includes(document.status)) continue;
-      if (pruned) continue;
-      recorder.increment("documentsExactVerified");
-      const verification = recorder.beginPhase("exactVerification");
-      let ranked: RankedSearchResult | undefined;
-      try {
-        ranked = rankDocument(document, blocks, query, terms, mode, field, recorder);
-      } finally {
-        recorder.endPhase(verification);
-      }
-      if (ranked) {
-        recorder.increment("documentsMatched");
-        results.push(ranked);
+    let results: RankedSearchResult[];
+    if (store.blockIndexReady()) {
+      results = indexedHits(store, query, terms, mode, field, types, root, subtree, statuses, restrictIds, recorder);
+    } else {
+      // Pre-0.38.0 index whose block migration has not finished (SPEC §50.2).
+      results = [];
+      const source = restrictIds
+        ? store.streamCandidatesByIds(restrictIds, terms, mode === "all-terms", recorder)
+        : store.streamCandidates(types, root, terms, mode === "all-terms", subtree, recorder);
+      for (const { document, blocks, pruned } of source) {
+        if (statuses?.length && !statuses.includes(document.status)) continue;
+        if (pruned) continue;
+        recorder.increment("documentsExactVerified");
+        const verification = recorder.beginPhase("exactVerification");
+        let ranked: RankedSearchResult | undefined;
+        try {
+          ranked = rankDocument(document, blocks, query, terms, mode, field, recorder);
+        } finally {
+          recorder.endPhase(verification);
+        }
+        if (ranked) {
+          recorder.increment("documentsMatched");
+          results.push(ranked);
+        }
       }
     }
     const rankingStarted = performance.now();

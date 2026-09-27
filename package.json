@@ -1,6 +1,6 @@
 {
   "name": "seekah",
-  "version": "0.36.2",
+  "version": "0.38.0",
   "private": true,
   "description": "Local-first document search, context selection, MCP and desktop workbench",
   "type": "module",

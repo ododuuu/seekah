@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.36.2 本機實作完成（第 47 節）。0.37.0 版本契約為第 46 節（§46.0～§46.11）；CURRENT 已切換，階段 7、1、2、3、4、5、6 已實作。
-- 日期：2026-09-25
-- 狀態：package 仍為 0.36.2。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
+- 規格基線：0.38.0（第 50 節 block 級 FTS5 位置索引搜尋後端）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 日期：2026-09-27
+- 狀態：package 為 0.38.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1483,3 +1483,62 @@ docsearch doctor
 
 - 行為測試必須覆蓋 postings、Bloom fallback pruning、SearchSession restricted refinement、passage lookup、CLI `--verbose` JSON、Workbench answer fallback trace，以及 phase finite、候選／文件／payload／answer counts、結果數與不因 trace 改變 read-only 行為。
 - 行為測試另須覆蓋 payload ordinal 只在 `document_payload_blooms`／`document_payload_blocks` 間傳遞、block expansion、full-document／filename-only fallback、`payloadsRead` 與 `payloadsConsidered` 可因 page reread 分離，以及 inclusive／self phase timing 不把 parent 與 child 重複計入 bottleneck；完整回歸後須提供實際瀏覽器頁面與 log 路徑證據。
+
+## 50. 0.38.0：block 級 FTS5 位置索引搜尋後端
+
+依 D081。本節只改變候選與命中判定的資料結構；搜尋結果（集合、排序、rank、代表 block、heading／location、snippet、總數、分頁、stable reference）必須與既有語意（§14、§46、§48 的 exact normalized substring 規則）完全相同。
+
+### 50.1 索引資料
+
+- content：每個 content 非空的 block 一列，rowid＝`blocks.id`，文字＝`content.normalize("NFKC").toLowerCase()`。
+  - `search_block_trigrams`：FTS5 contentless、`contentless_delete=1`、`detail=full`、`trigram case_sensitive 1` tokenizer。文字與查詢已先經 NFKC＋`toLowerCase()`；tokenizer 不得再做 case folding，否則會把希臘 final sigma `ς` 折成 `σ` 而多出命中。
+  - `search_block_unigrams`：`detail=none`，每個 code point 一個 `u<hex>` token，同一 block 內去重。
+  - `search_block_bigrams`：`detail=none`，每對相鄰 code point 一個 `b<hex>x<hex>` token，同一 block 內去重。
+- 檔名：`search_filename_trigrams`／`_unigrams`／`_bigrams`，rowid＝`documents.id`，文字為正規化檔名；每份文件（含 metadata-only 文件）一列。
+- heading：`search_headings(id, document_id, min_ordinal, heading)` 對每份文件的不同 heading 去重，並記錄最小 ordinal；`search_heading_trigrams`／`_unigrams`／`_bigrams` 的 rowid＝`search_headings.id`。
+- metadata `block_index_version=1`；每份文件以 `index_migration_documents(version='block_index_1')` 記錄完成。
+- 正文仍只存在既有 64 KiB Brotli payload，作為 snippet 與 passages 的 docstore。
+
+### 50.2 查詢
+
+- 以正規化後的 code point 數選表：1 → unigram token、2 → bigram token、≥3 → trigram。
+  - content 的 ≥3 字以 phrase 查詢，直接視為命中，不讀正文。
+  - 檔名與 heading 的候選以明文 `normalize().includes()` 驗證。
+  - 含 U+0000 的 ≥3 字查詢改以 unigram token AND 取候選，再讀 block 正文驗證。
+- phrase：
+  - 檔名完全相同 4、包含 3，此時不看 heading／content。
+  - 否則有 heading 命中為 2（代表 block＝最小 ordinal 的命中 heading），否則有 content 命中為 1（代表 block＝最小 ordinal 的命中 block）。
+- all-terms：與 `rankDocument()` 相同：
+  - 檔名以外的 term 必須都出現在文件的 heading 或 content。
+  - 同一 heading 含全部 term 為 2；同一 block content 含全部 term 為 1。
+  - 否則以覆蓋度代表 block 作 1：heading 含任一 term 時以 heading 為來源；依覆蓋度、heading 優先、最小 ordinal 取代表。
+- `field=filename` 只看檔名，`field=content` 不看檔名。type、root、subtree、status 篩選套用在 documents；`sort` 與 restricted ids（結果內搜尋，保留輸入順序）語意不變。
+- 排序前不得讀取 payload；snippet 只為當頁結果讀取代表 block。
+- 索引未完成（`block_index_version` 不是 1）時，使用 §48 舊路徑。舊路徑遇到含 U+0000 的 ≥3 字查詢時，改用不含 postings 的保守 fallback，不得丟出錯誤。
+
+### 50.3 寫入、刪除與遷移
+
+- upsert、touchMetadata、replace、removeDocument、removeMissing、clearDocuments、removeRoot、moveRootsToTrash 必須在同一 writer transaction 內清除舊的 block／檔名／heading rows，並寫入新 rows 與 marker；replace 不改 document ID。
+- fresh index 直接設 `block_index_version=1`，不建立 `document_blooms`、`document_payload_blooms`、`search_unigrams`、`search_trigrams`。
+- 舊 index 的 writer upgrade 逐文件 transaction 寫入新索引與 marker，檢查 AbortSignal，取消後從缺 marker 的文件接續；不得改寫 payload bytes。
+  - 遷移期間的 upsert 同時維護舊結構與新結構。
+  - 全部完成時，在同一交易設定 version，刪除上述四個舊結構、其 migration markers，以及 `payload_bloom_version`／`ngram_index_version` metadata。
+  - read-only 開啟一律不建表、不寫入。
+- `formatStatus` 揭露 `blockIndexVersion`、`blockIndexCompletedDocuments` 與 `legacySearchStructures`；`needsUpgrade` 在 block index 未完成時為真。CLI `status` 與 MCP `index_status` 顯示相同資訊。
+
+### 50.4 Trace
+
+- search trace schema version 4：
+  - 新增 candidate source `block-index` 與 strategy `block-index`、`block-index+restricted-ids`。
+  - 新增 counts `indexPostingRows`、`indexCandidateBlocks`、`indexVerifiedBlocks`。
+  - 其餘欄位與 schema 3 相同；新路徑的 `postingsLookup`、`exactVerification`、`resultRanking`、`snippet` phase 各自計時。
+
+### 50.5 驗收
+
+- 行為測試覆蓋：
+  - 查詢語意：1／2／≥3 字與 NFKC／大小寫；phrase 與 all-terms 的 rank 與代表 block（含 heading 優先、覆蓋度代表）；`field`／`sort`／type／root／subtree／status／restricted ids；跨 64 KiB payload 的 block；含 U+0000 查詢（新舊路徑）；snippet 與 stable reference。
+  - 索引維護：replace／delete／removeMissing／root 刪除後 rows 清理；fresh index 無舊結構。
+  - 遷移：read-only 不遷移、取消與接續、完成後刪除舊結構，以及舊路徑與新路徑的結果相同。
+- 以隨機查詢比對新路徑與逐文件暴力核對的等價測試。
+- 在真實 store 複本上重跑 prototype 的 benchmark 查詢，確認 p50 與 PROTOTYPE-RESULTS 的 C2-hybrid 一致。
+- package 版本 0.38.0。

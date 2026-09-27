@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export const SEARCH_TRACE_SCHEMA_VERSION = 3;
+export const SEARCH_TRACE_SCHEMA_VERSION = 4;
 
 export const searchTracePhases = [
   "queryNormalization",
@@ -22,6 +22,7 @@ export type SearchTraceField = "all" | "filename" | "content";
 export type SearchTraceSort = "relevance" | "filename" | "modified";
 export type SearchTraceStatus = "success" | "error";
 export type SearchCandidateSource =
+  | "block-index"
   | "postings"
   | "restricted-ids"
   | "document-scan"
@@ -29,6 +30,8 @@ export type SearchCandidateSource =
   | "document-bloom"
   | "payload-bloom";
 export type SearchCandidateStrategy =
+  | "block-index"
+  | "block-index+restricted-ids"
   | "postings"
   | "postings+restricted-ids"
   | "restricted-ids"
@@ -74,6 +77,12 @@ export interface SearchTraceCounts {
   blockExpansionInputPayloads: number;
   candidatePayloadOrdinals: number;
   owningBlocksFound: number;
+  /** Rows returned by block／filename／heading index queries (SPEC §50.4). */
+  indexPostingRows: number;
+  /** Content blocks matched by the block index before grouping per document. */
+  indexCandidateBlocks: number;
+  /** Content blocks read back to verify a U+0000 unigram fallback. */
+  indexVerifiedBlocks: number;
   results: number;
   returnedResults: number;
 }
@@ -174,6 +183,9 @@ function emptyCounts(): SearchTraceCounts {
     blockExpansionInputPayloads: 0,
     candidatePayloadOrdinals: 0,
     owningBlocksFound: 0,
+    indexPostingRows: 0,
+    indexCandidateBlocks: 0,
+    indexVerifiedBlocks: 0,
     results: 0,
     returnedResults: 0,
   };
@@ -376,7 +388,9 @@ export class SearchTraceRecorder {
       if (phasesMs[phase] > phasesMs[inclusiveBottleneck]) inclusiveBottleneck = phase;
     }
     const sources = [...this.sources];
-    const candidateStrategy = sources.includes("postings")
+    const candidateStrategy = sources.includes("block-index")
+      ? sources.includes("restricted-ids") ? "block-index+restricted-ids" : "block-index"
+      : sources.includes("postings")
       ? sources.includes("restricted-ids") ? "postings+restricted-ids" : "postings"
       : sources.includes("bloom-fallback")
         ? "bloom-fallback"

@@ -5,7 +5,8 @@
 - **永遠從 [CURRENT.md](CURRENT.md) 開始**：指出目前允許實作的版本。
 - [0.36.2.md](0.36.2.md)：上一完成版本的歷史基線；本機 GUI／TUI 紀錄保留，desktop workbench 現已由 0.37.0 D074 clean cutover 取代。
 - [0.36.1.md](0.36.1.md)：已完成的掃描／TUI 基線與公司 Windows 待驗紀錄。
-- [0.37.0.md](0.37.0.md)：進行中。階段 7、1、2、3、4、5、6 與 desktop workbench clean cutover 已完成；只剩公司 Windows／大型庫外部驗收。package 未升版。
+- [0.38.0.md](0.38.0.md)：目前版本。block 級 FTS5 位置索引搜尋後端（SPEC §50／D081），並包含從未單獨發布的 0.37.0 各階段。
+- [0.37.0.md](0.37.0.md)：已併入 0.38.0；日常變更發現、工作台與 desktop cutover 的歷史交接。公司 Windows／大型庫外部驗收仍未回報。
 - [PROMPT.md](PROMPT.md)：給 Luna Max 的 0.36.2 實作指令，已完成；保留作歷史入口。
 
 先依 AGENTS.md 讀 SPEC、STATUS、DECISIONS，再讀 CURRENT 與其版本檔。SPEC 是行為權威，STATUS 是實際完成狀態；handoff 是執行順序，不得拿歷史成功結果冒充本版驗收。

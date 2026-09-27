@@ -5,9 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { DocumentRecord } from "../src/model.js";
-import { OperationCancelledError } from "../src/progress.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { clearBlockIndex, createLegacyStore } from "./legacy-index.js";
 
 function document(root: string, filename: string, content: string, heading = "標題"): DocumentRecord {
   return {
@@ -21,12 +21,13 @@ function count(database: DatabaseSync, sql: string): number {
   return Number((database.prepare(sql).get() as { count: number }).count);
 }
 
+// Legacy (pre-0.38.0) document postings still serve an index until its block migration finishes (SPEC §50).
 test("FTS5 unigram/trigram postings preserve exact, phrase, all-terms, filename, snippet and stable references", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m38-search-"));
   const root = path.join(temp, "docs");
   const databasePath = path.join(temp, "index.db");
   await mkdir(root);
-  const store = new IndexStore(databasePath);
+  const store = createLegacyStore(databasePath);
   store.registerRoot(root);
   try {
     store.upsert(document(root, "rare-name.txt", "common common rare-token-919 two word phrase three word phrase"), root);
@@ -89,7 +90,7 @@ test("FTS5 postings retain matches across the 64 KiB payload boundary", async ()
 
 test("payload Bloom ordinals expand through owning blocks without posting payload hits", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m38-payload-trace-"));
-  const store = new IndexStore(path.join(temp, "index.db"));
+  const store = createLegacyStore(path.join(temp, "index.db"));
   try {
     store.upsert(document(temp, "ordinal.txt", `target${"x".repeat(65_535)}`));
     assert.equal(search(store, "target").length, 1);
@@ -103,16 +104,17 @@ test("payload Bloom ordinals expand through owning blocks without posting payloa
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });
 
-test("FTS5 migration is writer-only, cancellable, resumable and preserves payload bytes", async () => {
+test("an index with unfinished legacy postings searches read-only through Bloom fallback and upgrades to the block index", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m38-migration-"));
   const root = path.join(temp, "docs");
   const databasePath = path.join(temp, "index.db");
   await mkdir(root);
-  const initial = new IndexStore(databasePath);
+  const initial = createLegacyStore(databasePath);
   initial.upsert(document(root, "one.txt", "migration-one-rare"));
   initial.upsert(document(root, "two.txt", "migration-two-rare"));
   initial.upsert(document(root, "three.txt", "migration-three-rare"));
   initial.close();
+  clearBlockIndex(databasePath);
   const before = new DatabaseSync(databasePath);
   const payloadBefore = (before.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { document_id: number; ordinal: number; payload: string }[]);
   before.prepare("UPDATE metadata SET value = '0' WHERE key = 'ngram_index_version'").run();
@@ -120,38 +122,27 @@ test("FTS5 migration is writer-only, cancellable, resumable and preserves payloa
   before.close();
 
   const readOnly = new IndexStore(databasePath, { readOnly: true });
-  const readOnlyBefore = readOnly.formatStatus();
-  assert.equal(readOnlyBefore.needsUpgrade, true);
+  assert.equal(readOnly.formatStatus().needsUpgrade, true);
   assert.equal(search(readOnly, "migration-two-rare").length, 1);
+  assert.equal(readOnly.lastSearchTrace()?.candidateStrategy, "bloom-fallback");
   readOnly.close();
   const afterRead = new DatabaseSync(databasePath, { readOnly: true });
   try {
     assert.equal((afterRead.prepare("SELECT value FROM metadata WHERE key = 'ngram_index_version'").get() as { value: string }).value, "0");
-    assert.equal(count(afterRead, "SELECT count(*) AS count FROM index_migration_documents WHERE version = 'ngram_1'"), 0);
+    assert.equal(count(afterRead, "SELECT count(*) AS count FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
   } finally { afterRead.close(); }
 
   const store = new IndexStore(databasePath);
   try {
-    const controller = new AbortController();
-    await assert.rejects(() => store.upgrade({
-      signal: controller.signal,
-      onProgress: progress => {
-        if (progress.message.includes("unigram") && progress.current === 1) controller.abort();
-      },
-    }), (error: unknown) => error instanceof OperationCancelledError);
-    const interrupted = store.formatStatus();
-    assert.equal(interrupted.ngramIndexVersion, "0");
-    assert.equal(interrupted.ngramCompletedDocuments, 1);
-    const payloadInterrupted = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      assert.deepEqual(payloadInterrupted.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all(), payloadBefore);
-    } finally { payloadInterrupted.close(); }
-
     await store.upgrade();
     const complete = store.formatStatus();
-    assert.equal(complete.ngramIndexVersion, "1");
-    assert.equal(complete.ngramCompletedDocuments, 3);
+    assert.equal(complete.needsUpgrade, false);
+    assert.equal(complete.blockIndexCompletedDocuments, 3);
     assert.equal(search(store, "migration-three-rare").length, 1);
+    assert.equal(store.lastSearchTrace()?.candidateStrategy, "block-index");
+    const payloadAfter = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.deepEqual(payloadAfter.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all(), payloadBefore);
+    } finally { payloadAfter.close(); }
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });
-

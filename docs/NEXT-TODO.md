@@ -9,9 +9,10 @@
 ## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
 
 - [x] A／B／C1／C2／D 在真實 store snapshot 上建置、2,000 查詢差分、延遲、成本模型與 migration 等價；見 [PROTOTYPE-RESULTS.md](research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md)。
-- [ ] 現行產品 bug：含 NUL（U+0000）且 ≥3 字的查詢丟出 FTS5 `unterminated string`；是否先修待決定。
-- [ ] ADR 前補證：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
-- [ ] 使用者依結果撰寫／核准 ADR 後，才寫 implementation SPEC。
+- [x] 0.38.0 已依 D081 實作 C2-hybrid（SPEC §50），並修正 U+0000 查詢錯誤。
+- [ ] 0.38.0 公司 Windows 驗收：舊 index 遷移時間、索引大小、`SPEC.md`／`測試`／常見詞延遲、Workbench 202→自動重送。
+- [ ] 仍待處理（原 ADR 前補證清單）：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
+- [ ] 所有使用中的 index 都遷移後，移除遷移期舊搜尋路徑（Bloom／文件級 postings）程式碼。
 
 ## 已完成：0.36.2 GUI
 
