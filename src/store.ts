@@ -200,6 +200,8 @@ type IndexTables = { tri: string; uni: string; bi: string };
 // Per-connection page cache (negative = KiB). The 2 MiB SQLite default makes FTS5
 // segment merges and large posting scans on multi-GiB indexes re-read pages.
 const PAGE_CACHE_KIB = -65_536;
+// Read-only connections map up to this much of the database file.
+const MMAP_BYTES = 1024 * 1024 * 1024;
 
 const ftsString = (value: string): string => `"${value.replaceAll('"', '""')}"`;
 
@@ -501,6 +503,9 @@ export class IndexStore {
       this.db.exec("PRAGMA query_only = ON");
       this.db.exec("PRAGMA busy_timeout = 0");
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
+      // Searches open a fresh read-only connection each time; memory-mapped reads avoid
+      // a system call per page when verifying chunks on a cold page cache (SPEC §52.2).
+      this.db.exec(`PRAGMA mmap_size = ${MMAP_BYTES}`);
       this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
       return;
     }
