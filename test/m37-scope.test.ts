@@ -91,6 +91,20 @@ async function startEngine(
   return { engine, emitters, timers, stop, running, syncCalls };
 }
 
+/** 反覆觸發防抖與立即接續（0 ms）的計時器，直到條件成立（SPEC §56 展開需多輪）。 */
+async function driveUntil(timers: FakeTimer[], check: () => boolean, timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error("timed out");
+    const next = timers.find(item => item.ms === 0 || item.ms === 200);
+    if (next) {
+      timers.splice(timers.indexOf(next), 1);
+      next.fn();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 function fireDebounce(timers: FakeTimer[]): void {
   const debounce = [...timers].reverse().find(item => item.ms === 200);
   assert.ok(debounce);
@@ -151,7 +165,7 @@ test("0.37.0 unknown filename on sibling A only subtree-scans A", async () => {
     await writeFile(path.join(dirA, "a.txt"), "alpha-unknown");
     session.emitters.get(dirA)!.emit("change", "change", null);
     fireDebounce(session.timers);
-    await waitUntil(() => session.syncCalls.includes(dirA));
+    await driveUntil(session.timers, () => search(store, "alpha-unknown").length === 1);
     assert.equal(session.engine.snapshot().rootScanCount, 0);
     assert.ok(session.engine.snapshot().subtreeScanCount >= 1);
     assert.ok(session.syncCalls.every(item => item !== store.roots()[0]));
@@ -186,9 +200,8 @@ test("0.37.0 new top-level directory is attached then scanned", async () => {
     assert.ok(rootWatcher);
     rootWatcher.emit("change", "change", "fresh");
     assert.equal(session.emitters.get(created)?.recursive, true);
-    fireDebounce(session.timers);
-    await waitUntil(() => search(store, "new-dir-needle").length === 1);
-    assert.ok(session.syncCalls.includes(created));
+    await driveUntil(session.timers, () => search(store, "new-dir-needle").length === 1);
+    assert.equal(session.engine.snapshot().subtreeScanCount, 1);
     assert.equal(session.engine.snapshot().rootScanCount, 0);
   } finally {
     session.stop.resolve();

@@ -144,12 +144,16 @@ export class LiveWorkQueue {
     this.db.close();
   }
 
-  acceptPath(root: string, relPath: string): WorkItem {
+  /**
+   * `reason`：`event` 來自檔案事件；`expand` 來自資料夾展開（SPEC §56.1），排在事件之後。
+   * 已是 `event` 的待辦不會因展開而降為 `expand`。
+   */
+  acceptPath(root: string, relPath: string, reason: "event" | "expand" = "event"): WorkItem {
     const parts = relPath.replace(/\\/gu, "/").split("/").filter(Boolean);
     if (!relPath || relPath === SCOPE_REL || parts.includes("..") || parts.includes(".")) {
       throw new QueuePersistError("工作佇列路徑無效。");
     }
-    return this.upsert(root, relPath, "path", "event");
+    return this.upsert(root, relPath, "path", reason);
   }
 
   markDirtyScope(root: string, reason: string): WorkItem {
@@ -468,7 +472,7 @@ export class LiveWorkQueue {
         ON CONFLICT(root, rel_path) DO UPDATE SET
           generation = excluded.generation,
           kind = excluded.kind,
-          reason = excluded.reason
+          reason = CASE WHEN excluded.reason = 'expand' AND work_items.reason = 'event' THEN work_items.reason ELSE excluded.reason END
       `).run(root, relPath, generation, kind, reason, createdAtMs);
       stored = { root, relPath, generation, kind, reason, createdAtMs };
     });

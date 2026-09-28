@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
 import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
-import type { IndexStore } from "./store.js";
+import { isIndexArtifact, type IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
 import {
   applyPathChange, applyFileDelete, applyFileUpdate, identityKey, isIgnoreFile, sleepMs,
@@ -27,6 +27,8 @@ export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
 /** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
 export const LOCAL_BATCH_MAX_ITEMS = 500;
 export const LOCAL_BATCH_MAX_MS = 5_000;
+/** 資料夾展開每輪最多讀取的目錄項目數（SPEC §56.1）。 */
+export const LOCAL_WALK_MAX_ENTRIES = 2_000;
 export const HEARTBEAT_MS = 10_000;
 export const ROOT_REFRESH_MS = 10_000;
 export const WATCHER_RETRY_MS = [60_000, 300_000, 900_000] as const;
@@ -61,9 +63,11 @@ export interface LiveUpdateOptions {
   watchHandleLimit?: number;
   reconcileBatchEntries?: number;
   reconcileBatchMs?: number;
+  /** 資料夾展開每輪讀取的目錄項目上限；預設 LOCAL_WALK_MAX_ENTRIES（SPEC §56.1）。 */
+  localWalkEntries?: number;
 }
 
-type LocalWorkItem = { filePath: string; generation: number; relPath: string };
+type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
 
 type LocalBatchResult = {
   updated: number;
@@ -72,6 +76,8 @@ type LocalBatchResult = {
   complete: boolean;
   /** 已確認完成（含延後用盡）的路徑；其餘留在佇列。 */
   finished: Set<string>;
+  /** 本輪處理過的路徑（完成或延後），記入輪替的本圈。 */
+  attempted: Set<string>;
   deferred: boolean;
   interrupted: boolean;
 };
@@ -91,6 +97,15 @@ type RootState = {
   timer: ReturnType<typeof setTimeout> | undefined;
   firstScheduledAt: number | undefined;
   exclusion: RootExclusion;
+  /** 局部更新輪替的本圈已處理路徑（SPEC §55.2）。 */
+  sweep: Set<string>;
+  /** 進行中的資料夾展開（SPEC §56）；只在記憶體，重啟後重新展開。 */
+  walks: Map<string, {
+    frontier: string[];
+    listing: { dir: string; entries: fs.Dirent[]; next: number } | undefined;
+    seen: Set<string>;
+    failed: boolean;
+  }>;
   watcher?: fs.FSWatcher;
   handles: WatchHandle[];
   scopeMode: "split" | "coarse";
@@ -242,7 +257,7 @@ export class LiveUpdateEngine {
   private newState(root: string): RootState {
     return {
       root, pending: new Set(), reconcile: false, dirty: false, running: false,
-      timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), failed: false, offline: false, syncFailed: false, removed: false,
+      timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), sweep: new Set(), walks: new Map(), failed: false, offline: false, syncFailed: false, removed: false,
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
     };
@@ -495,11 +510,22 @@ export class LiveUpdateEngine {
         } else {
           this.phase = "updating";
           const work: LocalWorkItem[] = queued.length
-            ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath }))
-            : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath) }));
-          const batch = await this.applyLocalBatch(state, work.slice(0, LOCAL_BATCH_MAX_ITEMS), started, inner, syncOptions);
+            ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath, expand: item.reason === "expand" }))
+            : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath), expand: false }));
+          // 輪替（SPEC §55.2）：先處理本圈尚未處理過的待辦，全部處理過一次後開始下一圈。
+          const queuedPaths = new Set(work.map(item => item.filePath));
+          state.sweep = new Set([...state.sweep].filter(item => queuedPaths.has(item)));
+          let order = work.filter(item => !state.sweep.has(item.filePath));
+          if (!order.length) {
+            state.sweep.clear();
+            order = work;
+          }
+          // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1），各自仍先進先出。
+          order = [...order.filter(item => !item.expand), ...order.filter(item => item.expand)];
+          const batch = await this.applyLocalBatch(state, order.slice(0, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
+          for (const item of batch.attempted) state.sweep.add(item);
           state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
-          moreLocal = batch.interrupted || work.length > LOCAL_BATCH_MAX_ITEMS;
+          moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
           if (batch.deferred) state.dirty = true;
           this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
           if (!batch.complete) state.syncFailed = true;
@@ -548,12 +574,11 @@ export class LiveUpdateEngine {
   private async applyLocalBatch(
     state: RootState,
     work: LocalWorkItem[],
-    started: number,
     inner: LocalUpdateOptions,
     syncOptions: SyncOptions,
   ): Promise<LocalBatchResult> {
     const result: LocalBatchResult = {
-      updated: 0, unchanged: 0, removed: 0, complete: true, finished: new Set(), deferred: false, interrupted: false,
+      updated: 0, unchanged: 0, removed: 0, complete: true, finished: new Set(), attempted: new Set(), deferred: false, interrupted: false,
     };
     const finish = (item: LocalWorkItem, applied?: { updated: number; unchanged: number; removed: number; complete: boolean; path: string }) => {
       if (applied) {
@@ -568,6 +593,7 @@ export class LiveUpdateEngine {
       }
       this.deferrals.delete(item.filePath);
       result.finished.add(item.filePath);
+      result.attempted.add(item.filePath);
       if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
     };
     const defer = (item: LocalWorkItem) => {
@@ -579,16 +605,28 @@ export class LiveUpdateEngine {
       }
       this.deferrals.set(item.filePath, count);
       result.deferred = true;
+      result.attempted.add(item.filePath);
     };
 
     const candidates: { item: LocalWorkItem; key: string }[] = [];
+    let walkBudget = this.options.localWalkEntries ?? LOCAL_WALK_MAX_ENTRIES;
     for (const item of work) {
       if (this.stopping) { result.interrupted = true; break; }
       if (this.isExcluded(state, item.filePath, false)) { finish(item); continue; }
       let info: fs.Stats | undefined;
       try { info = await fs.promises.lstat(item.filePath); } catch { info = undefined; }
+      if (info?.isDirectory() && !info.isSymbolicLink() && !samePath(item.filePath, state.root)) {
+        if (this.isExcluded(state, item.filePath, true)) { finish(item); continue; }
+        const walked = await this.expandDirectory(state, item.filePath, walkBudget);
+        walkBudget = walked.budgetLeft;
+        // 展開寫入的檔案待辦要由下一輪處理，所以一律立即接續。
+        result.interrupted = true;
+        if (walked.done) finish(item);
+        else result.attempted.add(item.filePath);
+        continue;
+      }
       if (!info || !info.isFile()) {
-        // 不存在、目錄、連結與其他類型沿用單一路徑處理（刪除、子樹校正、略過）。
+        // 不存在、根目錄、連結與其他類型沿用單一路徑處理（刪除、整根校正、略過）。
         finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
         continue;
       }
@@ -597,11 +635,13 @@ export class LiveUpdateEngine {
     if (!candidates.length) return result;
 
     await (this.options.sleep ?? sleepMs)(this.debounceMs);
+    // 處理時間上限從穩定等待之後起算：事件湧入時觀察階段本身可能就要數秒（SPEC §54.1）。
+    const processStarted = this.now();
     const apply = this.options.applyFileUpdate ?? applyFileUpdate;
     let processed = 0;
     for (const { item, key } of candidates) {
       // 每輪至少處理一個（與原本「進行中的檔案完成後才停止」相同），也避免觀察階段就耗盡時間而永遠沒有進展。
-      if (processed > 0 && (this.stopping || this.now() - started >= LOCAL_BATCH_MAX_MS)) { result.interrupted = true; break; }
+      if (processed > 0 && (this.stopping || this.now() - processStarted >= LOCAL_BATCH_MAX_MS)) { result.interrupted = true; break; }
       processed++;
       let second: fs.Stats | undefined;
       try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
@@ -616,6 +656,65 @@ export class LiveUpdateEngine {
       finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
     }
     return result;
+  }
+
+  /**
+   * SPEC §56：資料夾待辦逐步展開成逐檔待辦，每輪最多讀取 `budget` 個目錄項目。
+   * 完成且沒有讀取失敗時，才把索引中未看到、且確認已不存在的文件排入刪除。
+   */
+  private async expandDirectory(state: RootState, dir: string, budget: number): Promise<{ done: boolean; budgetLeft: number }> {
+    let walk = state.walks.get(dir);
+    if (!walk) {
+      walk = { frontier: [dir], listing: undefined, seen: new Set(), failed: false };
+      state.walks.set(dir, walk);
+      this.subtreeScanCount++;
+    }
+    while ((walk.listing || walk.frontier.length) && budget > 0) {
+      if (this.stopping) return { done: false, budgetLeft: budget };
+      if (!walk.listing) {
+        // readdir 一次回傳整份清單；讀到一半的清單留在展開狀態，下一輪從中斷處接續。
+        const current = walk.frontier.pop()!;
+        try {
+          walk.listing = { dir: current, entries: await fs.promises.readdir(current, { withFileTypes: true }), next: 0 };
+        } catch {
+          walk.failed = true;
+          continue;
+        }
+      }
+      const listing = walk.listing;
+      while (listing.next < listing.entries.length && budget > 0) {
+        const entry = listing.entries[listing.next++]!;
+        budget--;
+        const full = path.join(listing.dir, entry.name);
+        if (entry.isSymbolicLink() || shouldIgnoreWatchPath(full, state.root)) continue;
+        if (entry.isDirectory()) {
+          if (!this.isExcluded(state, full, true)) walk.frontier.push(full);
+          continue;
+        }
+        if (!entry.isFile() || this.isExcluded(state, full, false) || isIndexArtifact(full, this.store.databasePath)) continue;
+        walk.seen.add(full);
+        if (!this.persistPath(state, full, "expand")) return { done: true, budgetLeft: budget };
+      }
+      if (listing.next >= listing.entries.length) walk.listing = undefined;
+      if (this.overflowRoot(state)) {
+        // 超過佇列上限：改由背景校正處理整根，展開不必繼續（SPEC §56.1）。
+        state.walks.clear();
+        this.markReconcile(state);
+        return { done: true, budgetLeft: budget };
+      }
+    }
+    if (walk.listing || walk.frontier.length) return { done: false, budgetLeft: budget };
+    state.walks.delete(dir);
+    if (walk.failed) return { done: true, budgetLeft: budget };
+    for (const indexed of this.store.documentPathsUnder(state.root, dir)) {
+      if (walk.seen.has(indexed)) continue;
+      try {
+        await fs.promises.lstat(indexed);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") this.persistPath(state, indexed, "expand");
+      }
+    }
+    return { done: true, budgetLeft: budget };
   }
 
   private async applyOne(
@@ -798,9 +897,9 @@ export class LiveUpdateEngine {
 
   private attachWatch(state: RootState, dir: string, recursive: boolean): WatchHandle {
     const watchFn = this.options.watch ?? fs.watch;
-    const watcher = watchFn(dir, { recursive }, (_event, filename) => {
+    const watcher = watchFn(dir, { recursive }, (event, filename) => {
       if (this.stopping || state.failed || state.removed) return;
-      this.handleEvent(state, filename, dir, recursive);
+      this.handleEvent(state, filename, dir, event);
     });
     const handle: WatchHandle = { path: dir, recursive, watcher };
     watcher.on("error", error => {
@@ -909,7 +1008,22 @@ export class LiveUpdateEngine {
     state.handles = state.handles.filter(item => item !== handle);
   }
 
-  private handleEvent(state: RootState, filename: string | Buffer | null | undefined, watchDir = state.root, _recursive = true): void {
+  /**
+   * 資料夾的 `change` 只代表其中項目變動，而那些項目已各自產生事件；內容已在監看範圍內時
+   * 掃描整個子樹是重複工作（SPEC §55）。移入的資料夾以 `rename` 回報，仍須掃描。
+   */
+  private contentAlreadyWatched(state: RootState, dir: string): boolean {
+    if (state.scopeMode === "coarse") return true;
+    if (!samePath(path.dirname(dir), state.root)) return true;
+    return state.handles.some(handle => handle.recursive && samePath(handle.path, dir));
+  }
+
+  private handleEvent(
+    state: RootState,
+    filename: string | Buffer | null | undefined,
+    watchDir = state.root,
+    eventType: fs.WatchEventType = "rename",
+  ): void {
     const label = filename ? String(filename) : "";
     if (label && shouldIgnoreWatchPath(label, watchDir)) return;
     const abs = label ? path.resolve(watchDir, label) : undefined;
@@ -926,6 +1040,8 @@ export class LiveUpdateEngine {
         this.excludedEventCount++;
         return;
       }
+      if (eventType === "change" && info?.isDirectory() && !info.isSymbolicLink()
+        && !samePath(abs, state.root) && this.contentAlreadyWatched(state, abs)) return;
     }
     this.eventCount++;
     const at = new Date(this.now()).toISOString();
@@ -965,9 +1081,9 @@ export class LiveUpdateEngine {
     this.schedule(state);
   }
 
-  private persistPath(state: RootState, abs: string): boolean {
+  private persistPath(state: RootState, abs: string, reason: "event" | "expand" = "event"): boolean {
     try {
-      this.queue.acceptPath(state.root, path.relative(state.root, abs));
+      this.queue.acceptPath(state.root, path.relative(state.root, abs), reason);
       return true;
     } catch (error) {
       this.onQueueFailure(state, error);

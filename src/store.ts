@@ -1323,6 +1323,12 @@ export class IndexStore {
     }
   }
 
+  /** Indexed document paths of `root` inside `subtree` (SPEC §56.2). */
+  documentPathsUnder(root: string, subtree: string): string[] {
+    const rows = this.db.prepare("SELECT path FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").all(root) as { path: string }[];
+    return rows.map(row => row.path).filter(item => coversPath(subtree, item) && !samePath(subtree, item));
+  }
+
   /**
    * Delete indexed documents that the scan no longer found. Deletions commit in
    * batches; a cancelled run keeps committed batches and the next scan
