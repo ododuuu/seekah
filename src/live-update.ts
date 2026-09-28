@@ -4,7 +4,10 @@ import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
 import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import type { IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
-import { applyPathChange, applyFileDelete, applyFileUpdate, isIgnoreFile, WRITER_BACKOFF_MS, type LocalUpdateOptions } from "./local-update.js";
+import {
+  applyPathChange, applyFileDelete, applyFileUpdate, identityKey, isIgnoreFile, sleepMs,
+  UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, type LocalUpdateOptions,
+} from "./local-update.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
@@ -21,6 +24,9 @@ export const QUEUE_LIMIT = DEFAULT_QUEUE_LIMIT;
 export const DEFAULT_WATCH_HANDLE_LIMIT = 128;
 /** 事件不間斷時，防抖最長等待「防抖時間 × 此倍數」就開始處理（SPEC §53.4）。 */
 export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
+/** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
+export const LOCAL_BATCH_MAX_ITEMS = 500;
+export const LOCAL_BATCH_MAX_MS = 5_000;
 export const HEARTBEAT_MS = 10_000;
 export const ROOT_REFRESH_MS = 10_000;
 export const WATCHER_RETRY_MS = [60_000, 300_000, 900_000] as const;
@@ -56,6 +62,19 @@ export interface LiveUpdateOptions {
   reconcileBatchEntries?: number;
   reconcileBatchMs?: number;
 }
+
+type LocalWorkItem = { filePath: string; generation: number; relPath: string };
+
+type LocalBatchResult = {
+  updated: number;
+  unchanged: number;
+  removed: number;
+  complete: boolean;
+  /** 已確認完成（含延後用盡）的路徑；其餘留在佇列。 */
+  finished: Set<string>;
+  deferred: boolean;
+  interrupted: boolean;
+};
 
 type WatchHandle = {
   path: string;
@@ -150,6 +169,8 @@ export class LiveUpdateEngine {
   private lastReconcile?: { at: string; root: string; complete: boolean };
   private eventCount = 0;
   private excludedEventCount = 0;
+  /** 路徑連續延後次數；超過 UNSTABLE_BACKOFF_MS.length 即記為不穩定並確認完成。 */
+  private readonly deferrals = new Map<string, number>();
   private localUpdateCount = 0;
   private rootScanCount = 0;
   private subtreeScanCount = 0;
@@ -403,6 +424,7 @@ export class LiveUpdateEngine {
     };
     const started = this.now();
     let writerBusy = false;
+    let moreLocal = false;
     let release: (() => void) | undefined;
     try {
       if (batchReconcile) {
@@ -472,31 +494,15 @@ export class LiveUpdateEngine {
           }
         } else {
           this.phase = "updating";
-          let updated = 0, unchanged = 0, removed = 0, complete = true;
-          const work = queued.length
+          const work: LocalWorkItem[] = queued.length
             ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath }))
             : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath) }));
-          for (const item of work) {
-            if (this.stopping) break;
-            if (this.isExcluded(state, item.filePath, false)) {
-              if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
-              continue;
-            }
-            const classified = await this.applyOne(state, item.filePath, inner, syncOptions);
-            updated += classified.updated;
-            unchanged += classified.unchanged;
-            removed += classified.removed;
-            complete = complete && classified.complete;
-            if (classified.path) {
-              this.lastLocalUpdate = { at: new Date(this.now()).toISOString(), root: state.root, path: classified.path };
-              state.lastLocalUpdateAt = this.lastLocalUpdate.at;
-            }
-            if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
-          }
-          const finished = new Set(work.map(item => item.filePath));
-          state.pending = new Set([...state.pending].filter(item => !finished.has(item)));
-          this.printLocal(state.root, updated, unchanged, removed, Math.round((this.now() - started) * 100) / 100, complete);
-          if (!complete) state.syncFailed = true;
+          const batch = await this.applyLocalBatch(state, work.slice(0, LOCAL_BATCH_MAX_ITEMS), started, inner, syncOptions);
+          state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
+          moreLocal = batch.interrupted || work.length > LOCAL_BATCH_MAX_ITEMS;
+          if (batch.deferred) state.dirty = true;
+          this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
+          if (!batch.complete) state.syncFailed = true;
         }
       }
     } catch (error) {
@@ -524,13 +530,92 @@ export class LiveUpdateEngine {
       this.refreshRoots();
       if (writerBusy) this.scheduleBusy(state);
       else {
-        if (state.dirty || state.pending.size || state.reconcile) {
-          if (state.reconcile && batchReconcile && !state.dirty) this.scheduleReconcileBatch(state);
+        // 同一批沒處理完的待辦立即接續，不再等防抖（SPEC §54.1）。
+        if (moreLocal) this.scheduleNow(state);
+        else if (state.dirty || state.pending.size || state.reconcile) {
+          if (state.reconcile && batchReconcile && !state.dirty) this.scheduleNow(state);
           else this.schedule(state);
         }
         this.armRescan(state);
       }
     }
+  }
+
+  /**
+   * SPEC §54：整批先觀察一次、只等一次防抖時間、再觀察一次；相同者解析寫入，
+   * 仍在變動者延後到下一輪，不原地退避。
+   */
+  private async applyLocalBatch(
+    state: RootState,
+    work: LocalWorkItem[],
+    started: number,
+    inner: LocalUpdateOptions,
+    syncOptions: SyncOptions,
+  ): Promise<LocalBatchResult> {
+    const result: LocalBatchResult = {
+      updated: 0, unchanged: 0, removed: 0, complete: true, finished: new Set(), deferred: false, interrupted: false,
+    };
+    const finish = (item: LocalWorkItem, applied?: { updated: number; unchanged: number; removed: number; complete: boolean; path: string }) => {
+      if (applied) {
+        result.updated += applied.updated;
+        result.unchanged += applied.unchanged;
+        result.removed += applied.removed;
+        result.complete = result.complete && applied.complete;
+        if (applied.path) {
+          this.lastLocalUpdate = { at: new Date(this.now()).toISOString(), root: state.root, path: applied.path };
+          state.lastLocalUpdateAt = this.lastLocalUpdate.at;
+        }
+      }
+      this.deferrals.delete(item.filePath);
+      result.finished.add(item.filePath);
+      if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
+    };
+    const defer = (item: LocalWorkItem) => {
+      const count = (this.deferrals.get(item.filePath) ?? 0) + 1;
+      if (count > UNSTABLE_BACKOFF_MS.length) {
+        // 與原本退避用盡相同：保留既有索引並確認完成，之後的新事件會重新排入。
+        finish(item, { updated: 0, unchanged: 0, removed: 0, complete: false, path: "" });
+        return;
+      }
+      this.deferrals.set(item.filePath, count);
+      result.deferred = true;
+    };
+
+    const candidates: { item: LocalWorkItem; key: string }[] = [];
+    for (const item of work) {
+      if (this.stopping) { result.interrupted = true; break; }
+      if (this.isExcluded(state, item.filePath, false)) { finish(item); continue; }
+      let info: fs.Stats | undefined;
+      try { info = await fs.promises.lstat(item.filePath); } catch { info = undefined; }
+      if (!info || !info.isFile()) {
+        // 不存在、目錄、連結與其他類型沿用單一路徑處理（刪除、子樹校正、略過）。
+        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+        continue;
+      }
+      candidates.push({ item, key: identityKey(info) });
+    }
+    if (!candidates.length) return result;
+
+    await (this.options.sleep ?? sleepMs)(this.debounceMs);
+    const apply = this.options.applyFileUpdate ?? applyFileUpdate;
+    let processed = 0;
+    for (const { item, key } of candidates) {
+      // 每輪至少處理一個（與原本「進行中的檔案完成後才停止」相同），也避免觀察階段就耗盡時間而永遠沒有進展。
+      if (processed > 0 && (this.stopping || this.now() - started >= LOCAL_BATCH_MAX_MS)) { result.interrupted = true; break; }
+      processed++;
+      let second: fs.Stats | undefined;
+      try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
+      if (!second) {
+        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+        continue;
+      }
+      if (identityKey(second) !== key) { defer(item); continue; }
+      this.localUpdateCount++;
+      const update = await apply(item.filePath, state.root, this.store, { ...inner, stableMs: 0, deferUnstable: true });
+      if (update.deferred) { defer(item); continue; }
+      finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+    }
+    return result;
   }
 
   private async applyOne(
@@ -577,7 +662,8 @@ export class LiveUpdateEngine {
     }, delay);
   }
 
-  private scheduleReconcileBatch(state: RootState): void {
+  /** 0 ms 計時器：背景校正下一批或局部更新下一輪。 */
+  private scheduleNow(state: RootState): void {
     if (this.stopping || state.removed || state.running) return;
     if (state.timer) this.clearTimer(state.timer);
     state.timer = this.setTimer(() => {

@@ -43,6 +43,8 @@ export interface LocalUpdateOptions {
   stat?: typeof stat;
   /** 解析前兩次 metadata 須相同，且間隔至少此毫秒數（通常等於 debounce）。0 表示只做解析前後核對。 */
   stableMs?: number;
+  /** 檔案仍在變動或暫時無法讀取時，不原地退避，立即回傳 `deferred`（SPEC §54.3）。 */
+  deferUnstable?: boolean;
 }
 
 function emptyResult(kind: LocalUpdateKind, filePath: string, root: string): LocalUpdateResult {
@@ -120,7 +122,7 @@ export async function canSafelyDelete(filePath: string, root: string, options: L
   return await rootIsOnline(root, options) && await parentReadable(filePath, options);
 }
 
-function identityKey(info: { size: number; mtimeMs: number; ino?: number; dev?: number; isFile(): boolean }): string {
+export function identityKey(info: { size: number; mtimeMs: number; ino?: number; dev?: number; isFile(): boolean }): string {
   return `${info.isFile() ? "f" : "o"}:${info.size}:${info.mtimeMs}:${info.ino ?? 0}:${info.dev ?? 0}`;
 }
 
@@ -182,6 +184,13 @@ async function applyFileUpdateLocked(
   const parse = options.parse ?? parseDocument;
   const sleep = options.sleep ?? sleepMs;
   const previous = store.getDocument(filePath);
+  const defer = (code: string): LocalUpdateResult => {
+    result.kind = "unstable";
+    result.complete = false;
+    result.deferred = true;
+    result.diagnostics.push({ stage: "read", path: filePath, code, message: "檔案仍在變動，延後重新核對" });
+    return result;
+  };
 
   for (let attempt = 0; attempt <= UNSTABLE_BACKOFF_MS.length; attempt++) {
     throwIfAborted(options.signal);
@@ -190,6 +199,7 @@ async function applyFileUpdateLocked(
       info = await lstatFn(filePath);
     } catch (error) {
       if (errorCode(error) === "ENOENT") return applyPathDeleteLocked(filePath, root, store, options);
+      if (isTransient(error) && options.deferUnstable) return defer(errorCode(error));
       if (isTransient(error) && attempt < UNSTABLE_BACKOFF_MS.length) {
         await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
         continue;
@@ -226,6 +236,7 @@ async function applyFileUpdateLocked(
         second = await lstatFn(filePath);
       } catch (error) {
         if (errorCode(error) === "ENOENT") return applyPathDeleteLocked(filePath, root, store, options);
+        if (isTransient(error) && options.deferUnstable) return defer(errorCode(error));
         if (isTransient(error) && attempt < UNSTABLE_BACKOFF_MS.length) {
           await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
           continue;
@@ -236,6 +247,7 @@ async function applyFileUpdateLocked(
         return result;
       }
       if (identityKey(second) !== firstKey) {
+        if (options.deferUnstable) return defer("FILE_UNSTABLE");
         if (attempt < UNSTABLE_BACKOFF_MS.length) {
           await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
           continue;
@@ -273,6 +285,7 @@ async function applyFileUpdateLocked(
       const parsed = await documentFromFile(filePath, info, parse);
       const afterInfo = await lstatFn(filePath);
       if (identityKey(afterInfo) !== before) {
+        if (options.deferUnstable) return defer("FILE_UNSTABLE");
         if (attempt < UNSTABLE_BACKOFF_MS.length) {
           await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
           continue;
@@ -295,6 +308,7 @@ async function applyFileUpdateLocked(
       return result;
     } catch (error) {
       if (error instanceof IgnoreConfigurationError) throw error;
+      if (isTransient(error) && options.deferUnstable) return defer(errorCode(error));
       if (isTransient(error) && attempt < UNSTABLE_BACKOFF_MS.length) {
         await sleep(UNSTABLE_BACKOFF_MS[attempt]!);
         continue;
