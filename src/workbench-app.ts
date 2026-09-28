@@ -266,13 +266,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   line-height: 1.45;
   letter-spacing: -.025em;
 }
-.detail-header h1 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 26px;
-  line-height: 1.2;
-  letter-spacing: -.025em;
-}
 .page-header p { margin: 3px 0 0; color: var(--muted); }
 .page-header-actions, .button-row {
   display: flex;
@@ -460,123 +453,50 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .pagination { display: inline-flex; align-items: center; gap: 0; margin-left: auto; }
 .pagination .btn { min-width: 30px; min-height: 28px; height: 28px; border-color: var(--line); border-radius: 0; margin-left: -1px; }
 .pagination-label { display: grid; min-width: 30px; height: 28px; margin: 0; place-items: center; border: 1px solid var(--brand); background: var(--brand); color: #fff !important; font-size: 12px; }
-.result-list { display: grid; gap: 10px; }
-.document-row {
-  min-width: 0;
-  min-height: 128px;
+.result-list {
   display: grid;
-  grid-template-columns: 28px 120px minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: stretch;
-  padding: 0;
-  overflow: hidden;
+  gap: 24px;
+  padding: 20px 24px 24px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: var(--paper);
-  box-shadow: var(--shadow);
 }
-.document-row.is-selected { border-color: #72a99a; box-shadow: 0 0 0 2px #bcd8d0; }
-.row-check { width: 17px; height: 17px; margin: 18px 0 0 9px; accent-color: var(--brand); }
-.file-visual {
-  position: relative;
-  width: 120px;
-  min-height: 126px;
-  display: grid;
-  place-items: center;
-  margin: 10px 0;
-  border: 1px solid #d5dbd7;
-  background: #e7ebe8;
-}
-.file-paper {
-  width: 72px;
-  height: 94px;
-  padding: 9px 7px;
-  border: 0;
-  background: var(--paper);
-  box-shadow: 0 2px 5px rgba(0,0,0,.14);
-}
-.file-line { height: 3px; margin-bottom: 5px; background: #d8dedb; }
-.file-line.strong { width: 62%; height: 5px; background: #5c756b; }
-.file-line.short { width: 68%; }
-.file-extension {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  padding: 2px 5px;
-  border: 0;
-  background: var(--brand);
-  color: #fff;
-  font: 800 9px/1 "Cascadia Mono", Consolas, monospace;
-}
-.document-main { min-width: 0; padding: 14px 0; }
-.document-title-line {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 4px;
-}
+.document-row { min-width: 0; max-width: 780px; padding-left: 12px; border-left: 3px solid transparent; }
+.document-row.is-selected { border-left-color: var(--brand); }
 .document-title {
-  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--brand);
-  font-size: 17px;
-  display: inline-block;
-  min-height: 0;
-  line-height: normal;
-  font-weight: 750;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.35;
   text-align: left;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
-.document-title:hover { color: var(--brand-2); text-decoration: underline; }
-.format-badge, .reason-badge {
-  display: inline-block;
-  padding: 2px 6px;
-  border: 0;
-  border-radius: 3px;
-  background: #e8eeeb;
-  color: #54635d;
-  font: 700 10px/1.2 "Segoe UI", sans-serif;
-}
-.reason-badge { display: none; }
+.document-title.btn:hover:not(:disabled) { background: transparent; color: var(--brand-2); text-decoration: underline; }
+.document-path { display: flex; gap: 8px; min-width: 0; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.document-crumbs { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-format { flex: none; }
 .snippet {
-  margin: 0 0 8px;
+  display: -webkit-box;
+  margin: 6px 0 0;
   overflow: hidden;
-  color: #45514c;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  color: #3d4843;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
-.snippet mark { padding: 1px 2px; background: #f3d889; color: inherit; }
-.document-path {
-  overflow: hidden;
-  color: var(--muted);
-  font: 11px/1.4 "Cascadia Mono", Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.document-location { display: none; }
-.document-actions {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  gap: 5px;
-  margin-top: 11px;
-}
-.document-actions .btn { min-height: 29px; padding: 4px 8px; font-size: 11px; }
-.document-meta {
-  min-width: 279px;
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 0 16px;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.document-meta .meta-value { color: var(--brand-2); font-weight: 650; }
+.snippet.is-muted { color: var(--muted); }
+.snippet mark { padding: 0 1px; background: #f3d889; color: inherit; }
+.document-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; }
+.link-action.btn { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; }
+.link-action.btn:hover:not(:disabled) { background: transparent; color: var(--brand); text-decoration: underline; }
 .table-wrap {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -668,84 +588,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .file-status.indexed { color: var(--brand-2); }
 .file-status.error, .file-status.encrypted { color: var(--danger); }
 .file-status.warn { color: var(--warning); }
-
-/* document detail */
-#detail-page { margin: -24px -26px -55px; width: auto; }
-.detail-header {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--line);
-  background: var(--canvas);
-}
-.detail-header h1 { min-width: 220px; margin: 0 18px 0 0; font-size: 22px; overflow-wrap: anywhere; }
-.detail-spacer { flex: 1 1 auto; }
-.detail-grid {
-  display: grid;
-  grid-template-columns: minmax(420px, 43%) minmax(560px, 57%);
-  min-height: calc(100vh - 133px);
-}
-.detail-panel { min-width: 0; border: 0; background: var(--paper); box-shadow: none; }
-.detail-fields {
-  min-width: 0;
-  overflow: auto;
-  padding: 20px 24px 60px;
-  border-right: 1px solid var(--line);
-  background: #f8faf9;
-}
-.detail-tabs { display: flex; gap: 21px; margin: 0; border-bottom: 1px solid var(--line); }
-.detail-tab {
-  min-height: 40px;
-  padding: 8px 1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--muted);
-}
-.detail-tab[aria-selected="true"] { border-bottom-color: var(--brand); color: var(--brand); font-weight: 700; }
-.detail-metadata { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 13px 10px; margin: 20px 0 0; }
-.detail-metadata dt { padding-top: 8px; color: #4f5b55; font-size: 13px; }
-.detail-metadata dd { min-width: 0; min-height: 36px; margin: 0; padding: 7px 9px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); text-overflow: ellipsis; white-space: nowrap; }
-.detail-metadata dd.path-value { font: 12px/1.45 "Cascadia Mono", Consolas, monospace; word-break: normal; }
-.detail-index-content { margin-top: 20px; padding: 18px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-family: Georgia, "Noto Serif TC", serif; line-height: 1.8; overflow-wrap: anywhere; }
-.detail-index-content mark { padding: 1px 2px; background: #f3d889; color: inherit; }
-.detail-preview {
-  min-width: 0;
-  min-height: 430px;
-  overflow: auto;
-  padding: 25px;
-  background: #cfd4d1;
-}
-.detail-preview-tools {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-  display: flex;
-  justify-content: center;
-  gap: 5px;
-  margin: -10px 0 15px;
-}
-.detail-preview-tools .btn { background: #f8faf9; }
-.preview-paper {
-  width: min(760px, 92%);
-  min-height: 970px;
-  margin: auto;
-  padding: 64px 66px;
-  border: 0;
-  background: var(--paper);
-  box-shadow: 0 4px 15px rgba(0,0,0,.2);
-  transform-origin: top center;
-}
-.preview-paper h2 { margin: 0 0 5px; font: 600 28px Georgia, serif; overflow-wrap: anywhere; }
-.preview-paper .preview-sub { padding-bottom: 18px; border-bottom: 2px solid var(--brand); color: var(--muted); }
-.preview-paper h3 { margin-top: 35px; font: 600 18px Georgia, serif; }
-.preview-snippet { margin: 0; font: 15px/1.9 Georgia, "Noto Serif TC", serif; white-space: pre-wrap; overflow-wrap: anywhere; }
-.preview-snippet mark { padding: 1px 2px; background: #f3d889; color: inherit; }
-.preview-paper .preview-note { margin-top: 35px; padding: 16px; border-left: 4px solid var(--brand); background: #f1f5f3; color: var(--muted); font-size: 12px; }
-.preview-note p { margin: 8px 0 0; }
-.preview-note .path-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* roots and trash */
 .roots-table {
@@ -909,11 +751,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 @media (max-width: 1320px) {
   :root { --sidebar-width: 220px; }
   .topbar { grid-template-columns: 204px minmax(360px, 650px) 1fr; gap: 18px; }
-  .document-row { grid-template-columns: 28px 100px minmax(0, 1fr) auto; }
-  .file-visual { width: 100px; }
-  .document-meta { min-width: 240px; gap: 8px; padding: 0 10px; }
-  .detail-grid { grid-template-columns: minmax(410px, 46%) minmax(520px, 54%); }
-  .detail-header h1 { max-width: 32vw; }
 }
 /* reduced motion */
 @media (prefers-reduced-motion: reduce) {
@@ -959,11 +796,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     autoupdateEnabled: false,
     preview: null,
     previewSeq: 0,
-    detailItem: null,
-    detailIndex: -1,
-    detailTab: "details",
-    previewZoom: 100,
-    documentScrollTop: 0,
     focusRoot: "",
     focusAfterDrawer: null,
     dialogTrigger: null,
@@ -1063,7 +895,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (page && page.value !== state.queryDraft) page.value = state.queryDraft;
   }
   function updateNav() {
-    const currentRoute = state.route === "detail" ? "documents" : state.route;
+    const currentRoute = state.route;
     document.querySelectorAll("[data-route]").forEach(node => {
       if (node instanceof HTMLButtonElement) {
         const rootItem = Boolean(node.dataset.rootPath);
@@ -1075,7 +907,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       }
     });
     const title = $("main-title");
-    if (title) title.textContent = state.route === "documents" ? "文件" : state.route === "temporary" ? "臨時文件" : state.route === "roots" ? "根目錄" : state.route === "trash" ? "垃圾桶" : "文件詳細資料";
+    if (title) title.textContent = state.route === "documents" ? "文件" : state.route === "temporary" ? "臨時文件" : state.route === "roots" ? "根目錄" : state.route === "trash" ? "垃圾桶" : "";
   }
   function switchPageVisibility() {
     document.querySelectorAll("[data-page]").forEach(node => { node.hidden = node.dataset.page !== state.route; });
@@ -1159,7 +991,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (sidebarStatus) sidebarStatus.textContent = statusText;
   }
   function escapeText(value) { return value === null || value === undefined ? "" : String(value); }
-  function documentRootLabel(item) {
+  function documentRootPath(item) {
     let rootPath = escapeText(item && item.root);
     if (!rootPath && item && item.path) {
       const itemPath = escapeText(item.path).replaceAll("/", "\\\\").toLocaleLowerCase();
@@ -1172,7 +1004,20 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         }
       }
     }
-    return rootPath.split(/[\\\\/]/u).filter(Boolean).pop() || "";
+    return rootPath;
+  }
+  function documentRootLabel(item) {
+    return documentRootPath(item).split(/[\\\\/]/u).filter(Boolean).pop() || "";
+  }
+  /** 根目錄名稱 › 子資料夾 › 檔名（SPEC §57.1）；根目錄只顯示最後一段，像搜尋引擎只顯示網域。 */
+  function documentBreadcrumb(item) {
+    const full = escapeText(item.path);
+    const rootPath = documentRootPath(item).replace(/[\\\\/]+$/u, "");
+    const inside = rootPath && full.toLocaleLowerCase().startsWith(rootPath.toLocaleLowerCase())
+      ? full.slice(rootPath.length) : full;
+    const parts = inside.split(/[\\\\/]/u).filter(Boolean);
+    const rootName = rootPath.split(/[\\\\/]/u).filter(Boolean).pop() || rootPath;
+    return (rootName ? [rootName, ...parts] : parts).join(" › ");
   }
   const localDateTime = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
   function formatLocalDateTime(value) {
@@ -1213,23 +1058,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
     if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
   }
-  function fileVisual(extension) {
-    const visual = make("div", "file-visual");
-    visual.setAttribute("aria-hidden", "true");
-    const paper = make("div", "file-paper");
-    for (const className of ["file-line strong", "file-line", "file-line short", "file-line", "file-line short", "file-line"]) paper.append(make("div", className, ""));
-    const label = make("span", "file-extension", String(extension || "file").replace(".", "").toUpperCase());
-    visual.append(paper, label);
-    return visual;
-  }
   function selectedReference(reference) {
     const temporary = state.imported.get(reference);
     return temporary ? Boolean(temporary.selected) : state.selected.has(reference);
   }
-  function makeResultCheckbox(item, table) {
+  function makeResultCheckbox(item) {
     const input = document.createElement("input");
     input.type = "checkbox";
-    input.className = table ? "table-check" : "row-check";
+    input.className = "table-check";
     input.checked = selectedReference(item.temporary ? item.id : item.reference);
     input.disabled = Boolean(item.temporary && item.status !== "indexed");
     input.setAttribute("aria-label", "選取 " + escapeText(item.path));
@@ -1243,44 +1079,40 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const actions = make("div", "document-actions");
     if (item.temporary) {
       const source = state.imported.get(item.id);
-      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "small",
+      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "link-action",
         () => source && toggleImported(source, !source.selected));
       toggle.disabled = !source || source.status !== "indexed";
       actions.append(toggle);
       return actions;
     }
-    const view = button("檢視", "small", () => openDetail(item));
-    const open = button("開啟檔案", "small", () => void documentAction(item, "open"));
-    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "small", () => toggleSelection(item, !selectedReference(item.reference)));
-    actions.append(view, open, toggle);
+    const reveal = button("顯示所在位置", "link-action", () => void documentAction(item, "reveal"));
+    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "link-action", () => toggleSelection(item, !selectedReference(item.reference)));
+    actions.append(reveal, toggle);
     return actions;
   }
   function makeDocumentRow(item) {
     const resultKey = item.temporary ? item.id : item.reference;
     const row = make("article", "document-row" + (selectedReference(resultKey) ? " is-selected" : ""));
     row.dataset.reference = resultKey;
-    const check = makeResultCheckbox(item, false);
-    const visual = fileVisual(item.extension);
-    const main = make("div", "document-main");
-    const titleLine = make("div", "document-title-line");
-    const title = item.temporary ? make("strong", "document-title", escapeText(item.path))
-      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "document-title", () => openDetail(item));
-    title.title = escapeText(item.path);
-    const extension = make("span", "format-badge", escapeText(item.extension).replace(".", "").toUpperCase());
-    const reason = make("span", "reason-badge", escapeText(item.reason || "命中"));
-    titleLine.append(title, extension, reason);
-    const snippet = make("p", "snippet");
-    if (item.snippet) appendHighlighted(snippet, item.snippet);
-    else snippet.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
-    const pathNode = make("div", "document-path", item.path);
+    const name = escapeText(item.path).split(/[\\\\/]/u).pop() || item.path;
+    // 點標題直接開啟原檔，像搜尋引擎點連結（SPEC §57.1）。
+    const title = item.temporary ? make("strong", "document-title", name)
+      : button(name, "document-title", () => void documentAction(item, "open"));
+    title.title = item.temporary ? escapeText(item.path) : "開啟 " + escapeText(item.path);
+    const pathNode = make("div", "document-path", "");
     pathNode.title = item.path;
-    const location = make("div", "document-location", escapeText(item.location || "未提供命中位置"));
-    main.append(titleLine, snippet, pathNode, location, resultActions(item));
-    const meta = make("div", "document-meta");
-    const rootLabel = documentRootLabel(item);
-    if (rootLabel) meta.append(make("span", "", rootLabel));
-    meta.append(make("span", "", escapeText(item.location || "未提供位置")), make("span", "meta-value", item.status === "indexed" ? "可讀" : escapeText(item.status || "未提供")));
-    row.append(check, visual, main, meta);
+    pathNode.append(make("span", "document-crumbs", item.temporary ? escapeText(item.path) : documentBreadcrumb(item)),
+      make("span", "document-format", String(item.extension || "").replace(".", "").toUpperCase()));
+    const snippet = make("p", "snippet");
+    if (!item.temporary && item.filenameOnly) {
+      snippet.classList.add("is-muted");
+      snippet.textContent = "檔名符合";
+    } else if (item.snippet) appendHighlighted(snippet, item.snippet);
+    else {
+      snippet.classList.add("is-muted");
+      snippet.textContent = "沒有可顯示的片段";
+    }
+    row.append(title, pathNode, snippet, resultActions(item));
     return row;
   }
   function makeTableRow(item) {
@@ -1289,10 +1121,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     row.classList.toggle("is-selected", selectedReference(resultKey));
     row.dataset.reference = resultKey;
     const checkCell = document.createElement("td");
-    checkCell.append(makeResultCheckbox(item, true));
+    checkCell.append(makeResultCheckbox(item));
     const titleCell = document.createElement("td");
     const title = item.temporary ? make("strong", "table-title", escapeText(item.path))
-      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "table-title", () => openDetail(item));
+      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "table-title", () => void documentAction(item, "open"));
     title.title = item.path;
     titleCell.append(title);
     const rootCell = document.createElement("td");
@@ -1548,81 +1380,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       showToast((action === "open" ? "已送出開啟檔案請求。" : "已送出顯示位置請求。") + (changed ? " " + changed : ""));
     } catch (error) { showToast(error.message || "文件操作失敗。"); }
   }
-  function currentDetailItem() { return state.detailItem; }
-  function renderDetail() {
-    const item = currentDetailItem();
-    if (!item) return;
-    $("detail-title").textContent = escapeText(item.path).split(/[\\\\/]/u).pop() || item.path;
-    $("detail-title").title = item.path;
-    $("detail-prev").disabled = !state.data || state.detailIndex <= 0;
-    $("detail-next").disabled = !state.data || state.detailIndex < 0 || state.detailIndex >= state.data.results.length - 1;
-    const values = [
-      ["標題", escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, false],
-      ["根目錄", documentRootLabel(item) || "未提供", false],
-      ["檔案格式", String(item.extension || "").replace(".", "").toUpperCase() || "未提供", false],
-      ["命中位置", item.location || "未提供", false],
-      ["來源路徑", item.path, true],
-      ["索引狀態", item.status === "indexed" ? "可讀" : (item.status || "未提供"), false],
-    ];
-    const details = $("detail-values");
-    details.replaceChildren();
-    for (const value of values) {
-      details.append(make("dt", "", value[0]));
-      details.append(make("dd", value[2] ? "path-value" : "", value[1]));
-    }
-    const content = $("detail-index-content");
-    content.replaceChildren();
-    if (item.snippet) appendHighlighted(content, item.snippet);
-    else content.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
-    $("detail-tab-details").setAttribute("aria-selected", String(state.detailTab === "details"));
-    $("detail-tab-content").setAttribute("aria-selected", String(state.detailTab === "content"));
-    $("detail-details-panel").hidden = state.detailTab !== "details";
-    $("detail-content-panel").hidden = state.detailTab !== "content";
-    const paper = $("detail-preview-paper");
-    paper.replaceChildren();
-    paper.style.zoom = String(state.previewZoom / 100);
-    $("detail-zoom").textContent = String(state.previewZoom) + "%";
-    paper.append(make("h2", "", escapeText(item.path).split(/[\\\\/]/u).pop() || item.path));
-    paper.append(make("div", "preview-sub", String(item.extension || "").replace(".", "").toUpperCase() + " · " + (item.location || "未提供命中位置") + " · " + (item.status === "indexed" ? "可讀" : (item.status || "未提供"))));
-    paper.append(make("h3", "", "命中內容"));
-    const snippet = make("p", "preview-snippet");
-    if (item.snippet) appendHighlighted(snippet, item.snippet);
-    else snippet.textContent = item.filenameOnly ? "僅檔名命中；server 沒有正文片段。" : "server 沒有回傳片段。";
-    paper.append(snippet);
-    const note = make("div", "preview-note");
-    note.append(make("strong", "", "來源路徑"), make("br"), make("span", "path-text", item.path), make("p", "", "命中片段預覽，不是完整文件。"));
-    paper.append(note);
-    const toggle = $("detail-context-toggle");
-    toggle.textContent = selectedReference(item.reference) ? "移出上下文" : "加入上下文";
-  }
-  function openDetail(item) {
-    if (!item) return;
-    state.documentScrollTop = $("main").scrollTop;
-    state.detailItem = item;
-    state.detailIndex = state.data && Array.isArray(state.data.results) ? state.data.results.findIndex(result => result.reference === item.reference) : -1;
-    state.detailTab = "details";
-    state.route = "detail";
-    switchPageVisibility();
-    renderDetail();
-    $("main").scrollTop = 0;
-    $("detail-close").focus();
-  }
-  function closeDetail() {
-    state.route = "documents";
-    switchPageVisibility();
-    renderDocuments();
-    $("main").scrollTop = state.documentScrollTop;
-    $("document-query").focus();
-  }
-  function moveDetail(direction) {
-    if (!state.data || state.detailIndex < 0) return;
-    const next = state.detailIndex + direction;
-    if (next < 0 || next >= state.data.results.length) return;
-    state.detailIndex = next;
-    state.detailItem = state.data.results[next];
-    renderDetail();
-    $("main").scrollTop = 0;
-  }
   function renderTemporary() {
     const list = $("file-list");
     list.replaceChildren();
@@ -1710,7 +1467,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderContextDrawer();
       if (state.route === "documents") renderDocuments();
       if (state.route === "temporary") renderTemporary();
-      if (state.route === "detail") renderDetail();
     }
   }
   function contextFingerprint() {
@@ -1795,7 +1551,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       body.append(make("div", "context-item-name", selected.item.path));
       body.append(make("div", "context-item-meta", (selected.item.extension || "") + " · " + (selected.item.location || "未提供位置")));
       const actions = make("div", "context-item-actions");
-      actions.append(button("檢視", "small", () => openDetail(selected.item)));
+      actions.append(button("開啟", "small", () => void documentAction(selected.item, "open")));
       actions.append(button("移除", "small", () => { state.selected.delete(selected.reference); invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
       row.append(body, actions);
       indexed.append(row);
@@ -2199,15 +1955,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const resultList = make("div", "result-list", ""); resultList.id = "document-list"; docPage.append(resultList);
     const tableWrap = make("div", "table-wrap", ""); tableWrap.id = "document-table-wrap"; const table = document.createElement("table"); table.className = "documents-table"; const thead = document.createElement("thead"); const headRow = document.createElement("tr"); for (const label of ["選取", "標題", "根目錄", "格式", "命中位置", "狀態"]) headRow.append(make("th", "", label)); thead.append(headRow); const tbody = document.createElement("tbody"); tbody.id = "document-table-body"; table.append(thead, tbody); tableWrap.append(table); docPage.append(tableWrap);
     const bulk = make("div", "bulk-bar", ""); bulk.id = "bulk-bar"; const selectionLabel = make("strong", "", ""); selectionLabel.id = "selection-label"; const review = button("加入上下文", "primary", openPreview); review.id = "review-context"; const clear = button("清除選取", "", () => { state.selected.clear(); for (const item of state.imported.values()) item.selected = false; invalidatePreview("選取已清除；請重新產生精確預覽。", true); }); bulk.append(selectionLabel, review, clear); docPage.append(bulk); main.append(docPage);
-
-    const detailPage = make("section", "page", ""); detailPage.dataset.page = "detail"; detailPage.id = "detail-page";
-    const detailHeader = make("header", "detail-header"); const detailClose = button("× 關閉", "", closeDetail); detailClose.id = "detail-close"; const detailPrev = button("←", "", () => moveDetail(-1)); detailPrev.id = "detail-prev"; detailPrev.setAttribute("aria-label", "上一份"); const detailNext = button("→", "", () => moveDetail(1)); detailNext.id = "detail-next"; detailNext.setAttribute("aria-label", "下一份"); const detailTitle = make("h1", "", ""); detailTitle.id = "detail-title"; const detailSpacer = make("span", "detail-spacer", ""); const detailOpen = button("開啟來源", "", () => { const item = currentDetailItem(); if (item) void documentAction(item, "open"); }); const detailToggle = button("加入上下文", "primary", () => { const item = currentDetailItem(); if (item) toggleSelection(item, !selectedReference(item.reference)); }); detailToggle.id = "detail-context-toggle"; detailHeader.append(detailClose, detailPrev, detailNext, detailTitle, detailSpacer, detailOpen, detailToggle); detailPage.append(detailHeader);
-    const detailGrid = make("div", "detail-grid", ""); const detailFields = make("section", "detail-panel detail-fields", ""); const tabs = make("div", "detail-tabs", ""); const tabDetails = button("詳細資料", "detail-tab", () => { state.detailTab = "details"; renderDetail(); }); tabDetails.id = "detail-tab-details"; tabDetails.setAttribute("role", "tab"); const tabContent = button("索引內容", "detail-tab", () => { state.detailTab = "content"; renderDetail(); }); tabContent.id = "detail-tab-content"; tabContent.setAttribute("role", "tab"); tabs.append(tabDetails, tabContent);
-    tabs.setAttribute("role", "tablist");
-    const detailsPanel = make("div", "", ""); detailsPanel.id = "detail-details-panel"; const values = document.createElement("dl"); values.className = "detail-metadata"; values.id = "detail-values"; detailsPanel.append(values);
-    const contentPanel = make("div", "", ""); contentPanel.id = "detail-content-panel"; const contentBody = make("div", "detail-index-content", ""); contentBody.id = "detail-index-content"; contentPanel.append(contentBody);
-    detailFields.append(tabs, detailsPanel, contentPanel);
-    const detailPreview = make("section", "detail-panel detail-preview", ""); const previewTools = make("div", "detail-preview-tools", ""); const previewPage = make("span", "btn", "片段 1，共 1 段"); const zoomOut = button("−", "", () => { state.previewZoom = Math.max(80, state.previewZoom - 10); renderDetail(); }); const zoomLabel = make("span", "btn", "100%"); zoomLabel.id = "detail-zoom"; const zoomIn = button("+", "", () => { state.previewZoom = Math.min(120, state.previewZoom + 10); renderDetail(); }); previewTools.append(previewPage, zoomOut, zoomLabel, zoomIn); const previewPaper = make("div", "preview-paper", ""); previewPaper.id = "detail-preview-paper"; detailPreview.append(previewTools, previewPaper); detailGrid.append(detailFields, detailPreview); detailPage.append(detailGrid); main.append(detailPage);
 
     const temporaryPage = make("section", "page", ""); temporaryPage.dataset.page = "temporary"; temporaryPage.id = "temporary-page"; const tempHeader = makePageHeader("臨時文件", "本次工作階段解析，不加入永久索引。"); const tempCount = make("strong", "sr-only", "0 / 20 份"); tempCount.id = "temporary-count"; tempHeader.actions.append(tempCount, button("選取文件", "primary", () => $("file-input").click())); temporaryPage.append(tempHeader); const drop = make("div", "drop-zone", ""); drop.id = "drop-zone"; drop.tabIndex = 0; drop.setAttribute("role", "button"); drop.setAttribute("aria-label", "拖曳或選取文件"); drop.append(make("strong", "", "拖曳文件到這裡"), make("small", "", "目前有 0 份臨時文件可加入上下文。")); drop.querySelector("small").id = "drop-help"; temporaryPage.append(drop); const fileInput = document.createElement("input"); fileInput.id = "file-input"; fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true; temporaryPage.append(fileInput); const fileStatus = make("div", "status", ""); fileStatus.id = "file-status-message"; fileStatus.setAttribute("role", "status"); fileStatus.setAttribute("aria-live", "polite"); temporaryPage.append(fileStatus); const fileList = make("div", "file-list", ""); fileList.id = "file-list"; temporaryPage.append(fileList); main.append(temporaryPage);
 
