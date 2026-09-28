@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -76,9 +77,9 @@ export class IgnoreRules {
   }
 }
 
-export async function loadIgnoreRules(root: string): Promise<IgnoreRules> {
+function parseIgnoreFile(root: string, read: () => string): IgnoreRules {
   try {
-    const rules = IgnoreRules.parse(await readFile(path.join(root, IGNORE_FILE), "utf8"));
+    const rules = IgnoreRules.parse(read());
     rules.sourcePath = path.join(root, IGNORE_FILE);
     return rules;
   } catch (error) {
@@ -86,4 +87,19 @@ export async function loadIgnoreRules(root: string): Promise<IgnoreRules> {
     if (error instanceof IgnoreConfigurationError) throw error;
     throw new IgnoreConfigurationError(`無法讀取 ${path.join(root, IGNORE_FILE)}：${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+export async function loadIgnoreRules(root: string): Promise<IgnoreRules> {
+  let content: string;
+  try {
+    content = await readFile(path.join(root, IGNORE_FILE), "utf8");
+  } catch (error) {
+    return parseIgnoreFile(root, () => { throw error; });
+  }
+  return parseIgnoreFile(root, () => content);
+}
+
+/** 監看層在事件 callback 內同步判斷排除，不能等待 IO。 */
+export function loadIgnoreRulesSync(root: string): IgnoreRules {
+  return parseIgnoreFile(root, () => readFileSync(path.join(root, IGNORE_FILE), "utf8"));
 }

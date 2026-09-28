@@ -11,6 +11,7 @@ import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
 import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, RootWatchState } from "./autoupdate-control.js";
 import { DEFAULT_QUEUE_LIMIT, LiveWorkQueue, QueuePersistError, type LiveWorkQueueOptions } from "./live-queue.js";
+import { RootExclusion } from "./root-exclusion.js";
 import { runBackgroundReconcileBatch, DEFAULT_RECONCILE_BATCH_ENTRIES, DEFAULT_RECONCILE_BATCH_MS } from "./reconcile.js";
 
 export const DEFAULT_DEBOUNCE_MS = 1500;
@@ -18,6 +19,8 @@ export const DEFAULT_WATCH_RESCAN_MS = 300_000;
 export const DEFAULT_RECONCILE_MS = 21_600_000;
 export const QUEUE_LIMIT = DEFAULT_QUEUE_LIMIT;
 export const DEFAULT_WATCH_HANDLE_LIMIT = 128;
+/** 事件不間斷時，防抖最長等待「防抖時間 × 此倍數」就開始處理（SPEC §53.4）。 */
+export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
 export const HEARTBEAT_MS = 10_000;
 export const ROOT_REFRESH_MS = 10_000;
 export const WATCHER_RETRY_MS = [60_000, 300_000, 900_000] as const;
@@ -67,6 +70,8 @@ type RootState = {
   dirty: boolean;
   running: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
+  firstScheduledAt: number | undefined;
+  exclusion: RootExclusion;
   watcher?: fs.FSWatcher;
   handles: WatchHandle[];
   scopeMode: "split" | "coarse";
@@ -144,6 +149,7 @@ export class LiveUpdateEngine {
   private lastLocalUpdate?: { at: string; root: string; path: string };
   private lastReconcile?: { at: string; root: string; complete: boolean };
   private eventCount = 0;
+  private excludedEventCount = 0;
   private localUpdateCount = 0;
   private rootScanCount = 0;
   private subtreeScanCount = 0;
@@ -215,10 +221,23 @@ export class LiveUpdateEngine {
   private newState(root: string): RootState {
     return {
       root, pending: new Set(), reconcile: false, dirty: false, running: false,
-      timer: undefined, failed: false, offline: false, syncFailed: false, removed: false,
+      timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), failed: false, offline: false, syncFailed: false, removed: false,
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
     };
+  }
+
+  /** 規則檔設定錯誤時只套用內建排除；同步會依既有規則回報根目錄失敗。 */
+  private loadExclusion(root: string): RootExclusion {
+    try {
+      return RootExclusion.loadSync(root, this.store);
+    } catch {
+      return RootExclusion.builtinOnly(root);
+    }
+  }
+
+  private isExcluded(state: RootState, absPath: string, isDirectory: boolean): boolean {
+    return state.exclusion.excludes(absPath, isDirectory);
   }
 
   snapshot(): LiveStatus {
@@ -258,6 +277,7 @@ export class LiveUpdateEngine {
       roots,
       pendingCount: roots.reduce((sum, item) => sum + item.pending, 0),
       eventCount: this.eventCount,
+      excludedEventCount: this.excludedEventCount,
       localUpdateCount: this.localUpdateCount,
       rootScanCount: this.rootScanCount,
       subtreeScanCount: this.subtreeScanCount,
@@ -458,6 +478,10 @@ export class LiveUpdateEngine {
             : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath) }));
           for (const item of work) {
             if (this.stopping) break;
+            if (this.isExcluded(state, item.filePath, false)) {
+              if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
+              continue;
+            }
             const classified = await this.applyOne(state, item.filePath, inner, syncOptions);
             updated += classified.updated;
             unchanged += classified.unchanged;
@@ -530,6 +554,7 @@ export class LiveUpdateEngine {
     }
     if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
     if (info.isDirectory()) {
+      if (this.isExcluded(state, filePath, true)) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: "" };
       if (samePath(filePath, state.root)) this.rootScanCount++;
       else this.subtreeScanCount++;
       const report = await this.syncFn()(filePath, this.store, { ...syncOptions, requireRegistered: false });
@@ -566,10 +591,14 @@ export class LiveUpdateEngine {
     state.dirty = true;
     if (state.running) return;
     if (state.timer) this.clearTimer(state.timer);
+    const now = this.now();
+    state.firstScheduledAt ??= now;
+    const remaining = state.firstScheduledAt + this.debounceMs * DEBOUNCE_MAX_WAIT_FACTOR - now;
     state.timer = this.setTimer(() => {
       state.timer = undefined;
+      state.firstScheduledAt = undefined;
       this.enqueueReady(state.root);
-    }, this.debounceMs);
+    }, Math.max(0, Math.min(this.debounceMs, remaining)));
   }
 
   private armRescan(state: RootState): void {
@@ -630,7 +659,7 @@ export class LiveUpdateEngine {
   private attach(state: RootState): void {
     const recovering = state.failed;
     this.closeHandles(state);
-    const children = this.listChildDirectories(state.root);
+    const children = this.listChildDirectories(state);
     const needed = 1 + children.length;
     const available = this.watchHandleLimit - this.totalHandles();
     if (needed > available) {
@@ -715,7 +744,8 @@ export class LiveUpdateEngine {
     delete state.watcher;
   }
 
-  private listChildDirectories(root: string): string[] {
+  private listChildDirectories(state: RootState): string[] {
+    const root = state.root;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
@@ -727,7 +757,9 @@ export class LiveUpdateEngine {
       if (shouldIgnoreWatchPath(entry.name, root)) continue;
       if (entry.isSymbolicLink()) continue;
       if (!entry.isDirectory()) continue;
-      children.push(path.join(root, entry.name));
+      const child = path.join(root, entry.name);
+      if (this.isExcluded(state, child, true)) continue;
+      children.push(child);
     }
     return children;
   }
@@ -771,6 +803,8 @@ export class LiveUpdateEngine {
     try {
       this.attachWatch(state, dir, true);
     } catch {
+      // 短暫存在的目錄在 attach 前已消失：路徑已排入待辦核對，不必退回 coarse（SPEC §53.2）。
+      if (!fs.existsSync(dir)) return;
       this.closeHandles(state);
       this.attachCoarse(state, false, "新目錄 attach 失敗");
       this.persistScope(state, "scope-fallback");
@@ -792,6 +826,21 @@ export class LiveUpdateEngine {
   private handleEvent(state: RootState, filename: string | Buffer | null | undefined, watchDir = state.root, _recursive = true): void {
     const label = filename ? String(filename) : "";
     if (label && shouldIgnoreWatchPath(label, watchDir)) return;
+    const abs = label ? path.resolve(watchDir, label) : undefined;
+    if (abs && this.isExcluded(state, abs, false)) {
+      this.excludedEventCount++;
+      return;
+    }
+    let info: fs.Stats | undefined;
+    let missing = false;
+    if (abs) {
+      try { info = fs.lstatSync(abs); } catch { missing = true; }
+      // 只排除目錄的規則（例如 `/AppData/`）需要知道路徑本身是目錄。
+      if (info?.isDirectory() && this.isExcluded(state, abs, true)) {
+        this.excludedEventCount++;
+        return;
+      }
+    }
     this.eventCount++;
     const at = new Date(this.now()).toISOString();
     state.lastEventAt = at;
@@ -808,16 +857,19 @@ export class LiveUpdateEngine {
       this.schedule(state);
       return;
     }
-    const abs = path.resolve(watchDir, label);
-    if (!coversPath(state.root, abs) && !samePath(state.root, abs)) return;
+    if (!abs || (!coversPath(state.root, abs) && !samePath(state.root, abs))) return;
     if (samePath(abs, state.root) || isIgnoreFile(abs) || path.basename(abs) === IGNORE_FILE) {
+      if (!samePath(abs, state.root)) {
+        // 規則變更：依新規則重建 split 監看範圍，整根校正補上交接窗口（SPEC §53.2）。
+        state.exclusion = this.loadExclusion(state.root);
+        this.attach(state);
+      }
       this.persistScope(state, "root-or-ignore");
       this.markReconcile(state);
       this.schedule(state);
       return;
     }
-    let info: fs.Stats | undefined;
-    try { info = fs.lstatSync(abs); } catch { this.releaseChildWatch(state, abs); }
+    if (missing) this.releaseChildWatch(state, abs);
     if (info?.isDirectory() && !info.isSymbolicLink() && samePath(path.dirname(abs), state.root)) {
       this.ensureChildWatch(state, abs);
     }

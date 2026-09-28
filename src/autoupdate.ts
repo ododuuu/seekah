@@ -50,7 +50,7 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     `目前階段：${status.phase}`,
     `設定：防抖 ${status.settings.debounceMs} ms；完整校正 ${status.settings.reconcileMs} ms`,
     `待處理：${status.pendingCount}`,
-    `基線：事件 ${status.eventCount}；局部更新 ${status.localUpdateCount}；根目錄掃描 ${status.rootScanCount}；子樹掃描 ${status.subtreeScanCount}`,
+    `基線：事件 ${status.eventCount}；${status.excludedEventCount !== undefined ? `已排除事件 ${status.excludedEventCount}；` : ""}局部更新 ${status.localUpdateCount}；根目錄掃描 ${status.rootScanCount}；子樹掃描 ${status.subtreeScanCount}`,
     `工作佇列：待辦 ${status.queuePendingCount}；${status.queueDegraded ? "降級（落盤失敗）" : "正常"}`,
     `最舊待辦：${status.oldestQueuedAt ?? "無"}`,
     `最後事件：${status.lastEvent ? `${status.lastEvent.at} ${status.lastEvent.root}` : "無"}`,

@@ -11,7 +11,8 @@
 - [x] A／B／C1／C2／D 在真實 store snapshot 上建置、2,000 查詢差分、延遲、成本模型與 migration 等價；見 [PROTOTYPE-RESULTS.md](research/search-architecture-2026-09-27/PROTOTYPE-RESULTS.md)。
 - [x] 0.38.0 已依 D081 實作 C2-hybrid（SPEC §50），並修正 U+0000 查詢錯誤。
 - [x] 0.39.0 已依 D083 改用區段儲存、不記位置索引與提前停止（SPEC §52）。
-- [ ] 背景自動更新不應監看或逐一處理被排除資料夾（例如 `AppData`）的檔案事件：實測 12.5 小時 2,323 萬個事件、局部更新 0，持續占用多個 CPU 核心。
+- [x] 0.39.1 已依 D084 讓背景自動更新不監看、不處理被排除資料夾的事件，並為防抖設上限（SPEC §53）。
+- [ ] 0.39.1 真實環境：以新版重新啟動 `autoupdate`，確認 `C:\Users\mains` 為 split、`AppData` 無 watcher、CPU 回落、背景校正「剩餘範圍」會前進到完成。
 - [ ] 0.39.0 公司 Windows 驗收：舊 index 遷移時間與壓縮後大小、常見詞第一頁延遲、精確總數、Workbench 202→自動重送與總筆數設定。
 - [x] 0.38.1 已依 D082 修正大量刪除效能（SPEC §51）。
 - [ ] 另案：遷移遇到 SQLITE_BUSY 直接失敗（`database is locked`），應可重試或等待。

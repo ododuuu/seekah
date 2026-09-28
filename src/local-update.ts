@@ -1,10 +1,11 @@
 import { lstat, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { IGNORE_FILE, IgnoreConfigurationError, loadIgnoreRules } from "./ignore.js";
+import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
+import { RootExclusion } from "./root-exclusion.js";
 import { classifyReprocess, emptyStatusCounts, reprocessAction, supportedExtensions, type Diagnostic, type DocumentRecord } from "./model.js";
 import { parseDocument } from "./parser.js";
 import { throwIfAborted } from "./progress.js";
-import { coversPath, samePath } from "./root-plan.js";
+import { samePath } from "./root-plan.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
@@ -87,14 +88,10 @@ export async function withWriterBackoff<T>(
 }
 
 async function loadRootIgnore(root: string, store: IndexStore): Promise<{ match(filePath: string, isDirectory: boolean): boolean }> {
-  const rules = await loadIgnoreRules(root);
-  const extra: { base: string; rules: Awaited<ReturnType<typeof loadIgnoreRules>> }[] = [];
-  for (const base of store.ignoreBases(root)) extra.push({ base, rules: await loadIgnoreRules(base) });
+  const exclusion = await RootExclusion.load(root, store);
   return {
     match(filePath, isDirectory) {
-      if (shouldIgnoreWatchPath(filePath, root)) return true;
-      if (rules.matches(path.relative(root, filePath), isDirectory)) return true;
-      return extra.some(item => coversPath(item.base, filePath) && item.rules.matches(path.relative(item.base, filePath), isDirectory));
+      return shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, isDirectory);
     },
   };
 }

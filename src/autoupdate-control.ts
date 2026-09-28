@@ -76,6 +76,8 @@ export interface LiveStatus {
   roots: LiveRootStatus[];
   pendingCount: number;
   eventCount: number;
+  /** 0.39.1 起；較舊的背景程序不回報。 */
+  excludedEventCount?: number;
   localUpdateCount: number;
   rootScanCount: number;
   subtreeScanCount: number;
