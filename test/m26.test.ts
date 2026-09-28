@@ -30,8 +30,9 @@ async function fixture(run: (temp: string, store: IndexStore) => Promise<void>) 
 function payloadDump(database: string) {
   const db = new DatabaseSync(database, { readOnly: true });
   try {
-    return (db.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal")
-      .all() as { document_id: number; ordinal: number; payload: string }[]);
+    // Stored chunk text (SPEC §52.1); a merge must only transfer ownership, never rewrite it.
+    return (db.prepare("SELECT id, document_id, ordinal, hex(text) AS text, hex(layout) AS layout FROM document_chunks ORDER BY id")
+      .all() as { id: number; document_id: number; ordinal: number; text: string; layout: string }[]);
   } finally { db.close(); }
 }
 
@@ -81,7 +82,7 @@ test("M26 root operation plan covers merge, subtree, alias and similar prefixes"
   assert.equal(planRootOperation({ resolved: "\\\\srv\\other", actual: "\\\\srv\\other" }, [uncChild], "win32").kind, "independent");
 });
 
-test("M26 merge transfers ownership without rewriting payload bytes", () => fixture(async (temp, store) => {
+test("M26 merge transfers ownership without rewriting stored chunks", () => fixture(async (temp, store) => {
   const parent = path.join(temp, "parent");
   const child = path.join(parent, "child");
   const other = path.join(temp, "other");
@@ -92,6 +93,7 @@ test("M26 merge transfers ownership without rewriting payload bytes", () => fixt
   const row = store.getDocument(path.join(child, "甲.txt"))!;
   const ref = search(store, "子根內容")[0]!.reference;
   const before = payloadDump(store.databasePath);
+  assert.ok(before.length > 0);
   const report = await sync(parent, store);
   assert.equal(report.operation, "merge");
   assert.deepEqual(store.roots(), [other, parent].sort());

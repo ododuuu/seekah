@@ -1,4 +1,4 @@
-import { collectHits, materializeHits, type RankedSearchResult, type SearchField, type SearchMode, type SearchResult, type SearchResultPage, type SearchSort } from "./search.js";
+import { materializeHits, openHits, totalTarget, type HitStream, type SearchField, type SearchMode, type SearchResult, type SearchResultPage, type SearchSort, type TotalMode } from "./search.js";
 import type { DocumentStatus } from "./model.js";
 import { SearchTraceRecorder, type SearchTrace } from "./search-trace.js";
 import type { IndexStore } from "./store.js";
@@ -20,13 +20,15 @@ export interface SearchSessionIO {
 
 interface SearchLayer {
   rawQuery: string;
-  ranked: RankedSearchResult[];
+  stream: HitStream;
   trace: SearchTraceRecorder;
 }
 
 export class SearchSession {
   readonly originalQuery: string;
   readonly originalTotal: number;
+  /** `gte` when the first layer stopped at the fast-mode limit (SPEC §52.3). */
+  readonly originalTotalRelation: "eq" | "gte";
   readonly dataVersion: number;
   readonly mode: SearchMode;
   private readonly history: SearchLayer[];
@@ -41,13 +43,16 @@ export class SearchSession {
     private readonly field: SearchField = "all",
     private readonly statuses?: readonly DocumentStatus[],
     private readonly sort: SearchSort = "relevance",
+    private readonly totalMode: TotalMode = "fast",
   ) {
     this.originalQuery = rawQuery;
     this.mode = mode;
     const trace = new SearchTraceRecorder(rawQuery, mode, field, sort);
-    const ranked = collectHits(store, rawQuery, types, root, mode, undefined, subtree, field, statuses, sort, trace);
-    this.history = [{ rawQuery, ranked, trace }];
-    this.originalTotal = ranked.length;
+    const stream = openHits(store, rawQuery, { types, root, subtree, mode, field, statuses, sort, trace });
+    stream.fill(totalTarget(totalMode));
+    this.history = [{ rawQuery, stream, trace }];
+    this.originalTotal = stream.results.length;
+    this.originalTotalRelation = stream.done ? "eq" : "gte";
     this.dataVersion = store.dataVersion();
   }
 
@@ -56,11 +61,15 @@ export class SearchSession {
   }
 
   get currentTotal(): number {
-    return this.current.ranked.length;
+    return this.current.stream.results.length;
+  }
+
+  get currentTotalRelation(): "eq" | "gte" {
+    return this.current.stream.done ? "eq" : "gte";
   }
 
   get trace(): SearchTrace {
-    return this.current.trace.snapshot(this.current.ranked.length);
+    return this.current.trace.snapshot(this.current.stream.results.length);
   }
 
   private get current(): SearchLayer {
@@ -76,9 +85,11 @@ export class SearchSession {
     const query = rawQuery.trim();
     if (!query) throw new Error("縮小條件不可為空白。");
     const trace = new SearchTraceRecorder(query, this.mode, this.field, this.sort);
-    const ranked = collectHits(this.store, query, undefined, undefined, this.mode, this.current.ranked.map(item => item.documentId),
-      undefined, this.field, this.statuses, this.sort, trace);
-    this.history.push({ rawQuery: query, ranked, trace });
+    // The new condition filters the previous layer in its order and checks full content (D044, SPEC §52.2).
+    const stream = openHits(this.store, query, { mode: this.mode, field: this.field, statuses: this.statuses, sort: this.sort,
+      within: this.current.stream, trace });
+    stream.fill(totalTarget(this.totalMode));
+    this.history.push({ rawQuery: query, stream, trace });
   }
 
   back(): boolean {
@@ -98,7 +109,8 @@ export class SearchSession {
   page(page: number, pageSize: number): SearchResultPage {
     this.ensureCurrent();
     const layer = this.current;
-    return materializeHits(this.store, layer.ranked, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery, layer.trace);
+    if (Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger(pageSize) && pageSize > 0) layer.stream.fill(page * pageSize);
+    return materializeHits(this.store, layer.stream.results, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery, layer.trace);
   }
 }
 
@@ -106,13 +118,18 @@ export function formatConditionChain(conditions: readonly string[]): string {
   return conditions.join(" → ");
 }
 
-export function formatSessionSummary(page: SearchResultPage, originalTotal: number, conditions: readonly string[]): string[] {
-  return [
-    `搜尋條件：${formatConditionChain(conditions)}`,
-    `符合 ${page.total} 份文件（最初 ${originalTotal} 份）；第 ${page.page}/${page.pageCount} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`,
-  ];
+/** "N" or "N 以上" when the count is a lower bound (SPEC §52.3). */
+export function formatTotal(total: number, relation: "eq" | "gte"): string {
+  return relation === "gte" ? `${total} 以上` : `${total}`;
 }
 
+export function formatSessionSummary(page: SearchResultPage, originalTotal: number, conditions: readonly string[],
+  relations: { current: "eq" | "gte"; original: "eq" | "gte" } = { current: "eq", original: "eq" }): string[] {
+  return [
+    `搜尋條件：${formatConditionChain(conditions)}`,
+    `符合 ${formatTotal(page.total, relations.current)} 份文件（最初 ${formatTotal(originalTotal, relations.original)} 份）；第 ${page.page}/${page.pageCount}${relations.current === "gte" ? "+" : ""} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`,
+  ];
+}
 export async function runSearchSession(
   session: SearchSession,
   options: {
@@ -124,7 +141,8 @@ export async function runSearchSession(
   let currentPage = 1;
   const render = (): SearchResultPage => {
     const page = session.page(currentPage, options.pageSize);
-    for (const line of formatSessionSummary(page, session.originalTotal, session.conditions)) io.write(line);
+    for (const line of formatSessionSummary(page, session.originalTotal, session.conditions,
+      { current: session.currentTotalRelation, original: session.originalTotalRelation })) io.write(line);
     options.renderResults(page.results, io.write);
     return page;
   };
@@ -142,7 +160,8 @@ export async function runSearchSession(
       if (lower === "q") return 0;
       if (lower === "n" || lower === "p") {
         const nextPage = lower === "n" ? currentPage + 1 : currentPage - 1;
-        if (nextPage < 1 || nextPage > page.pageCount) {
+        // A lower-bound total may have more pages than are known yet (SPEC §52.3).
+        if (nextPage < 1 || (nextPage > page.pageCount && session.currentTotalRelation === "eq")) {
           io.write(nextPage < 1 ? "已是第一頁。" : "已是最後一頁。");
           continue;
         }

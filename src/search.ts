@@ -238,7 +238,9 @@ export interface SearchResultPage {
 }
 
 export interface SearchResultSet {
+  /** Exact when `totalRelation` is `eq`; otherwise a lower bound (SPEC §52.3). */
   readonly total: number;
+  readonly totalRelation: "eq" | "gte";
   readonly dataVersion: number;
   readonly trace: SearchTrace;
   page(page: number, pageSize: number): SearchResultPage;
@@ -500,6 +502,314 @@ function indexedHits(store: IndexStore, query: string, terms: readonly string[],
   return results;
 }
 
+export type TotalMode = "fast" | "exact";
+/** Fast mode verifies until this many documents match; beyond it the total is a lower bound (SPEC §52.3). */
+export const FAST_TOTAL_LIMIT = 500;
+
+/** Search results produced lazily in their final order (SPEC §52.2). */
+export interface HitStream {
+  /** Verify until at least `count` results are known or every candidate has been checked. */
+  fill(count: number): void;
+  readonly results: readonly RankedSearchResult[];
+  readonly done: boolean;
+}
+
+/** An already complete result list (the pre-0.39 paths). */
+class ArrayHitStream implements HitStream {
+  readonly done = true;
+  constructor(readonly results: RankedSearchResult[]) {}
+  fill(): void {}
+}
+
+type OrderKey = { rank: number; modifiedAtMs: number; path: string };
+
+function compareOrder(sort: SearchSort): (a: OrderKey, b: OrderKey) => number {
+  return sort === "filename"
+    ? (a, b) => comparePath(a.path, b.path) || b.modifiedAtMs - a.modifiedAtMs
+    : sort === "modified"
+      ? (a, b) => b.modifiedAtMs - a.modifiedAtMs || comparePath(a.path, b.path)
+      : (a, b) => b.rank - a.rank || b.modifiedAtMs - a.modifiedAtMs || comparePath(a.path, b.path);
+}
+
+type HeadingRow = { ordinal: number; heading: string; normalized: string };
+
+/**
+ * SPEC §52.2: the same ranking as rankDocument() over the chunk store. Filename
+ * and heading hits come from their small indexes; content hits are verified on
+ * decompressed chunks in the final order, only as far as `fill()` asks.
+ * `restrictIds` (search within results) replaces the candidate order and ignores
+ * type／root scope, as the pre-0.39 path does.
+ */
+function chunkHitStream(store: IndexStore, query: string, terms: readonly string[], mode: SearchMode, field: SearchField,
+  sort: SearchSort, types: readonly string[] | undefined, root: string | undefined, subtree: string | undefined,
+  statuses: readonly DocumentStatus[] | undefined, restrict: HitStream | readonly number[] | undefined,
+  trace: SearchTraceRecorder): HitStream {
+  trace.addCandidateSource("chunk-index");
+  if (restrict) trace.addCandidateSource("restricted-ids");
+  const uniqueTerms = [...new Set(terms)];
+  const verify = <T>(work: () => T): T => {
+    const phase = trace.beginPhase("exactVerification");
+    try { return work(); } finally { trace.endPhase(phase); }
+  };
+
+  const filenameCandidates = new Map<string, Set<number>>();
+  const headingRows = new Map<string, Map<number, HeadingRow[]>>();
+  const contentChunks = new Map<string, Map<number, number[]>>();
+  if (field !== "content") {
+    for (const term of uniqueTerms) filenameCandidates.set(term, new Set(store.indexFilenameCandidates(term, trace)));
+  }
+  if (field !== "filename") {
+    for (const term of uniqueTerms) {
+      const byDocument = new Map<number, HeadingRow[]>();
+      for (const row of verify(() => store.indexHeadingCandidates(term, trace)
+        .map(row => ({ ...row, normalized: normalize(row.heading) })).filter(row => row.normalized.includes(term)))) {
+        let list = byDocument.get(row.documentId);
+        if (!list) byDocument.set(row.documentId, list = []);
+        list.push({ ordinal: row.ordinal, heading: row.heading, normalized: row.normalized });
+      }
+      headingRows.set(term, byDocument);
+      contentChunks.set(term, store.chunkCandidates(term, trace));
+    }
+  }
+  // Heading rank 2: the first heading that contains every term.
+  const headingAll = new Map<number, number>();
+  for (const [documentId, rows] of headingRows.get(uniqueTerms[0]!) ?? []) {
+    for (const row of rows) {
+      if (!includesAll(row.normalized, terms)) continue;
+      const previous = headingAll.get(documentId);
+      if (previous === undefined || row.ordinal < previous) headingAll.set(documentId, row.ordinal);
+    }
+  }
+
+  const documents = new Map<number, StoredDocumentRow>();
+  const loaded = new Set<number>();
+  const load = (ids: readonly number[], scoped: boolean) => {
+    const missing = ids.filter(id => !loaded.has(id));
+    if (!missing.length) return;
+    for (const id of missing) loaded.add(id);
+    for (let start = 0; start < missing.length; start += 50_000) {
+      const slice = missing.slice(start, start + 50_000);
+      const rows = scoped ? store.indexDocuments(slice, types, root, subtree, trace) : store.indexDocuments(slice, undefined, undefined, undefined, trace);
+      for (const row of rows) {
+        if (statuses?.length && !statuses.includes(row.status)) continue;
+        documents.set(Number(row.id), row);
+      }
+    }
+  };
+  const filenameRank = (document: StoredDocumentRow): number => {
+    if (field === "content") return 0;
+    const filename = normalize(document.filename);
+    return filename === query ? 4 : includesAll(filename, terms) ? 3 : 0;
+  };
+
+  const rankOne = (document: StoredDocumentRow): IndexedRank | undefined => {
+    const byFilename = filenameRank(document);
+    if (byFilename) return { rank: byFilename, sourceKind: "filename", ordinal: null };
+    if (field === "filename") return undefined;
+    const id = Number(document.id);
+    const heading = headingAll.get(id);
+    if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
+    if (mode === "phrase") {
+      // Candidate chunks are in block order, so the first hit is the smallest matching ordinal.
+      for (const chunk of contentChunks.get(query)?.get(id) ?? []) {
+        const first = store.chunkTermHits(chunk, [query], true, trace).get(query)![0];
+        if (first !== undefined) return { rank: 1, sourceKind: "content", ordinal: first };
+      }
+      return undefined;
+    }
+    // all-terms: every term not in the filename must occur in some heading or block.
+    const chunkIds = [...new Set(uniqueTerms.flatMap(term => contentChunks.get(term)?.get(id) ?? []))];
+    const presentByOrdinal = new Map<number, string[]>();
+    for (const chunk of chunkIds) {
+      for (const [term, ordinals] of store.chunkTermHits(chunk, uniqueTerms, false, trace)) {
+        for (const ordinal of ordinals) {
+          let list = presentByOrdinal.get(ordinal);
+          if (!list) presentByOrdinal.set(ordinal, list = []);
+          list.push(term);
+        }
+      }
+    }
+    const blocks = [...presentByOrdinal].map(([ordinal, present]) => ({ ordinal, present }));
+    blocks.sort((a, b) => a.ordinal - b.ordinal);
+    const filename = normalize(document.filename);
+    const present = (term: string) => Boolean(headingRows.get(term)?.has(id)) || blocks.some(block => block.present.includes(term));
+    if (!terms.filter(term => field === "content" || !filename.includes(term)).every(present)) return undefined;
+    const allTerms = blocks.find(block => block.present.length === uniqueTerms.length);
+    if (allTerms) return { rank: 1, sourceKind: "content", ordinal: allTerms.ordinal };
+    // Coverage representative: heading source when the heading holds any term,
+    // otherwise block content; best coverage, then heading, then smallest ordinal.
+    let best: { coverage: number; headingHit: boolean; ordinal: number } | undefined;
+    const offer = (candidate: { coverage: number; headingHit: boolean; ordinal: number }) => {
+      if (!best || candidate.coverage > best.coverage || (candidate.coverage === best.coverage
+        && (Number(candidate.headingHit) > Number(best.headingHit)
+          || (candidate.headingHit === best.headingHit && candidate.ordinal < best.ordinal)))) best = candidate;
+    };
+    const seen = new Set<string>();
+    for (const term of uniqueTerms) {
+      for (const row of headingRows.get(term)?.get(id) ?? []) {
+        const key = `${row.ordinal}:${row.heading}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        offer({ coverage: terms.filter(item => row.normalized.includes(item)).length, headingHit: true, ordinal: row.ordinal });
+      }
+    }
+    for (const block of blocks) {
+      // A block whose heading holds any term is represented by its heading (offered above).
+      const blockHeading = store.blockDisplay(id, block.ordinal).heading;
+      if (blockHeading && terms.some(item => normalize(blockHeading).includes(item))) continue;
+      offer({ coverage: block.present.length, headingHit: false, ordinal: block.ordinal });
+    }
+    const chosen = best as { coverage: number; headingHit: boolean; ordinal: number } | undefined;
+    return chosen ? { rank: 1, sourceKind: chosen.headingHit ? "heading" : "content", ordinal: chosen.ordinal } : undefined;
+  };
+
+  // Candidate order: search within results follows the previous layer; otherwise
+  // every possible document is sorted by the final comparator (content hits rank 1).
+  let nextId: () => number | undefined;
+  if (restrict) {
+    const source = Array.isArray(restrict) ? new ArrayHitStream([]) : restrict as HitStream;
+    const ids = Array.isArray(restrict) ? [...new Set(restrict as readonly number[])] : undefined;
+    let position = 0;
+    trace.setCount("documentsInScope", ids ? ids.length : source.results.length);
+    nextId = () => {
+      if (ids) return ids[position++];
+      if (position >= source.results.length) source.fill(position + 256);
+      const next = source.results[position++];
+      return next?.documentId;
+    };
+  } else {
+    trace.setCount("documentsInScope", store.documentsInScope(types, root, subtree));
+    const candidates = new Set<number>();
+    if (field !== "content") {
+      let common: Set<number> | undefined;
+      for (const term of uniqueTerms) {
+        const ids = filenameCandidates.get(term)!;
+        common = common ? new Set([...common].filter(id => ids.has(id))) : new Set(ids);
+      }
+      for (const id of common ?? []) candidates.add(id);
+    }
+    if (field !== "filename") {
+      const possible = (term: string) => new Set([...(field === "content" ? [] : filenameCandidates.get(term) ?? []),
+        ...(headingRows.get(term)?.keys() ?? []), ...(contentChunks.get(term)?.keys() ?? [])]);
+      if (mode === "phrase") {
+        for (const id of headingRows.get(query)?.keys() ?? []) candidates.add(id);
+        for (const id of contentChunks.get(query)?.keys() ?? []) candidates.add(id);
+      } else {
+        let common: Set<number> | undefined;
+        for (const term of uniqueTerms) {
+          const ids = possible(term);
+          common = common ? new Set([...common].filter(id => ids.has(id))) : ids;
+        }
+        for (const id of common ?? []) candidates.add(id);
+      }
+    }
+    load([...candidates], true);
+    const order = [...candidates].filter(id => documents.has(id)).map(id => {
+      const document = documents.get(id)!;
+      return { id, rank: filenameRank(document) || (field !== "filename" && headingAll.has(id) ? 2 : 1),
+        modifiedAtMs: document.modified_at_ms, path: document.path };
+    }).sort(compareOrder(sort)).map(item => item.id);
+    let position = 0;
+    nextId = () => order[position++];
+  }
+  trace.setCount("documentsConsidered", 0);
+
+  const results: RankedSearchResult[] = [];
+  let done = false;
+  return {
+    results,
+    get done() { return done; },
+    fill(count: number) {
+      while (!done && results.length < count) {
+        const id = nextId();
+        if (id === undefined) { done = true; break; }
+        if (restrict && !loaded.has(id)) load([id], false);
+        const document = documents.get(id);
+        if (!document) continue;
+        trace.increment("documentsConsidered");
+        trace.increment("documentsExactVerified");
+        const ranked = verify(() => rankOne(document));
+        if (!ranked) continue;
+        const display = ranked.ordinal === null ? undefined : store.blockDisplay(id, ranked.ordinal);
+        if (ranked.sourceKind === "filename") trace.increment("filenameOnlyFallbacks");
+        trace.increment("documentsMatched");
+        results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
+          modifiedAtMs: document.modified_at_ms, heading: display?.heading ?? null, location: display?.location ?? null, snippet: "",
+          rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: ranked.ordinal === null, status: document.status,
+          snippetTruncated: false }, documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
+      }
+      trace.setTotalRelation(done ? "eq" : "gte");
+    },
+  };
+}
+
+export interface OpenHitsOptions {
+  types?: readonly string[] | undefined;
+  root?: string | undefined;
+  subtree?: string | undefined;
+  mode?: SearchMode;
+  field?: SearchField;
+  statuses?: readonly DocumentStatus[] | undefined;
+  sort?: SearchSort;
+  /** Search within results: the previous layer (or its document ids) gives the order. */
+  within?: HitStream | readonly number[] | undefined;
+  trace?: SearchTraceRecorder;
+}
+
+/**
+ * Open a lazily verified result stream. On an index whose chunk store migration
+ * has not finished, the pre-0.39 path computes the complete list (always exact).
+ */
+export function openHits(store: IndexStore, rawQuery: string, options: OpenHitsOptions = {}): HitStream {
+  const mode = options.mode ?? "phrase";
+  const field = options.field ?? "all";
+  const sort = options.sort ?? "relevance";
+  const recorder = options.trace ?? new SearchTraceRecorder(rawQuery, mode, field, sort);
+  if (!store.chunkStoreReady()) {
+    const within = options.within;
+    const ids = within === undefined ? undefined : Array.isArray(within) ? within as readonly number[]
+      : (() => { const stream = within as HitStream; stream.fill(Number.POSITIVE_INFINITY); return stream.results.map(item => item.documentId); })();
+    return new ArrayHitStream(collectHits(store, rawQuery, options.types, options.root, mode, ids, options.subtree, field,
+      options.statuses, sort, recorder));
+  }
+  try {
+    const normalizationStarted = performance.now();
+    const { query, terms } = queryTerms(rawQuery, mode);
+    recorder.addPhase("queryNormalization", performance.now() - normalizationStarted);
+    recorder.setNormalizedQuery(query);
+    const stream = chunkHitStream(store, query, terms, mode, field, sort, options.types, options.root, options.subtree,
+      options.statuses, options.within, recorder);
+    return {
+      get results() { return stream.results; },
+      get done() { return stream.done; },
+      fill(count: number) {
+        recorder.resume();
+        try {
+          stream.fill(count);
+          recorder.setCount("results", stream.results.length);
+          store.recordSearchTrace(recorder.snapshot(stream.results.length));
+        } catch (error) {
+          recorder.setError(searchTraceErrorCode(error));
+          store.recordSearchTrace(recorder.snapshot(), true);
+          throw error;
+        } finally {
+          recorder.pause();
+        }
+      },
+    };
+  } catch (error) {
+    recorder.setError(searchTraceErrorCode(error));
+    store.recordSearchTrace(recorder.snapshot(), true);
+    recorder.pause();
+    throw error;
+  }
+}
+
+/** How far a result set verifies before reporting its total (SPEC §52.3). */
+export function totalTarget(totalMode: TotalMode, needed = 0): number {
+  return totalMode === "exact" ? Number.POSITIVE_INFINITY : Math.max(FAST_TOTAL_LIMIT, needed);
+}
+
 export function collectHits(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
   mode: SearchMode = "phrase", restrictIds?: readonly number[], subtree?: string, field: SearchField = "all",
   statuses?: readonly DocumentStatus[], sort: SearchSort = "relevance", trace?: SearchTraceRecorder): RankedSearchResult[] {
@@ -510,7 +820,11 @@ export function collectHits(store: IndexStore, rawQuery: string, types?: readonl
     recorder.addPhase("queryNormalization", performance.now() - normalizationStarted);
     recorder.setNormalizedQuery(query);
     let results: RankedSearchResult[];
-    if (store.blockIndexReady()) {
+    if (store.chunkStoreReady()) {
+      const stream = chunkHitStream(store, query, terms, mode, field, sort, types, root, subtree, statuses, restrictIds, recorder);
+      stream.fill(Number.POSITIVE_INFINITY);
+      results = [...stream.results];
+    } else if (store.blockIndexReady()) {
       results = indexedHits(store, query, terms, mode, field, types, root, subtree, statuses, restrictIds, recorder);
     } else {
       // Pre-0.38.0 index whose block migration has not finished (SPEC §50.2).
@@ -599,17 +913,20 @@ function materializeHits(store: IndexStore, ranked: readonly RankedSearchResult[
 
 export function createSearchResultSet(store: IndexStore, rawQuery: string, types?: readonly string[], root?: string,
   mode: SearchMode = "phrase", subtree?: string, field: SearchField = "all", statuses?: readonly DocumentStatus[],
-  sort: SearchSort = "relevance"): SearchResultSet {
+  sort: SearchSort = "relevance", totalMode: TotalMode = "fast"): SearchResultSet {
   const trace = new SearchTraceRecorder(rawQuery, mode, field, sort);
-  const results = collectHits(store, rawQuery, types, root, mode, undefined, subtree, field, statuses, sort, trace);
+  const stream = openHits(store, rawQuery, { types, root, subtree, mode, field, statuses, sort, trace });
+  stream.fill(totalTarget(totalMode));
   const dataVersion = store.dataVersion();
   let returnedResults = 0;
   return {
-    total: results.length,
+    get total() { return stream.results.length; },
+    get totalRelation() { return stream.done ? "eq" as const : "gte" as const; },
     dataVersion,
-    get trace() { return trace.snapshot(results.length, returnedResults); },
+    get trace() { return trace.snapshot(stream.results.length, returnedResults); },
     page(page, pageSize) {
-      const resultPage = materializeHits(store, results, rawQuery, mode, page, pageSize, undefined, trace);
+      if (Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger(pageSize) && pageSize > 0) stream.fill(page * pageSize);
+      const resultPage = materializeHits(store, stream.results, rawQuery, mode, page, pageSize, undefined, trace);
       returnedResults = resultPage.results.length;
       return resultPage;
     },

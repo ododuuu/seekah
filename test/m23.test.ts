@@ -59,21 +59,22 @@ test("M23 large candidate block sets remain searchable through a read-only index
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });
 
-test("M23 payload Bloom does not decompress an unrelated payload", async () => {
+test("the chunk index does not decompress an unrelated chunk", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-"));
   const store = new IndexStore(path.join(temp, "index.db"));
   try {
     store.upsert({ path: path.join(temp, "large.txt"), filename: "large.txt", extension: ".txt", sizeBytes: 1, modifiedAtMs: 1,
       status: "indexed", errorCode: null, errorMessage: null, blocks: [
-        { ordinal: 0, heading: null, content: "無關內容".repeat(16_000), locationKind: "line", locationValue: "第 1 行" },
+        // Larger than one chunk (SPEC §52.1), so block 1 lands in a separate chunk.
+        { ordinal: 0, heading: null, content: "無關內容".repeat(16_500), locationKind: "line", locationValue: "第 1 行" },
         { ordinal: 1, heading: null, content: "命中 payload-RARE-739", locationKind: "line", locationValue: "第 2 行" },
       ] });
     const internal = store as unknown as { db: { prepare(sql: string): { get(...values: unknown[]): unknown; run(...values: unknown[]): unknown } } };
     const document = store.getDocument(path.join(temp, "large.txt"))!;
-    const unrelated = internal.db.prepare("SELECT payload_ordinal FROM document_payload_blocks WHERE document_id = ? AND block_id = (SELECT id FROM blocks WHERE document_id = ? AND ordinal = 0)")
-      .get(document.id, document.id) as { payload_ordinal: number };
-    internal.db.prepare("UPDATE document_payloads SET payload = X'00' WHERE document_id = ? AND ordinal = ?").run(document.id, unrelated.payload_ordinal);
+    internal.db.prepare("UPDATE document_chunks SET text = X'00' WHERE document_id = ? AND ordinal = 0").run(document.id);
     assert.deepEqual(search(store, "RARE-739").map(hit => hit.location), ["第 2 行"]);
+    // The hit chunk is read twice (verification, then the page snippet); the corrupted unrelated chunk never is.
+    assert.equal(store.lastSearchTrace()?.counts.indexVerifiedChunks, 2);
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });
 
@@ -162,7 +163,8 @@ test("metadata mapping pruning only materializes selected block metadata", async
 test("empty selected block mappings use the full-document fallback without losing results", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m23-empty-mapping-"));
   const database = path.join(temp, "index.db");
-  const store = new IndexStore(database);
+  // Pre-0.39.0 payload docstore path (used until the chunk store migration finishes).
+  const store = createLegacyStore(database);
   try {
     store.upsert({
       path: path.join(temp, "fallback.txt"), filename: "fallback.txt", extension: ".txt",

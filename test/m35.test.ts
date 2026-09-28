@@ -7,7 +7,7 @@ import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { sync } from "../src/sync.js";
 import { IndexStore } from "../src/store.js";
-import { clearBlockIndex } from "./legacy-index.js";
+import { downgradeToPreChunk } from "./legacy-index.js";
 import { importDocument, renderImportedContext, sanitizeUploadName, uploadExtension } from "../src/workbench-context.js";
 import { workbenchHtml } from "../src/workbench-app.js";
 import { previewId, previewMatches, ProviderError, ProviderKeys, requestProvider } from "../src/workbench-provider.js";
@@ -168,14 +168,14 @@ test("0.36.2 loopback workbench enforces status, selection, preview, consent and
     const refreshedSearch = await fetch(origin + "/api/search", { method: "POST", headers: postHeaders, body: JSON.stringify({ query: "fresh-http-needle", mode: "phrase", page: 1, pageSize: 20 }) });
     assert.equal(refreshedSearch.status, 200);
     assert.equal((await refreshedSearch.json() as { results: unknown[] }).results.length, 1);
-    // An index written before 0.38.0 has no block index yet (SPEC §50.3).
-    clearBlockIndex(databasePath);
+    // An index written before 0.39.0 has no chunk store yet (SPEC §52.4).
+    downgradeToPreChunk(databasePath);
     const pendingShortSearch = await fetch(origin + "/api/search", { method: "POST", headers: postHeaders,
       body: JSON.stringify({ query: "測試", mode: "phrase", page: 1, pageSize: 20 }) });
     assert.equal(pendingShortSearch.status, 202);
     const pendingData = await pendingShortSearch.json() as { pendingUpgrade: boolean; message: string };
     assert.equal(pendingData.pendingUpgrade, true);
-    assert.match(pendingData.message, /block 搜尋索引/u);
+    assert.match(pendingData.message, /搜尋索引升級/u);
     await handle.waitForIndex();
     const upgradedShortSearch = await fetch(origin + "/api/search", { method: "POST", headers: postHeaders,
       body: JSON.stringify({ query: "測試", mode: "phrase", page: 1, pageSize: 20 }) });
@@ -188,7 +188,7 @@ test("0.36.2 loopback workbench enforces status, selection, preview, consent and
     assert.equal(searchData.query, "indexed-http-needle");
     assert.equal(searchData.results.length, 1);
     assert.equal(searchData.trace.type, "search");
-    assert.equal(searchData.trace.candidateStrategy, "block-index");
+    assert.equal(searchData.trace.candidateStrategy, "chunk-index");
     assert.equal(searchData.trace.counts.results, 1);
 
     const invalidAction = await fetch(origin + "/api/document-action", { method: "POST", headers: postHeaders, body: JSON.stringify({ reference: searchData.results[0]!.reference, action: "delete" }) });

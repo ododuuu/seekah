@@ -18,11 +18,11 @@ function count(databasePath: string, sql: string): number {
   try { return Number(Object.values(db.prepare(sql).get()!)[0]); } finally { db.close(); }
 }
 
-const ftsTables = ["search_block_trigrams", "search_block_unigrams", "search_block_bigrams", "search_filename_trigrams",
+const ftsTables = ["search_chunk_trigrams", "search_chunk_unigrams", "search_chunk_bigrams", "search_filename_trigrams",
   "search_filename_unigrams", "search_filename_bigrams", "search_heading_trigrams", "search_heading_unigrams", "search_heading_bigrams"];
 
 function rowCounts(databasePath: string): Record<string, number> {
-  return Object.fromEntries(["documents", "blocks", "search_headings", "document_payloads", "document_payload_blocks",
+  return Object.fromEntries(["documents", "document_chunks", "block_meta", "search_headings",
     "index_migration_documents", ...ftsTables].map(table => [table, count(databasePath, `SELECT count(*) FROM ${table}`)]));
 }
 
@@ -91,17 +91,17 @@ test("migration markers exist only while a migration runs", async () => {
       store.registerRoot(root);
       for (let index = 0; index < 5; index++) store.upsert(record(root, `${index}.txt`, [[null, `token-${index}`]]), root);
       assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents"), 0);
-      assert.equal(store.formatStatus().blockIndexCompletedDocuments, 5);
+      assert.equal(store.formatStatus().chunkStoreCompletedDocuments, 5);
     } finally { store.close(); }
 
-    // A 0.38.0 index kept one marker per document after finishing.
+    // Markers left behind by finished migrations (as 0.38.0 did) are purged on writer open.
     const raw = new DatabaseSync(databasePath);
     try {
-      raw.exec(`INSERT INTO index_migration_documents(version, document_id) SELECT 'block_index_1', id FROM documents;
+      raw.exec(`INSERT INTO index_migration_documents(version, document_id) SELECT 'chunk_store_1', id FROM documents;
         INSERT INTO index_migration_documents(version, document_id) SELECT 'content_storage_2', id FROM documents;`);
     } finally { raw.close(); }
     const readOnly = new IndexStore(databasePath, { readOnly: true });
-    try { assert.equal(readOnly.formatStatus().blockIndexCompletedDocuments, 5); } finally { readOnly.close(); }
+    try { assert.equal(readOnly.formatStatus().chunkStoreCompletedDocuments, 5); } finally { readOnly.close(); }
     assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents"), 10);
     new IndexStore(databasePath).close();
     assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents"), 0);
@@ -112,12 +112,12 @@ test("migration markers exist only while a migration runs", async () => {
     try {
       legacy.registerRoot(root);
       legacy.upsert(record(root, "a.txt", [[null, "alpha"]]), root);
-      assert.equal(count(legacyPath, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 1);
+      assert.equal(count(legacyPath, "SELECT count(*) FROM index_migration_documents WHERE version = 'chunk_store_1'"), 1);
       await legacy.upgrade();
       assert.equal(count(legacyPath, "SELECT count(*) FROM index_migration_documents"), 0);
       legacy.upsert(record(root, "b.txt", [[null, "beta"]]), root);
       assert.equal(count(legacyPath, "SELECT count(*) FROM index_migration_documents"), 0);
-      assert.equal(legacy.formatStatus().blockIndexCompletedDocuments, 2);
+      assert.equal(legacy.formatStatus().chunkStoreCompletedDocuments, 2);
     } finally { legacy.close(); }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });

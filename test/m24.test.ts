@@ -11,7 +11,7 @@ import type { DocumentRecord } from "../src/model.js";
 import { OperationCancelledError } from "../src/progress.js";
 import { createSearchResultSet, search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
-import { clearBlockIndex, createLegacyStore } from "./legacy-index.js";
+import { clearBlockIndex, clearChunkStore, createLegacyStore } from "./legacy-index.js";
 
 function document(root: string, name: string, content: string): DocumentRecord {
   return { path: path.join(root, name), filename: name, extension: ".txt", sizeBytes: content.length, modifiedAtMs: 1,
@@ -25,6 +25,7 @@ function makePending(database: string, root: string, count = 2, repeat = 40_000)
   for (let index = 0; index < count; index++) store.upsert(document(root, `${index}.txt`, `保留的正文 ${index} ${"內容".repeat(repeat)}`));
   store.close();
   clearBlockIndex(database);
+  clearChunkStore(database);
   const db = new DatabaseSync(database);
   const payloads = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
   db.close();
@@ -46,6 +47,8 @@ test("0.38.0 read-only status and search never migrate a pre-block index", async
       assert.equal(format.needsUpgrade, true);
       assert.equal(format.blockIndexVersion, null);
       assert.equal(format.blockIndexCompletedDocuments, 0);
+      assert.equal(format.chunkStoreVersion, null);
+      assert.equal(format.chunkStoreCompletedDocuments, 0);
       assert.equal(format.legacySearchStructures, true);
       assert.equal(format.totalDocuments, 1);
       assert.equal(search(store, "保留的正文 0").length, 1);
@@ -60,7 +63,7 @@ test("0.38.0 read-only status and search never migrate a pre-block index", async
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
-test("0.38.0 block index migration preserves payload bytes, resumes, then drops legacy structures", async () => {
+test("0.39.0 chunk store migration resumes, then drops payloads and every older search structure", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m24-resume-"));
   const database = path.join(temp, "index.db");
   try {
@@ -77,25 +80,27 @@ test("0.38.0 block index migration preserves payload bytes, resumes, then drops 
       assert.equal(search(first, "保留的正文 299").length, 1);
     } finally { first.close(); }
     let db = new DatabaseSync(database, { readOnly: true });
-    const committed = Number(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"));
-    assert.ok(committed > 0 && committed < 300, `committed ${committed}`);
-    assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), undefined);
-    db.close();
+    try {
+      const committed = Number(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'chunk_store_1'"));
+      assert.ok(committed > 0 && committed < 300, `committed ${committed}`);
+      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'chunk_store_version'"), undefined);
+    } finally { db.close(); }
 
     const resumed = new IndexStore(database);
     try {
       await resumed.upgrade();
       assert.equal(createSearchResultSet(resumed, "保留的正文").total, 300);
-      assert.equal(resumed.lastSearchTrace()?.candidateStrategy, "block-index");
+      assert.equal(resumed.lastSearchTrace()?.candidateStrategy, "chunk-index");
       assert.equal(resumed.formatStatus().legacySearchStructures, false);
     } finally { resumed.close(); }
     db = new DatabaseSync(database, { readOnly: true });
     try {
-      const after = (db.prepare("SELECT hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { payload: string }[]).map(row => row.payload);
-      assert.deepEqual(after, before);
-      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'block_index_version'"), "1");
+      // The payload docstore existed before and is replaced by the chunk store (SPEC §52.4).
+      assert.ok(before.length > 0);
+      assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('document_payloads', 'blocks', 'document_payload_blocks')"), 0);
+      assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'chunk_store_version'"), "1");
       // Completion drops the per-document markers in the same transaction (SPEC §51.2).
-      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
+      assert.equal(scalar(db, "SELECT count(*) FROM index_migration_documents"), 0);
       assert.equal(scalar(db, "SELECT value FROM metadata WHERE key = 'payload_bloom_version'"), undefined);
       assert.equal(scalar(db, "SELECT count(*) FROM sqlite_master WHERE name IN ('document_blooms', 'document_payload_blooms', 'search_unigrams', 'search_trigrams')"), 0);
     } finally { db.close(); }

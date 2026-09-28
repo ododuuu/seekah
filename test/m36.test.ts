@@ -98,9 +98,9 @@ test("0.36 index reuses upgraded text, retries unsupported once, and keeps docum
   assert.equal(first.reasonsAttempted["unsupported-retry"], 1);
   assert.equal(first.reasonsAttempted["text-upgrade"], 0);
   assert.equal(first.parserCalls, 2);
-  assert.equal(store.mappingIndexReady(), true);
-  assert.match(store.explainBlockLookup(), /document_payload_blocks_block_id/);
-  assert.doesNotMatch(store.explainBlockLookup(), /SCAN document_payload_blocks/);
+  // 0.39.0 stores text in chunks; the payload↔block mapping no longer exists (SPEC §52.1).
+  assert.equal(store.chunkStoreReady(), true);
+  assert.equal(store.mappingIndexReady(), false);
   let parsed = 0;
   const second = await sync(root, store, { parse: async file => { parsed++; return (await import("../src/parser.js")).parseDocument(file); } });
   assert.equal(parsed, 0);

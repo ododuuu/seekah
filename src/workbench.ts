@@ -177,7 +177,7 @@ async function openStore<T>(databasePath: string, operation: (store: IndexStore)
 
 async function readWorkbenchIndexStatus(databasePath: string) {
   const readAt = new Date().toISOString();
-  if (!existsSync(databasePath)) return { state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true };
+  if (!existsSync(databasePath)) return { state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const };
   try {
     return await openStore(databasePath, store => {
       const status = indexStatus(store);
@@ -187,11 +187,12 @@ async function readWorkbenchIndexStatus(databasePath: string) {
         ...status,
         trash: store.trashRoots(),
         deleteConfirmation: store.deleteConfirmationEnabled(),
+        totalMode: store.searchTotalMode(),
       };
     });
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
-    return { state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。", trash: [] as TrashedRoot[], deleteConfirmation: true };
+    return { state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。", trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const };
   }
 }
 async function readAutoupdateStatus(databasePath: string) {
@@ -613,12 +614,16 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         const body = await readJson(request);
         if (body.deleteConfirmation !== undefined && typeof body.deleteConfirmation !== "boolean") throw new Error("刪除提醒設定無效。");
         if (body.autoupdateEnabled !== undefined && typeof body.autoupdateEnabled !== "boolean") throw new Error("背景自動更新設定無效。");
+        if (body.totalMode !== undefined && body.totalMode !== "fast" && body.totalMode !== "exact") throw new Error("總筆數設定無效。");
         let deleteConfirmation = true;
-        if (body.deleteConfirmation !== undefined || existsSync(options.databasePath)) {
+        let totalMode: "fast" | "exact" = "fast";
+        if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || existsSync(options.databasePath)) {
           const store = new IndexStore(options.databasePath);
           try {
             if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
+            if (body.totalMode === "fast" || body.totalMode === "exact") store.setSearchTotalMode(body.totalMode);
             deleteConfirmation = store.deleteConfirmationEnabled();
+            totalMode = store.searchTotalMode();
           } finally { store.close(); }
         }
         if (body.autoupdateEnabled === true) {
@@ -630,14 +635,16 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
             if (!(error instanceof AutoupdateError && error.code === "AUTOUPDATE_NOT_RUNNING")) throw error;
           }
         }
-        json(response, 200, { deleteConfirmation, autoupdate: await readAutoupdateStatus(options.databasePath) });
+        json(response, 200, { deleteConfirmation, totalMode, autoupdate: await readAutoupdateStatus(options.databasePath) });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/select-folder") {
         const selected = await (options.selectFolder ?? selectFolder)();
         json(response, 200, { root: selected }); return;
       }
-      if (request.method === "POST" && url.pathname === "/api/search") {
+      if (request.method === "POST" && (url.pathname === "/api/search" || url.pathname === "/api/search/count")) {
+        // /api/search/count repeats the search verifying every candidate for an exact total (SPEC §52.3).
+        const counting = url.pathname === "/api/search/count";
         const body = await readJson(request);
         const page = Number(body.page);
         const pageSize = Number(body.pageSize);
@@ -663,17 +670,19 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           const ready = await openStore(options.databasePath, store => !store.formatStatus().needsUpgrade);
           if (!ready) {
             startIndex(undefined, true);
-            json(response, 202, { pendingUpgrade: true, message: "block 搜尋索引尚未完成；背景升級完成後會自動搜尋。" });
+            json(response, 202, { pendingUpgrade: true, message: "搜尋索引升級尚未完成；背景升級完成後會自動搜尋。" });
             return;
           }
         }
         const hasIndex = existsSync(options.databasePath);
         const result = hasIndex
-          ? await openStore(options.databasePath, store => searchDocuments(store, searchInput))
-          : { query: searchInput.query.trim(), mode: searchInput.mode, total: 0, accessibleTotal: 0,
-            truncatedToFirst500: false, page, pageSize, pageCount: 1, results: [],
+          ? await openStore(options.databasePath, store => ({
+            ...searchDocuments(store, counting ? { ...searchInput, exactTotal: true } : searchInput), totalMode: store.searchTotalMode() }))
+          : { query: searchInput.query.trim(), mode: searchInput.mode, total: 0, totalRelation: "eq" as const, accessibleTotal: 0,
+            truncatedToFirst500: false, page, pageSize, pageCount: 1, results: [], totalMode: "fast" as const,
             trace: emptySearchTrace(searchInput.query, searchInput.mode!, field, sort) };
         if (!hasIndex) traceLog.write(result.trace);
+        if (counting) { json(response, 200, { total: result.total, totalRelation: result.totalRelation }); return; }
         const temporaryResults = page === 1 && field !== "content" && !body.root ? [...documents.values()]
           .filter(document => (!types?.length || types.includes(document.extension))
             && (!statuses?.length || statuses.includes(document.status)) && document.filename.normalize("NFKC").toLowerCase().includes(query))

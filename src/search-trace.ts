@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export const SEARCH_TRACE_SCHEMA_VERSION = 4;
+export const SEARCH_TRACE_SCHEMA_VERSION = 5;
 
 export const searchTracePhases = [
   "queryNormalization",
@@ -22,6 +22,7 @@ export type SearchTraceField = "all" | "filename" | "content";
 export type SearchTraceSort = "relevance" | "filename" | "modified";
 export type SearchTraceStatus = "success" | "error";
 export type SearchCandidateSource =
+  | "chunk-index"
   | "block-index"
   | "postings"
   | "restricted-ids"
@@ -30,6 +31,8 @@ export type SearchCandidateSource =
   | "document-bloom"
   | "payload-bloom";
 export type SearchCandidateStrategy =
+  | "chunk-index"
+  | "chunk-index+restricted-ids"
   | "block-index"
   | "block-index+restricted-ids"
   | "postings"
@@ -83,6 +86,12 @@ export interface SearchTraceCounts {
   indexCandidateBlocks: number;
   /** Content blocks read back to verify a U+0000 unigram fallback. */
   indexVerifiedBlocks: number;
+  /** Chunks matched by the chunk index (SPEC §52.5). */
+  indexCandidateChunks: number;
+  /** Chunks decompressed to verify content hits. */
+  indexVerifiedChunks: number;
+  /** Compressed bytes of the verified chunks. */
+  indexVerifiedBytes: number;
   results: number;
   returnedResults: number;
 }
@@ -137,6 +146,8 @@ export interface SearchTrace {
   /** Exclusive phase totals with nested child phases removed. */
   phaseSelfMs: Record<SearchTracePhase, number>;
   counts: SearchTraceCounts;
+  /** `gte` when a fast-mode search stopped before verifying every candidate (SPEC §52.3). */
+  totalRelation: "eq" | "gte";
   diagnostics: PayloadDiagnostics;
 }
 
@@ -186,6 +197,9 @@ function emptyCounts(): SearchTraceCounts {
     indexPostingRows: 0,
     indexCandidateBlocks: 0,
     indexVerifiedBlocks: 0,
+    indexCandidateChunks: 0,
+    indexVerifiedChunks: 0,
+    indexVerifiedBytes: 0,
     results: 0,
     returnedResults: 0,
   };
@@ -226,6 +240,7 @@ export class SearchTraceRecorder {
   private readonly decompressedPayloads = new Map<number, Set<number>>();
   private readonly sources = new Set<SearchCandidateSource>();
   private status: SearchTraceStatus = "success";
+  private totalRelation: "eq" | "gte" = "eq";
   private errorCode: string | undefined;
 
   constructor(
@@ -363,6 +378,10 @@ export class SearchTraceRecorder {
   addCandidateSource(source: SearchCandidateSource): void {
     this.sources.add(source);
   }
+  setTotalRelation(relation: "eq" | "gte"): void {
+    this.totalRelation = relation;
+  }
+
   setError(code: string): void {
     this.status = "error";
     this.errorCode = code;
@@ -388,7 +407,9 @@ export class SearchTraceRecorder {
       if (phasesMs[phase] > phasesMs[inclusiveBottleneck]) inclusiveBottleneck = phase;
     }
     const sources = [...this.sources];
-    const candidateStrategy = sources.includes("block-index")
+    const candidateStrategy = sources.includes("chunk-index")
+      ? sources.includes("restricted-ids") ? "chunk-index+restricted-ids" : "chunk-index"
+      : sources.includes("block-index")
       ? sources.includes("restricted-ids") ? "block-index+restricted-ids" : "block-index"
       : sources.includes("postings")
       ? sources.includes("restricted-ids") ? "postings+restricted-ids" : "postings"
@@ -424,6 +445,7 @@ export class SearchTraceRecorder {
       phasesMs,
       phaseSelfMs,
       counts,
+      totalRelation: this.totalRelation,
       diagnostics: structuredClone(this.diagnosticValues),
     };
     if (this.errorCode) trace.errorCode = this.errorCode;

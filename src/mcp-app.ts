@@ -146,7 +146,7 @@ export const MCP_APP_HTML = `<!doctype html>
     currentPage = Number(data.page) || 1;
     pageCount = Number(data.pageCount) || 1;
     const total = Number(data.total) || 0;
-    pageLabelEl.textContent = '第 ' + currentPage + ' / ' + pageCount + ' 頁，共 ' + total + ' 筆';
+    pageLabelEl.textContent = '第 ' + currentPage + ' / ' + pageCount + ' 頁，共 ' + total + (data.totalRelation === 'gte' ? ' 筆以上' : ' 筆');
     const items = Array.isArray(data.results) ? data.results : [];
     if (!items.length) appendText(resultsEl, 'meta', '沒有符合的文件。');
     items.forEach(item => {

@@ -7,7 +7,7 @@ import test from "node:test";
 import type { DocumentRecord } from "../src/model.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
-import { clearBlockIndex, createLegacyStore } from "./legacy-index.js";
+import { clearBlockIndex, clearChunkStore, createLegacyStore } from "./legacy-index.js";
 
 function document(root: string, filename: string, content: string, heading = "標題"): DocumentRecord {
   return {
@@ -104,7 +104,7 @@ test("payload Bloom ordinals expand through owning blocks without posting payloa
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });
 
-test("an index with unfinished legacy postings searches read-only through Bloom fallback and upgrades to the block index", async () => {
+test("an index with unfinished legacy postings searches read-only through Bloom fallback and upgrades to the chunk store", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m38-migration-"));
   const root = path.join(temp, "docs");
   const databasePath = path.join(temp, "index.db");
@@ -115,6 +115,7 @@ test("an index with unfinished legacy postings searches read-only through Bloom 
   initial.upsert(document(root, "three.txt", "migration-three-rare"));
   initial.close();
   clearBlockIndex(databasePath);
+  clearChunkStore(databasePath);
   const before = new DatabaseSync(databasePath);
   const payloadBefore = (before.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all() as { document_id: number; ordinal: number; payload: string }[]);
   before.prepare("UPDATE metadata SET value = '0' WHERE key = 'ngram_index_version'").run();
@@ -129,7 +130,7 @@ test("an index with unfinished legacy postings searches read-only through Bloom 
   const afterRead = new DatabaseSync(databasePath, { readOnly: true });
   try {
     assert.equal((afterRead.prepare("SELECT value FROM metadata WHERE key = 'ngram_index_version'").get() as { value: string }).value, "0");
-    assert.equal(count(afterRead, "SELECT count(*) AS count FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
+    assert.equal(count(afterRead, "SELECT count(*) AS count FROM index_migration_documents WHERE version = 'chunk_store_1'"), 0);
   } finally { afterRead.close(); }
 
   const store = new IndexStore(databasePath);
@@ -137,12 +138,15 @@ test("an index with unfinished legacy postings searches read-only through Bloom 
     await store.upgrade();
     const complete = store.formatStatus();
     assert.equal(complete.needsUpgrade, false);
-    assert.equal(complete.blockIndexCompletedDocuments, 3);
+    assert.equal(complete.chunkStoreCompletedDocuments, 3);
     assert.equal(search(store, "migration-three-rare").length, 1);
-    assert.equal(store.lastSearchTrace()?.candidateStrategy, "block-index");
+    assert.equal(store.lastSearchTrace()?.candidateStrategy, "chunk-index");
+    // The payload docstore is replaced by the chunk store (SPEC §52.4).
+    assert.ok(payloadBefore.length > 0);
     const payloadAfter = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      assert.deepEqual(payloadAfter.prepare("SELECT document_id, ordinal, hex(payload) AS payload FROM document_payloads ORDER BY document_id, ordinal").all(), payloadBefore);
+      assert.equal(count(payloadAfter, "SELECT count(*) AS count FROM sqlite_master WHERE name = 'document_payloads'"), 0);
+      assert.equal(count(payloadAfter, "SELECT count(*) AS count FROM document_chunks"), 3);
     } finally { payloadAfter.close(); }
   } finally { store.close(); await rm(temp, { recursive: true, force: true }); }
 });

@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.38.1（第 51 節大量刪除效能與遷移記號清理；第 50 節 block 級 FTS5 位置索引搜尋後端）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.39.0（第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-28
-- 狀態：package 為 0.38.1。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
+- 狀態：package 為 0.39.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1590,3 +1590,79 @@ docsearch doctor
   - rows 清理、id 重用與搜尋結果沿用 §50.5 的檢查。
 - 效能證據（寫入 `0.38.1-VALIDATION.md`）：合成 index 刪除一萬份文件的耗時；真實 store 複本上每份文件的刪除毫秒數，與 0.38.0 對照。
 - package 版本 0.38.1。
+
+## 52. 0.39.0：區段儲存、不記位置索引與提前停止
+
+依 D083 與 `research/index-size-2026-09-28/RESULTS.md`。本節取代 §50 的索引資料結構。搜尋語意（§14、§46、§48、§50.2：exact normalized substring、rank、代表 block、heading／location、snippet、`field`／`sort`／type／root／subtree／status、結果內搜尋、stable reference）不變；唯一的外顯變更是 §52.3 的總筆數模式。
+
+### 52.1 儲存
+
+- `document_chunks(id INTEGER PRIMARY KEY, document_id, ordinal, text BLOB, layout BLOB)`：
+  - 每份文件的非空段落依 ordinal 串接成區段，以 `"\n"` 分隔；區段累積到 65,536 個 UTF-16 單位前換下一個。單一段落不切開，超過上限時獨佔一個區段。
+  - `text` 是原文（不是正規化文字）的 UTF-8，以 zstd 壓縮。
+  - `layout` 是 varint 序列：段落數，接著每段的「起點 UTF-16 偏移差」與「ordinal 差」。
+  - `ordinal` 是區段第一個段落的 ordinal；某段落所在的區段＝`ordinal` 不大於它的最後一個區段。
+  - `document_id` 參照 `documents(id) ON DELETE CASCADE`，並有 `(document_id, ordinal)` 索引。
+- `block_meta(document_id, ordinal, heading, location_kind, location_value)`，主鍵 `(document_id, ordinal)`：
+  - 只存「無法推算」的段落：凡是 `location_kind` 不是 `line`、`heading` 不是 null，或 `location_value` 不等於「第 {ordinal+1} 行」者都要存。
+  - 其他段落的 heading 為 null、location 為 `line`／「第 {ordinal+1} 行」，讀取時推算。
+- 內容索引，rowid＝`document_chunks.id`，文字是區段內每段各自 NFKC＋`toLowerCase()` 後以 `"\n"` 串接：
+  - `search_chunk_trigrams`：FTS5 contentless、`contentless_delete=1`、`detail=none`、`trigram case_sensitive 1`。
+  - `search_chunk_unigrams`／`search_chunk_bigrams`：`detail=none`，token 與 §50.1 相同（`u<hex>`、`b<hex>x<hex>`），同一區段內去重。
+- 檔名（`search_filename_*`）與標題（`search_headings`、`search_heading_*`）沿用 §50.1。
+- 不再有 `blocks`、`document_payloads`、`document_payload_blocks`、`search_block_*`；fresh index 從不建立。
+- metadata `chunk_store_version=1`。
+
+### 52.2 查詢
+
+- 結果是依最終順序延遲產生的串流：
+  - 檔名命中（4／3）與標題命中（2）由小型索引完整算出，規則同 §50.2。
+  - 內文候選：≥3 字以 trigram AND、1 字 unigram token、2 字 bigram token 取候選區段；含 U+0000 的 ≥3 字查詢以各字元 unigram token AND 取候選。候選區段依文件分組，套用 type／root／subtree／status 與結果內搜尋範圍後，依使用者的排序規則排列（relevance：同級依修改時間新到舊、再依路徑）。
+  - 驗證：依序解壓候選文件的候選區段（依 ordinal），逐段 NFKC＋小寫後檢查是否含查詢，比對不得跨段落。phrase 的代表 block 是第一個命中的段落；all-terms 的存在性、代表 block 與覆蓋度規則同 §50.2（標題命中來自標題索引，內文命中來自區段驗證）。
+  - 已知命中（檔名／標題）與已驗證的內文命中依排序規則合併輸出；relevance 下內文命中一律 rank 1。
+- 只在需要時驗證：產生到當頁所需的筆數即停；總筆數依 §52.3。
+- 結果內搜尋（`/ 關鍵字`，D044）：新條件是疊在上一層串流上的過濾，依上一層的順序逐份以新條件判定該文件的 rank 與代表 block（同 §50.2），因此仍核對完整內容並保留最初順序。
+- `matchingPassages`、上下文與片段：從 `document_chunks`＋`block_meta` 還原段落；snippet 只解壓代表段落所在的區段。
+- `chunk_store_version` 不是 1 時（遷移未完成），搜尋使用遷移前的既有路徑（§50 或 §48），結果相同但較慢，且總筆數永遠精確。
+
+### 52.3 總筆數模式
+
+- **快速（預設）**：驗證到命中 500 份文件（或當頁所需、兩者取大）即停。
+  - 候選已全部驗證時，總數精確；否則回報下限，畫面與 CLI 顯示「500 筆以上」（或已知的下限數），MCP 回傳 `totalRelation: "gte"`。
+  - 可瀏覽範圍維持前 500 筆（Workbench、MCP）；CLI 翻到 500 筆之後時繼續驗證。
+- **精確**：驗證全部候選，總數精確，`totalRelation: "eq"`。
+- 介面：
+  - Workbench：設定頁「總筆數」選項（快速／精確），存於索引 metadata `search_total_mode`，預設快速。精確模式下，搜尋先回傳結果與下限，前端再以 `POST /api/search/count`（相同查詢參數）取得精確數並更新畫面；計數期間顯示「計算中」。
+  - CLI：`search` 新增 `--exact-total`；預設快速。`context` 只取前 500 筆內的結果，不受影響。
+  - TUI：一律快速模式，總數為下限時顯示「500 筆以上」，可瀏覽已驗證的前 500 筆。
+  - MCP `search_documents`：新增選填 `exactTotal`（boolean，預設 false）；回應新增 `totalRelation`，`total` 在 `gte` 時為下限。
+- 結果內搜尋的每一層各自依同一模式計數。
+
+### 52.4 寫入、刪除、遷移與壓縮
+
+- upsert、touchMetadata、replace、removeDocument、removeMissing、clearDocuments、removeRoot、moveRootsToTrash 在同一 writer transaction 內刪除該文件的區段、`block_meta`、區段索引列與標題／檔名列，再寫入新資料；replace 不改 document ID。`removeMissing` 維持 §51.3 的分批。
+- 舊 index（`chunk_store_version` 不是 1）由 writer upgrade 逐批遷移，marker `chunk_store_1`：
+  - 需要時先完成 `content_storage_2`（§34）；不再執行 §50 的 block index 遷移。
+  - 每份文件從既有 payload docstore＋`blocks` 讀出段落，寫入區段、`block_meta` 與索引。可取消；取消後從缺 marker 的文件接續。
+  - 全部完成時，同一交易設定 version，刪除 `blocks`、`document_payloads`、`document_payload_blocks`、`search_block_*`、Bloom 與文件級 postings 等舊結構、全部 migration markers，以及舊版本 metadata。
+  - 遷移完成後，若 free pages 超過資料庫的一半，接著執行一次 `VACUUM`，進度訊息「壓縮資料庫」；`VACUUM` 無法中途取消。
+  - read-only 開啟一律不建表、不寫入、不遷移。
+- CLI 新增 `compact`：取得 writer lock 後執行 `VACUUM`，顯示前後檔案大小；背景自動更新執行中時拒絕並提示先停止。
+- `formatStatus` 揭露 `chunkStoreVersion` 與 `chunkStoreCompletedDocuments`；`needsUpgrade` 在區段儲存未完成時為真。
+
+### 52.5 Trace
+
+- search trace schema version 5：
+  - candidate source／strategy 新增 `chunk-index`、`chunk-index+restricted-ids`。
+  - counts 新增 `indexCandidateChunks`、`indexVerifiedChunks`、`indexVerifiedBytes`；`totalRelation`（`eq`／`gte`）。
+  - 其餘欄位同 schema 4。
+
+### 52.6 驗收
+
+- 差分測試：以固定 seed 語料（跨區段邊界的段落、超過 65,536 的單一段落、heading、NFKC／大小寫、U+0000、metadata-only、兩個根目錄）比對新路徑與逐文件暴力 `rankDocument`：phrase／all-terms、`field`、`sort`、type／root／status、subtree、結果內搜尋的每一層；精確模式下完整結果清單與第 1 頁 snippet 全部相同；快速模式下前 500 筆與精確模式相同，總數在 `gte` 時為正確下限。
+- 位置：`block_meta` 省略的段落，推算出的 heading／location 與原 parser 輸出相同；Markdown、CSV、DOCX、PDF、PPTX、XLSX 的位置保留。
+- 寫入：replace／delete／removeMissing／root 刪除後沒有殘留區段、`block_meta` 或索引列；fresh index 沒有舊結構。
+- 遷移：0.38 與 0.37 形狀的 index 皆可遷移；read-only 不遷移；取消後接續；遷移前後搜尋結果相同；完成後舊結構刪除、marker 清空、必要時自動 `VACUUM`。
+- 總筆數：快速／精確模式在 CLI、MCP、Workbench（含 `/api/search/count` 與設定保存）。
+- 真實資料複本：遷移時間、遷移並壓縮後的檔案大小、第一頁／前 500 筆／精確總數延遲，寫入 `0.39.0-VALIDATION.md`，並與研究結果對照。
+- package 版本 0.39.0。
