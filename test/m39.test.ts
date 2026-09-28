@@ -29,7 +29,7 @@ const phaseNames = [
 const exec = promisify(execFile);
 const cli = path.resolve("dist/src/cli.js");
 
-test("block index trace reports index postings without reading payloads before ranking", async () => {
+test("chunk index trace reports candidate and verified chunks without reading payloads", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m39-block-trace-"));
   const root = path.join(temp, "docs");
   const store = new IndexStore(path.join(temp, "index.db"));
@@ -40,21 +40,25 @@ test("block index trace reports index postings without reading payloads before r
     store.upsert(document(root, "third.txt", "另一份文件"));
     const resultSet = createSearchResultSet(store, "稀有詞");
     const rankingTrace = resultSet.trace;
-    assert.equal(rankingTrace.schemaVersion, 4);
-    assert.equal(rankingTrace.candidateStrategy, "block-index");
-    assert.deepEqual(rankingTrace.candidateSources, ["block-index"]);
+    assert.equal(rankingTrace.schemaVersion, 5);
+    assert.equal(rankingTrace.candidateStrategy, "chunk-index");
+    assert.deepEqual(rankingTrace.candidateSources, ["chunk-index"]);
+    assert.equal(rankingTrace.totalRelation, "eq");
     assert.equal(rankingTrace.counts.payloadsRead, 0);
     assert.equal(rankingTrace.counts.decompressedBytes, 0);
-    assert.equal(rankingTrace.counts.indexCandidateBlocks, 1);
-    assert.equal(rankingTrace.counts.indexVerifiedBlocks, 0);
+    // SPEC §52.5: one candidate chunk, decompressed once to verify the hit.
+    assert.equal(rankingTrace.counts.indexCandidateChunks, 1);
+    assert.equal(rankingTrace.counts.indexVerifiedChunks, 1);
+    assert.ok(rankingTrace.counts.indexVerifiedBytes > 0);
     assert.ok(rankingTrace.counts.indexPostingRows >= 1);
     assert.equal(rankingTrace.counts.documentsInScope, 3);
     assert.equal(rankingTrace.counts.documentsMatched, 1);
     const page = resultSet.page(1, 20);
     assert.equal(page.results.length, 1);
     const trace = resultSet.trace;
-    // Only the representative block of the page is read, for its snippet.
-    assert.equal(trace.diagnostics.payloadReads.snippet.payloadsRead, 1);
+    // Only the representative block's chunk is read again, for its snippet; no payload docstore exists.
+    assert.equal(trace.counts.indexVerifiedChunks, 2);
+    assert.equal(trace.diagnostics.payloadReads.snippet.payloadsRead, 0);
     assert.equal(trace.diagnostics.payloadReads.ranking.payloadsRead, 0);
     assert.ok(trace.phasesMs.postingsLookup > 0);
     for (const phase of phaseNames) assert.ok(Number.isFinite(trace.phasesMs[phase]), phase);
@@ -64,7 +68,7 @@ test("block index trace reports index postings without reading payloads before r
   }
 });
 
-// Pre-0.38.0 pipeline, still used until the block index migration finishes.
+// Pre-0.38.0 pipeline, still used until the chunk store migration finishes.
 test("search result set exposes postings trace phases and pipeline counts", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m39-postings-trace-"));
   const root = path.join(temp, "docs");
@@ -224,9 +228,9 @@ test("SearchSession keeps the current refinement trace and exposes restricted po
     session.append("第二詞");
     const page = session.page(1, 20);
     assert.equal(page.results.length, 1);
-    assert.equal(session.trace.candidateStrategy, "block-index+restricted-ids");
+    assert.equal(session.trace.candidateStrategy, "chunk-index+restricted-ids");
     assert.ok(session.trace.candidateSources.includes("restricted-ids"));
-    assert.ok(session.trace.candidateSources.includes("block-index"));
+    assert.ok(session.trace.candidateSources.includes("chunk-index"));
     assert.equal(session.trace.counts.documentsInScope, 2);
     assert.equal(session.trace.counts.results, 1);
   } finally {
@@ -255,7 +259,7 @@ test("CLI --verbose emits the structured search trace without writing index stat
     assert.ok(line);
     const trace = JSON.parse(line.slice("SEARCH_TRACE ".length)) as { type: string; candidateStrategy: string; counts: { results: number } };
     assert.equal(trace.type, "search");
-    assert.equal(trace.candidateStrategy, "block-index");
+    assert.equal(trace.candidateStrategy, "chunk-index");
     assert.equal(trace.counts.results, 1);
   } finally {
     await rm(temp, { recursive: true, force: true });
@@ -307,7 +311,7 @@ test("independent Trace UI serves persisted search records through the protected
     assert.ok(traceData.files.some(file => file.current && file.bytes > 0));
     assert.equal(traceData.retention.maxFiles, 5);
     assert.equal(traceData.traces[0]?.type, "search");
-    assert.equal(traceData.traces[0]?.candidateStrategy, "block-index");
+    assert.equal(traceData.traces[0]?.candidateStrategy, "chunk-index");
     assert.equal(traceData.traces[0]?.counts.results, 1);
     assert.ok(traceData.traces[0]?.traceId);
     assert.match(await readFile(traceData.path, "utf8"), /"type":"search"/u);

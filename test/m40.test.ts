@@ -9,7 +9,7 @@ import { collectHits, materializeHits, search, type SearchField, type SearchMode
 import { IndexStore } from "../src/store.js";
 import { createLegacyStore } from "./legacy-index.js";
 
-// SPEC §50: the block index must reproduce the per-document ranking exactly.
+// SPEC §52 (formerly §50): the chunk store must reproduce the per-document ranking exactly.
 
 function random(seed: number): () => number {
   let state = seed >>> 0;
@@ -81,7 +81,7 @@ function project(store: IndexStore, query: string, options: { mode: SearchMode; 
     heading: item.result.heading, location: item.result.location, reason: item.result.reason, filenameOnly: item.result.filenameOnly })), snippets };
 }
 
-test("block index reproduces legacy per-document ranking across modes, fields, filters and snippets", async () => {
+test("chunk store reproduces legacy per-document ranking across modes, fields, filters and snippets", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m40-equivalence-"));
   const rootA = path.join(temp, "a");
   const rootB = path.join(temp, "b");
@@ -96,7 +96,8 @@ test("block index reproduces legacy per-document ranking across modes, fields, f
       store.registerRoot(rootB);
       for (const document of documents) store.upsert(document, document.path.startsWith(rootA) ? rootA : rootB);
     }
-    assert.equal(indexed.blockIndexReady(), true);
+    assert.equal(indexed.chunkStoreReady(), true);
+    assert.equal(legacy.chunkStoreReady(), false);
     assert.equal(legacy.blockIndexReady(), false);
     const ids = documents.map(document => indexed.getDocument(document.path)!.id);
     assert.deepEqual(documents.map(document => legacy.getDocument(document.path)!.id), ids);
@@ -126,10 +127,10 @@ test("block index reproduces legacy per-document ranking across modes, fields, f
       }
     }
     assert.ok(compared >= 800 && nonEmpty > 300, `${compared} comparisons, ${nonEmpty} non-empty`);
-    // The new path ranks without reading any payload.
+    // The chunk path never reads the payload docstore.
     collectHits(indexed, "spec");
     assert.equal(indexed.lastSearchTrace()?.counts.payloadsRead, 0);
-    assert.equal(indexed.lastSearchTrace()?.candidateStrategy, "block-index");
+    assert.equal(indexed.lastSearchTrace()?.candidateStrategy, "chunk-index");
   } finally {
     indexed.close();
     legacy.close();
@@ -142,7 +143,7 @@ function count(databasePath: string, sql: string): number {
   try { return Number(Object.values(db.prepare(sql).get()!)[0]); } finally { db.close(); }
 }
 
-const ftsTables = ["search_block_trigrams", "search_block_unigrams", "search_block_bigrams", "search_filename_trigrams",
+const ftsTables = ["search_chunk_trigrams", "search_chunk_unigrams", "search_chunk_bigrams", "search_filename_trigrams",
   "search_filename_unigrams", "search_filename_bigrams", "search_heading_trigrams", "search_heading_unigrams", "search_heading_bigrams"];
 
 function record(root: string, filename: string, blocks: [string | null, string][]): DocumentRecord {
@@ -151,14 +152,16 @@ function record(root: string, filename: string, blocks: [string | null, string][
     blocks: blocks.map(([heading, content], ordinal) => ({ ordinal, heading, content, locationKind: "line", locationValue: `${ordinal}` })) };
 }
 
-test("fresh block index has no legacy structures and every removal path clears its rows", async () => {
+test("fresh chunk store has no legacy structures and every removal path clears its rows", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m40-cleanup-"));
   const root = path.join(temp, "docs");
   const other = path.join(temp, "other");
   const databasePath = path.join(temp, "index.db");
   const store = new IndexStore(databasePath);
   try {
-    assert.equal(count(databasePath, "SELECT count(*) FROM sqlite_master WHERE name IN ('document_blooms', 'document_payload_blooms', 'search_unigrams', 'search_trigrams')"), 0);
+    assert.equal(count(databasePath, `SELECT count(*) FROM sqlite_master WHERE name IN ('document_blooms', 'document_payload_blooms',
+      'search_unigrams', 'search_trigrams', 'blocks', 'block_payloads', 'document_payloads', 'document_payload_blocks',
+      'search_block_trigrams', 'search_block_unigrams', 'search_block_bigrams')`), 0);
     assert.equal(store.formatStatus().needsUpgrade, false);
     assert.equal(store.formatStatus().legacySearchStructures, false);
     store.registerRoot(root);
@@ -189,11 +192,12 @@ test("fresh block index has no legacy structures and every removal path clears i
     assert.deepEqual(await store.removeMissing(new Set([path.join(root, "keep.txt")]), root), { removed: 2, protected: 0 });
     assert.equal(search(store, "new-token").length, 0);
     assert.equal(search(store, "keep-token").length, 1);
-    const blocks = count(databasePath, "SELECT count(*) FROM blocks");
-    assert.equal(blocks, 1);
+    assert.equal(count(databasePath, "SELECT count(*) FROM document_chunks"), 1);
+    // keep.txt's only block has a heading, so its metadata is stored.
+    assert.equal(count(databasePath, "SELECT count(*) FROM block_meta"), 1);
     assert.equal(count(databasePath, "SELECT count(*) FROM search_headings"), 1);
-    // A finished block index keeps no per-document migration markers (SPEC §51.2).
-    assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents WHERE version = 'block_index_1'"), 0);
+    // A finished chunk store keeps no per-document migration markers (SPEC §51.2).
+    assert.equal(count(databasePath, "SELECT count(*) FROM index_migration_documents"), 0);
 
     store.clearDocuments();
     assert.equal(search(store, "keep-token").length, 0);
@@ -206,6 +210,8 @@ test("fresh block index has no legacy structures and every removal path clears i
       } finally { db.close(); }
     }
     assert.equal(count(databasePath, "SELECT count(*) FROM search_headings"), 0);
+    assert.equal(count(databasePath, "SELECT count(*) FROM document_chunks"), 0);
+    assert.equal(count(databasePath, "SELECT count(*) FROM block_meta"), 0);
   } finally {
     store.close();
     await rm(temp, { recursive: true, force: true });
@@ -240,17 +246,17 @@ test("a long-lived writer keeps indexing after another store finishes the migrat
   const daemon = createLegacyStore(databasePath);
   try {
     daemon.upsert(record(temp, "before.txt", [[null, "before-token"]]));
-    assert.equal(daemon.blockIndexReady(), false);
+    assert.equal(daemon.chunkStoreReady(), false);
     const migrator = new IndexStore(databasePath);
     try { await migrator.upgrade(); } finally { migrator.close(); }
     assert.equal(count(databasePath, "SELECT count(*) FROM sqlite_master WHERE name = 'document_blooms'"), 0);
     // Statements prepared against the dropped legacy tables must be re-prepared, not reused.
     daemon.upsert(record(temp, "after.txt", [[null, "after-token"]]));
     assert.equal(daemon.removeDocument(path.join(temp, "before.txt")), true);
-    assert.equal(daemon.blockIndexReady(), true);
+    assert.equal(daemon.chunkStoreReady(), true);
     assert.deepEqual(search(daemon, "after-token").map(result => result.path), [path.join(temp, "after.txt")]);
     assert.equal(search(daemon, "before-token").length, 0);
-    assert.equal(daemon.lastSearchTrace()?.candidateStrategy, "block-index");
+    assert.equal(daemon.lastSearchTrace()?.candidateStrategy, "chunk-index");
   } finally {
     daemon.close();
     await rm(temp, { recursive: true, force: true });

@@ -954,6 +954,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     selectedTrash: new Set(),
     folderPickerBusy: false,
     deleteConfirmation: true,
+    totalMode: "fast",
+    counting: false,
     autoupdateEnabled: false,
     preview: null,
     previewSeq: 0,
@@ -1312,11 +1314,15 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     row.append(cell);
     body.append(row);
   }
+  function totalLabel(data) {
+    // SPEC §52.3: fast mode reports a lower bound once 500 documents match.
+    return data.totalRelation === "gte" ? data.total + " 筆以上" + (state.counting ? "（計算中…）" : "") : data.total + " 筆";
+  }
   function resultRange(data) {
     if (!data || !data.total) return "沒有結果";
     const start = (data.page - 1) * data.pageSize + 1;
     const end = Math.min(data.page * data.pageSize, data.accessibleTotal);
-    return "第 " + start + "–" + end + " 筆，共 " + data.total + " 筆" + (data.truncatedToFirst500 ? "；僅開放前 500 筆" : "");
+    return "第 " + start + "–" + end + " 筆，共 " + totalLabel(data) + (data.truncatedToFirst500 ? "；僅開放前 500 筆" : "");
   }
   function renderDocuments() {
     syncQueryInputs();
@@ -1375,7 +1381,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         });
       }
       const shownTotal = data.total + (data.temporaryResults || []).length;
-      title.textContent = shownTotal + " 份文件";
+      title.textContent = shownTotal + (data.totalRelation === "gte" ? " 份以上文件" : " 份文件");
       subtitle.textContent = (data.temporaryResults || []).length
         ? "（含 " + data.temporaryResults.length + " 份本次拖曳文件；拖曳文件只以檔名搜尋）"
         : data.truncatedToFirst500 ? "（只開放前 500 筆）" : "（已篩選）";
@@ -1508,7 +1514,24 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       state.searchState = "success";
       state.searchMessage = data.total ? "搜尋完成。" : "搜尋完成；沒有符合結果。";
       state.searchKind = data.total ? "ok" : "warn";
+      if (data.totalMode) state.totalMode = data.totalMode;
+      state.counting = data.totalRelation === "gte" && state.totalMode === "exact";
       renderDocuments();
+      if (state.counting) {
+        // Exact mode: show the page first, then fill in the exact total.
+        try {
+          const count = await api("/api/search/count", { method: "POST", body: searchPayload(page) });
+          if (seq !== state.searchSeq) return;
+          data.total = count.total;
+          data.totalRelation = count.totalRelation;
+        } catch (error) {
+          if (seq !== state.searchSeq) return;
+          state.searchMessage = "總數計算失敗：" + (error.message || "未知錯誤");
+          state.searchKind = "warn";
+        }
+        state.counting = false;
+        renderDocuments();
+      }
     } catch (error) {
       if (seq !== state.searchSeq) return;
       state.data = null;
@@ -1925,6 +1948,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       state.deleteConfirmation = state.indexStatus.deleteConfirmation !== false;
       const settingsCheck = $("settings-delete-confirmation");
       if (settingsCheck) settingsCheck.checked = state.deleteConfirmation;
+      state.totalMode = state.indexStatus.totalMode === "exact" ? "exact" : "fast";
+      const totalCheck = $("settings-total-exact");
+      if (totalCheck) totalCheck.checked = state.totalMode === "exact";
       state.autoupdateEnabled = Boolean(state.indexStatus.autoupdate && state.indexStatus.autoupdate.enabled);
       const autoupdateCheck = $("settings-autoupdate");
       if (autoupdateCheck) autoupdateCheck.checked = state.autoupdateEnabled;
@@ -2065,6 +2091,18 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       return false;
     }
   }
+  async function saveTotalMode(exact) {
+    try {
+      const data = await api("/api/settings", { method: "POST", body: { totalMode: exact ? "exact" : "fast" } });
+      state.totalMode = data.totalMode === "exact" ? "exact" : "fast";
+      $("settings-total-exact").checked = state.totalMode === "exact";
+      setStatus("settings-status", state.totalMode === "exact" ? "總筆數改為精確計算；常見詞會在結果顯示後補上總數。" : "總筆數改為快速；超過 500 筆時顯示「500 筆以上」。", "ok");
+      return true;
+    } catch (error) {
+      setStatus("settings-status", error.message || "設定保存失敗。", "error");
+      return false;
+    }
+  }
   async function saveAutoupdate(enabled) {
     const check = $("settings-autoupdate");
     if (check) check.disabled = true;
@@ -2085,6 +2123,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (check) check.checked = state.deleteConfirmation;
     const autoupdate = $("settings-autoupdate");
     if (autoupdate) autoupdate.checked = state.autoupdateEnabled;
+    const totalExact = $("settings-total-exact");
+    if (totalExact) totalExact.checked = state.totalMode === "exact";
     showDialog($("settings-dialog"), trigger || document.activeElement, check || $("settings-dialog"));
   }
   function makePageHeader(title, description) {
@@ -2183,7 +2223,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 
     const previewDialog = document.createElement("dialog"); previewDialog.id = "preview-dialog"; previewDialog.className = "preview-dialog"; previewDialog.setAttribute("aria-labelledby", "preview-title"); const previewHeadDialog = make("div", "dialog-head", ""); const previewHeading = make("div", "", ""); previewHeading.append(make("h2", "", "檢查精確上下文"), make("p", "", "重新驗證來源後顯示 server context；不包含完整文件。")); previewHeading.firstChild.id = "preview-title"; const previewClose = iconButton("×", "關閉精確上下文預覽", () => previewDialog.close()); previewHeadDialog.append(previewHeading, previewClose); const previewBodyDialog = make("div", "dialog-body", ""); const previewMeta = make("div", "preview-meta", "尚未產生 server 預覽。"); previewMeta.id = "preview-meta"; const previewText = make("pre", "preview-text", "尚未產生預覽。"); previewText.id = "preview-text"; const progress = document.createElement("progress"); progress.className = "preview-progress"; progress.id = "preview-progress"; progress.max = 262144; progress.value = 0; progress.setAttribute("aria-label", "精確上下文 bytes，最多 256 KiB"); const previewStatus = make("div", "preview-status", "待產生精確預覽。"); previewStatus.id = "preview-status"; previewStatus.setAttribute("role", "status"); previewStatus.setAttribute("aria-live", "polite"); previewBodyDialog.append(previewMeta, previewText, progress, previewStatus); const previewActions = make("div", "dialog-actions", ""); const copy = button("複製預覽", "primary", () => void copyPreview()); copy.id = "copy-preview"; copy.disabled = true; const previewCancel = button("關閉", "", () => previewDialog.close()); previewActions.append(previewCancel, copy); previewDialog.append(previewHeadDialog, previewBodyDialog, previewActions); app.append(previewDialog);
 
-    const settingsDialog = document.createElement("dialog"); settingsDialog.id = "settings-dialog"; settingsDialog.className = "settings-dialog"; settingsDialog.setAttribute("aria-labelledby", "settings-title"); const settingsHead = make("div", "dialog-head", ""); const settingsHeading = make("div", "", ""); settingsHeading.append(make("h2", "", "設定")); settingsHeading.firstChild.id = "settings-title"; const settingsClose = iconButton("×", "關閉設定", () => settingsDialog.close()); settingsHead.append(settingsHeading, settingsClose); const settingsBody = make("div", "dialog-body", ""); settingsBody.append(make("p", "", "管理工作台與索引更新。")); const settingLabel = make("label", "setting-check", ""); const settingCheck = document.createElement("input"); settingCheck.type = "checkbox"; settingCheck.id = "settings-delete-confirmation"; settingCheck.addEventListener("change", () => void saveDeleteConfirmation(settingCheck.checked)); settingLabel.append(settingCheck, make("span", "", "刪除索引目錄前顯示確認")); const autoupdateLabel = make("label", "setting-check", ""); const autoupdateCheck = document.createElement("input"); autoupdateCheck.type = "checkbox"; autoupdateCheck.id = "settings-autoupdate"; autoupdateCheck.addEventListener("change", () => void saveAutoupdate(autoupdateCheck.checked)); autoupdateLabel.append(autoupdateCheck, make("span", "", "背景自動更新（檔案變更增量更新；每 6 小時完整校正）")); settingsBody.append(settingLabel, autoupdateLabel); const settingsStatus = make("div", "status", ""); settingsStatus.id = "settings-status"; settingsStatus.setAttribute("role", "status"); settingsStatus.setAttribute("aria-live", "polite"); settingsBody.append(settingsStatus); const settingsActions = make("div", "dialog-actions", ""); settingsActions.append(button("完成", "primary", () => settingsDialog.close())); settingsDialog.append(settingsHead, settingsBody, settingsActions); app.append(settingsDialog);
+    const settingsDialog = document.createElement("dialog"); settingsDialog.id = "settings-dialog"; settingsDialog.className = "settings-dialog"; settingsDialog.setAttribute("aria-labelledby", "settings-title"); const settingsHead = make("div", "dialog-head", ""); const settingsHeading = make("div", "", ""); settingsHeading.append(make("h2", "", "設定")); settingsHeading.firstChild.id = "settings-title"; const settingsClose = iconButton("×", "關閉設定", () => settingsDialog.close()); settingsHead.append(settingsHeading, settingsClose); const settingsBody = make("div", "dialog-body", ""); settingsBody.append(make("p", "", "管理工作台與索引更新。")); const settingLabel = make("label", "setting-check", ""); const settingCheck = document.createElement("input"); settingCheck.type = "checkbox"; settingCheck.id = "settings-delete-confirmation"; settingCheck.addEventListener("change", () => void saveDeleteConfirmation(settingCheck.checked)); settingLabel.append(settingCheck, make("span", "", "刪除索引目錄前顯示確認")); const autoupdateLabel = make("label", "setting-check", ""); const autoupdateCheck = document.createElement("input"); autoupdateCheck.type = "checkbox"; autoupdateCheck.id = "settings-autoupdate"; autoupdateCheck.addEventListener("change", () => void saveAutoupdate(autoupdateCheck.checked)); autoupdateLabel.append(autoupdateCheck, make("span", "", "背景自動更新（檔案變更增量更新；每 6 小時完整校正）")); const totalLabelEl = make("label", "setting-check", ""); const totalCheck = document.createElement("input"); totalCheck.type = "checkbox"; totalCheck.id = "settings-total-exact"; totalCheck.addEventListener("change", () => void saveTotalMode(totalCheck.checked)); totalLabelEl.append(totalCheck, make("span", "", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）")); settingsBody.append(settingLabel, autoupdateLabel, totalLabelEl); const settingsStatus = make("div", "status", ""); settingsStatus.id = "settings-status"; settingsStatus.setAttribute("role", "status"); settingsStatus.setAttribute("aria-live", "polite"); settingsBody.append(settingsStatus); const settingsActions = make("div", "dialog-actions", ""); settingsActions.append(button("完成", "primary", () => settingsDialog.close())); settingsDialog.append(settingsHead, settingsBody, settingsActions); app.append(settingsDialog);
 
     const deleteDialog = document.createElement("dialog"); deleteDialog.id = "delete-dialog"; deleteDialog.className = "delete-dialog"; deleteDialog.setAttribute("aria-labelledby", "delete-title"); const deleteHead = make("div", "dialog-head", ""); const deleteHeading = make("div", "", ""); deleteHeading.append(make("h2", "", "確認操作"), make("p", "", "")); deleteHeading.firstChild.id = "delete-title"; deleteHeading.lastChild.id = "delete-message"; const deleteClose = iconButton("×", "取消刪除操作", () => deleteDialog.close()); deleteHead.append(deleteHeading, deleteClose); const deleteBody = make("div", "dialog-body", ""); const deleteDetail = make("div", "delete-detail", ""); deleteDetail.id = "delete-detail"; const deleteWarning = make("div", "delete-warning", ""); deleteWarning.id = "delete-warning"; deleteBody.append(deleteDetail, deleteWarning); const deleteActions = make("div", "dialog-actions", ""); const dontRemindLabel = make("label", "setting-check", ""); dontRemindLabel.id = "delete-dont-remind-row"; const dontRemind = document.createElement("input"); dontRemind.type = "checkbox"; dontRemind.id = "delete-dont-remind"; dontRemindLabel.append(dontRemind, make("span", "", "下次不再提醒（可在設定重新開啟）")); const deleteCancel = button("取消", "", () => deleteDialog.close()); const deleteConfirm = button("確認", "danger-fill", () => { const pending = state.pendingDelete; if (!pending) return; const dont = $("delete-dont-remind").checked; state.pendingDelete = null; deleteDialog.close(); void executeDelete(pending.kind, pending.paths, dont); }); deleteConfirm.id = "delete-confirm"; deleteActions.append(dontRemindLabel, deleteCancel, deleteConfirm); deleteDialog.append(deleteHead, deleteBody, deleteActions); app.append(deleteDialog);
     const toast = make("div", "toast", ""); toast.id = "toast"; toast.hidden = true; toast.setAttribute("role", "status"); toast.setAttribute("aria-live", "polite"); app.append(toast);

@@ -8,6 +8,7 @@ import {
   documentStatuses, TEXT_PARSE_VERSION, emptyStatusCounts, textParseExtensions,
   type Diagnostic, type SyncSummary, type DocumentRecord, type DocumentStatus, type TextBlock,
 } from "./model.js";
+import { blocksContaining, buildChunks, decodeChunk, derivedLocation, type BuiltChunk, type ChunkBlock } from "./chunk-store.js";
 import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
@@ -174,10 +175,19 @@ function trigramValues(value: string): string[] {
 // 0.38.0 block-level index (SPEC §50／D081).
 const BLOCK_INDEX_VERSION = "1";
 const BLOCK_MIGRATION_VERSION = "block_index_1";
+// 0.39.0 chunk store (SPEC §52／D083).
+const CHUNK_STORE_VERSION = "1";
+const CHUNK_MIGRATION_VERSION = "chunk_store_1";
+const CHUNK_TABLES = { tri: "search_chunk_trigrams", uni: "search_chunk_unigrams", bi: "search_chunk_bigrams" } as const;
+// Everything the chunk store replaces; dropped (children first) when its migration completes.
+const PRE_CHUNK_TABLES = ["block_payloads", "document_payload_blocks", "document_payloads", "blocks",
+  "search_block_trigrams", "search_block_unigrams", "search_block_bigrams",
+  "document_blooms", "document_payload_blooms", "search_unigrams", "search_trigrams"] as const;
 // A migration's per-document markers are obsolete once its metadata version is written.
 const COMPLETED_MIGRATION_MARKERS = [
   { key: "content_storage_version", value: "2", marker: "content_storage_2" },
   { key: "block_index_version", value: BLOCK_INDEX_VERSION, marker: BLOCK_MIGRATION_VERSION },
+  { key: "chunk_store_version", value: CHUNK_STORE_VERSION, marker: CHUNK_MIGRATION_VERSION },
 ] as const;
 // removeMissing commits deletions in batches of this many documents (SPEC §51.3).
 const REMOVE_BATCH_SIZE = 1000;
@@ -357,7 +367,9 @@ export interface IndexFormatStatus {
   ngramTablesReady: boolean;
   blockIndexVersion: string | null;
   blockIndexCompletedDocuments: number;
-  /** Pre-0.38.0 Bloom／document postings still present (dropped when the block index migration completes). */
+  chunkStoreVersion: string | null;
+  chunkStoreCompletedDocuments: number;
+  /** Pre-0.39.0 blocks, payloads or search structures still present (dropped when the chunk store migration completes). */
   legacySearchStructures: boolean;
   needsUpgrade: boolean;
   completedDocuments: number;
@@ -472,10 +484,13 @@ export class IndexStore {
   private parseVersionKnown: boolean | null = null;
   private shortTermsReady = false;
   private blockIndexReadyCache = false;
+  private chunkStoreReadyCache = false;
   private readonly scopeCounts = new Map<string, number>();
   private latestSearchTrace: SearchTrace | null = null;
   private traceLog: TraceLog | undefined;
   private cachedWrites: ReturnType<IndexStore["createWrites"]> | null = null;
+  private chunkByIdSql: ReturnType<DatabaseSync["prepare"]> | null = null;
+  private blockMetaSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private cachedWritesSchema = -1;
 
   constructor(databasePath = defaultDatabasePath(), options: IndexStoreOptions = {}) {
@@ -498,10 +513,10 @@ export class IndexStore {
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
       this.initializeSchema(fresh);
       if (fresh) {
-        // A fresh index starts on the block index and never creates the legacy Bloom／document postings.
+        // A fresh index starts on the chunk store and never creates blocks, payloads or older search structures.
         this.db.exec(`INSERT OR REPLACE INTO metadata(key, value) VALUES
           ('content_storage_version', '2'), ('multi_root_version', '1'),
-          ('root_merge_version', '1'), ('block_index_version', '${BLOCK_INDEX_VERSION}')`);
+          ('root_merge_version', '1'), ('chunk_store_version', '${CHUNK_STORE_VERSION}')`);
       } else {
         this.purgeCompletedMigrationMarkers();
       }
@@ -528,9 +543,49 @@ export class IndexStore {
 
   private initializeSchema(fresh: boolean): void {
     this.initializeCoreSchema();
-    // Legacy search structures exist only on indexes created before 0.38.0 and
-    // only until their block index migration completes (SPEC §50.3).
-    if (!fresh && this.metadata("block_index_version") !== BLOCK_INDEX_VERSION) this.initializeLegacySearchSchema();
+    // Blocks, payloads and the older search structures exist only on indexes
+    // created before 0.39.0, until their chunk store migration completes (SPEC §52.4).
+    if (fresh || this.metadata("chunk_store_version") === CHUNK_STORE_VERSION) return;
+    this.initializeLegacyContentSchema();
+    if (this.metadata("block_index_version") !== BLOCK_INDEX_VERSION) this.initializeLegacySearchSchema();
+  }
+
+  private initializeLegacyContentSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS blocks (
+        id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL, heading TEXT, content TEXT NOT NULL,
+        location_kind TEXT NOT NULL, location_value TEXT NOT NULL,
+        UNIQUE(document_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS blocks_document_id ON blocks(document_id);
+      CREATE TABLE IF NOT EXISTS block_payloads (
+        block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL, payload BLOB NOT NULL,
+        PRIMARY KEY(block_id, ordinal)
+      );
+      CREATE TABLE IF NOT EXISTS document_payloads (
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL, payload BLOB NOT NULL,
+        PRIMARY KEY(document_id, ordinal)
+      );
+      CREATE TABLE IF NOT EXISTS document_payload_blocks (
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        payload_ordinal INTEGER NOT NULL, block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
+        PRIMARY KEY(document_id, payload_ordinal, block_id)
+      );
+      CREATE INDEX IF NOT EXISTS document_payload_blocks_document_block ON document_payload_blocks(document_id, block_id);
+      CREATE INDEX IF NOT EXISTS document_payload_blocks_block_id ON document_payload_blocks(block_id);
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${BLOCK_TABLES.tri} USING fts5(
+        text, content='', contentless_delete=1, detail=full, tokenize='trigram case_sensitive 1'
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${BLOCK_TABLES.uni} USING fts5(
+        text, content='', contentless_delete=1, detail=none, tokenize='unicode61 remove_diacritics 0'
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS ${BLOCK_TABLES.bi} USING fts5(
+        text, content='', contentless_delete=1, detail=none, tokenize='unicode61 remove_diacritics 0'
+      );
+    `);
   }
 
   private initializeLegacySearchSchema(): void {
@@ -564,30 +619,16 @@ export class IndexStore {
         indexed_at_ms INTEGER NOT NULL, status TEXT NOT NULL,
         error_code TEXT, error_message TEXT, parse_version INTEGER
       );
-      CREATE TABLE IF NOT EXISTS blocks (
+      CREATE TABLE IF NOT EXISTS document_chunks (
         id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        ordinal INTEGER NOT NULL, heading TEXT, content TEXT NOT NULL,
-        location_kind TEXT NOT NULL, location_value TEXT NOT NULL,
-        UNIQUE(document_id, ordinal)
+        ordinal INTEGER NOT NULL, text BLOB NOT NULL, layout BLOB NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS blocks_document_id ON blocks(document_id);
-      CREATE TABLE IF NOT EXISTS block_payloads (
-        block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        ordinal INTEGER NOT NULL, payload BLOB NOT NULL,
-        PRIMARY KEY(block_id, ordinal)
-      );
-      CREATE TABLE IF NOT EXISTS document_payloads (
+      CREATE INDEX IF NOT EXISTS document_chunks_document ON document_chunks(document_id, ordinal);
+      CREATE TABLE IF NOT EXISTS block_meta (
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        ordinal INTEGER NOT NULL, payload BLOB NOT NULL,
+        ordinal INTEGER NOT NULL, heading TEXT, location_kind TEXT NOT NULL, location_value TEXT NOT NULL,
         PRIMARY KEY(document_id, ordinal)
-      );
-      CREATE TABLE IF NOT EXISTS document_payload_blocks (
-        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        payload_ordinal INTEGER NOT NULL, block_id INTEGER NOT NULL REFERENCES blocks(id) ON DELETE CASCADE,
-        PRIMARY KEY(document_id, payload_ordinal, block_id)
-      );
-      CREATE INDEX IF NOT EXISTS document_payload_blocks_document_block ON document_payload_blocks(document_id, block_id);
-      CREATE INDEX IF NOT EXISTS document_payload_blocks_block_id ON document_payload_blocks(block_id);
+      ) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS index_migration_documents (
         version TEXT NOT NULL,
         document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -603,9 +644,9 @@ export class IndexStore {
       CREATE INDEX IF NOT EXISTS search_headings_document ON search_headings(document_id);
       ${/* Text is already NFKC + toLowerCase(); a case-sensitive trigram tokenizer adds no second
         folding (FTS5 would fold final sigma ς to σ), so a trigram phrase is an exact substring. */ ""}
-      ${[BLOCK_TABLES, FILENAME_TABLES, HEADING_TABLES].map(tables => `
+      ${[CHUNK_TABLES, FILENAME_TABLES, HEADING_TABLES].map(tables => `
       CREATE VIRTUAL TABLE IF NOT EXISTS ${tables.tri} USING fts5(
-        text, content='', contentless_delete=1, detail=${tables === BLOCK_TABLES ? "full" : "none"}, tokenize='trigram case_sensitive 1'
+        text, content='', contentless_delete=1, detail=none, tokenize='trigram case_sensitive 1'
       );
       CREATE VIRTUAL TABLE IF NOT EXISTS ${tables.uni} USING fts5(
         text, content='', contentless_delete=1, detail=none, tokenize='unicode61 remove_diacritics 0'
@@ -662,11 +703,14 @@ export class IndexStore {
     // Markers exist only while the migration runs; a finished index counts every document (SPEC §51.2).
     const blockIndexCompletedDocuments = this.blockIndexReady() ? totalDocuments : this.hasTable("index_migration_documents")
       ? Number((this.db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = ?").get(BLOCK_MIGRATION_VERSION) as { count: number }).count) : 0;
+    const chunkStoreCompletedDocuments = this.chunkStoreReady() ? totalDocuments : this.hasTable("index_migration_documents")
+      ? Number((this.db.prepare("SELECT count(*) AS count FROM index_migration_documents WHERE version = ?").get(CHUNK_MIGRATION_VERSION) as { count: number }).count) : 0;
     return { contentStorageVersion, payloadBloomVersion, ngramIndexVersion, ngramCompletedDocuments, ngramTablesReady,
       blockIndexVersion: this.metadata("block_index_version"), blockIndexCompletedDocuments,
-      legacySearchStructures: LEGACY_SEARCH_TABLES.some(table => this.hasTable(table)),
+      chunkStoreVersion: this.metadata("chunk_store_version"), chunkStoreCompletedDocuments,
+      legacySearchStructures: PRE_CHUNK_TABLES.some(table => this.hasTable(table)),
       needsUpgrade: contentStorageVersion !== "2" || this.metadata("multi_root_version") !== "1"
-        || this.metadata("root_merge_version") !== "1" || !this.blockIndexReady(),
+        || this.metadata("root_merge_version") !== "1" || !this.chunkStoreReady(),
       completedDocuments, totalDocuments,
       mappingIndexReady: this.mappingIndexReady(),
       textUpgradePending: pending.total,
@@ -688,6 +732,15 @@ export class IndexStore {
     return this.blockIndexReadyCache;
   }
 
+  /** True when every document is in the chunk store (SPEC §52); otherwise search uses the pre-0.39 paths. */
+  chunkStoreReady(): boolean {
+    // Only "ready" is cached, as for blockIndexReady(): another writer may finish the migration.
+    if (!this.chunkStoreReadyCache) {
+      this.chunkStoreReadyCache = this.metadata("chunk_store_version") === CHUNK_STORE_VERSION && this.hasTable("document_chunks");
+    }
+    return this.chunkStoreReadyCache;
+  }
+
   private hasNgramTables(): boolean {
     return this.hasTable(UNIGRAM_TABLE) && this.hasTable(TRIGRAM_TABLE);
   }
@@ -703,9 +756,9 @@ export class IndexStore {
       }
       if (this.metadata("multi_root_version") !== "1") this.migrateMultiRoot();
       if (this.metadata("root_merge_version") !== "1") this.migrateRootMerge();
-      // Pre-0.38.0 payload Bloom／ngram migrations are superseded: the block
-      // index replaces both and the legacy structures are dropped when it completes.
-      if (!this.blockIndexReady()) await this.migrateBlockIndex(options);
+      // The chunk store replaces the payload Bloom／ngram and block index
+      // migrations; every older structure is dropped when it completes (SPEC §52.4).
+      if (!this.chunkStoreReady()) await this.migrateChunkStore(options);
     } finally { release?.(); }
   }
 
@@ -756,6 +809,16 @@ export class IndexStore {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('ui_delete_confirmation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(enabled ? "true" : "false");
+  }
+
+  /** Workbench total count mode (SPEC §52.3); fast unless explicitly set to exact. */
+  searchTotalMode(): "fast" | "exact" {
+    return this.metadata("search_total_mode") === "exact" ? "exact" : "fast";
+  }
+  setSearchTotalMode(mode: "fast" | "exact"): void {
+    if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('search_total_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(mode);
   }
 
   moveRootsToTrash(roots: readonly string[]): TrashedRoot[] {
@@ -1016,6 +1079,12 @@ export class IndexStore {
     const prepare = (sql: string) => this.db.prepare(sql);
     const legacyBloom = this.hasTable("document_blooms") && this.hasTable("document_payload_blooms");
     const legacyNgram = this.hasNgramTables();
+    // Pre-0.39.0 content (blocks + payload docstore) is kept current until the chunk
+    // store migration completes, so read-only pre-migration search stays correct (SPEC §52.4).
+    const legacyContent = this.hasTable("blocks") && this.hasTable("document_payloads") && this.hasTable("document_payload_blocks");
+    // A 0.38.0 index searches through its block index until then.
+    const legacyBlockIndex = legacyContent && this.hasTable(BLOCK_TABLES.tri)
+      && this.metadata("block_index_version") === BLOCK_INDEX_VERSION;
     const fts = (tables: IndexTables) => ({
       insertTri: prepare(`INSERT INTO ${tables.tri}(rowid, text) VALUES (?, ?)`),
       insertUni: prepare(`INSERT INTO ${tables.uni}(rowid, text) VALUES (?, ?)`),
@@ -1034,13 +1103,23 @@ export class IndexStore {
         error_code=excluded.error_code, error_message=excluded.error_message,
         parse_version=excluded.parse_version`),
       bindRoot: prepare("INSERT INTO document_roots(document_id, root_path) VALUES (?, ?) ON CONFLICT(document_id) DO UPDATE SET root_path=excluded.root_path"),
-      deleteBlocks: prepare("DELETE FROM blocks WHERE document_id = ?"),
-      deletePayloads: prepare("DELETE FROM document_payloads WHERE document_id = ?"),
-      deletePayloadBlocks: prepare("DELETE FROM document_payload_blocks WHERE document_id = ?"),
-      insertBlock: prepare("INSERT INTO blocks (document_id, ordinal, heading, content, location_kind, location_value) VALUES (?, ?, ?, ?, ?, ?)"),
-      lastId: prepare("SELECT last_insert_rowid() AS id"),
-      insertPayload: prepare("INSERT INTO document_payloads (document_id, ordinal, payload) VALUES (?, ?, ?)"),
-      insertPayloadBlock: prepare("INSERT INTO document_payload_blocks (document_id, payload_ordinal, block_id) VALUES (?, ?, ?)"),
+      legacy: legacyContent ? {
+        deleteBlocks: prepare("DELETE FROM blocks WHERE document_id = ?"),
+        deletePayloads: prepare("DELETE FROM document_payloads WHERE document_id = ?"),
+        deletePayloadBlocks: prepare("DELETE FROM document_payload_blocks WHERE document_id = ?"),
+        insertBlock: prepare("INSERT INTO blocks (document_id, ordinal, heading, content, location_kind, location_value) VALUES (?, ?, ?, ?, ?, ?)"),
+        lastId: prepare("SELECT last_insert_rowid() AS id"),
+        insertPayload: prepare("INSERT INTO document_payloads (document_id, ordinal, payload) VALUES (?, ?, ?)"),
+        insertPayloadBlock: prepare("INSERT INTO document_payload_blocks (document_id, payload_ordinal, block_id) VALUES (?, ?, ?)"),
+        documentBlockIds: prepare("SELECT id FROM blocks WHERE document_id = ?"),
+      } : null,
+      insertChunk: prepare("INSERT INTO document_chunks(document_id, ordinal, text, layout) VALUES (?, ?, ?, ?) RETURNING id"),
+      documentChunkIds: prepare("SELECT id FROM document_chunks WHERE document_id = ?"),
+      deleteChunks: prepare("DELETE FROM document_chunks WHERE document_id = ?"),
+      insertMeta: prepare("INSERT INTO block_meta(document_id, ordinal, heading, location_kind, location_value) VALUES (?, ?, ?, ?, ?)"),
+      deleteMeta: prepare("DELETE FROM block_meta WHERE document_id = ?"),
+      hasContent: prepare(`SELECT EXISTS(SELECT 1 FROM document_chunks WHERE document_id = ?1)
+        OR EXISTS(SELECT 1 FROM block_meta WHERE document_id = ?1)${legacyContent ? " OR EXISTS(SELECT 1 FROM blocks WHERE document_id = ?1)" : ""} AS found`),
       deleteMigration: prepare("DELETE FROM index_migration_documents WHERE version = ? AND document_id = ?"),
       insertMigration: prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES (?, ?)"),
       // Pre-0.38.0 structures: maintained only while they still exist (SPEC §50.3).
@@ -1056,10 +1135,10 @@ export class IndexStore {
         insertUnigrams: prepare(`INSERT INTO ${UNIGRAM_TABLE}(rowid, text) VALUES (?, ?)`),
         insertTrigrams: prepare(`INSERT INTO ${TRIGRAM_TABLE}(rowid, text) VALUES (?, ?)`),
       } : null,
-      blockFts: fts(BLOCK_TABLES),
+      blockFts: legacyBlockIndex ? fts(BLOCK_TABLES) : null,
+      chunkFts: fts(CHUNK_TABLES),
       filenameFts: fts(FILENAME_TABLES),
       headingFts: fts(HEADING_TABLES),
-      documentBlockIds: prepare("SELECT id FROM blocks WHERE document_id = ?"),
       documentHeadingIds: prepare("SELECT id FROM search_headings WHERE document_id = ?"),
       deleteHeadings: prepare("DELETE FROM search_headings WHERE document_id = ?"),
       insertHeading: prepare("INSERT INTO search_headings(document_id, min_ordinal, heading) VALUES (?, ?, ?) RETURNING id"),
@@ -1092,26 +1171,35 @@ export class IndexStore {
     this.deleteBlockIndexRows(documentId, writes);
   }
 
-  private deleteBlockIndexRows(documentId: number, writes = this.writes()): void {
-    const { blockFts, filenameFts, headingFts } = writes;
-    for (const { id } of writes.documentBlockIds.all(documentId) as { id: number }[]) {
-      blockFts.deleteTri.run(id); blockFts.deleteUni.run(id); blockFts.deleteBi.run(id);
+  /** Delete one document's index rows (filename, headings, chunks, and pre-0.39 block index), and its chunk content. */
+  private deleteBlockIndexRows(documentId: number, writes = this.writes(), keepLegacyBlockRows = false): void {
+    const { blockFts, chunkFts, filenameFts, headingFts } = writes;
+    if (blockFts && writes.legacy && !keepLegacyBlockRows) {
+      for (const { id } of writes.legacy.documentBlockIds.all(documentId) as { id: number }[]) {
+        blockFts.deleteTri.run(id); blockFts.deleteUni.run(id); blockFts.deleteBi.run(id);
+      }
     }
+    for (const { id } of writes.documentChunkIds.all(documentId) as { id: number }[]) {
+      chunkFts.deleteTri.run(id); chunkFts.deleteUni.run(id); chunkFts.deleteBi.run(id);
+    }
+    writes.deleteChunks.run(documentId);
+    writes.deleteMeta.run(documentId);
     for (const { id } of writes.documentHeadingIds.all(documentId) as { id: number }[]) {
       headingFts.deleteTri.run(id); headingFts.deleteUni.run(id); headingFts.deleteBi.run(id);
     }
     writes.deleteHeadings.run(documentId);
     filenameFts.deleteTri.run(documentId); filenameFts.deleteUni.run(documentId); filenameFts.deleteBi.run(documentId);
-    writes.deleteMigration.run(BLOCK_MIGRATION_VERSION, documentId);
+    writes.deleteMigration.run(CHUNK_MIGRATION_VERSION, documentId);
   }
 
   /**
-   * Write the block index for one document whose previous rows were already
-   * removed. `blocks` carry the stored block ids and complete content.
+   * Write filename, heading, chunk and chunk index rows for one document whose
+   * previous rows were already removed (SPEC §52.1). `legacyBlocks` carries the
+   * block ids of a 0.38.0 block index that is still being searched.
    */
-  private writeBlockIndexRows(documentId: number, filename: string,
-    blocks: readonly { id: number; ordinal: number; heading: string | null; content: string }[], writes = this.writes()): void {
-    const insertTokens = (tables: typeof writes.blockFts, rowid: number, normalized: string) => {
+  private writeBlockIndexRows(documentId: number, filename: string, blocks: readonly TextBlock[], writes = this.writes(),
+    legacyBlocks: readonly { id: number; content: string }[] = []): void {
+    const insertTokens = (tables: typeof writes.chunkFts, rowid: number, normalized: string) => {
       tables.insertTri.run(rowid, normalized);
       const tokens = shortTokens(normalized);
       tables.insertUni.run(rowid, tokens.unigrams);
@@ -1127,11 +1215,20 @@ export class IndexStore {
       const { id } = writes.insertHeading.get(documentId, ordinal, heading) as { id: number };
       insertTokens(writes.headingFts, id, normalizeSearchText(heading));
     }
-    for (const block of blocks) {
-      if (block.content) insertTokens(writes.blockFts, block.id, normalizeSearchText(block.content));
+    const { chunks, meta } = buildChunks(blocks);
+    for (const chunk of chunks) this.insertChunk(documentId, chunk, writes, insertTokens);
+    for (const row of meta) writes.insertMeta.run(documentId, row.ordinal, row.heading, row.locationKind, row.locationValue);
+    if (writes.blockFts) {
+      for (const block of legacyBlocks) if (block.content) insertTokens(writes.blockFts, block.id, normalizeSearchText(block.content));
     }
     // The marker records migration progress only (SPEC §51.2).
-    if (!this.blockIndexReady()) writes.insertMigration.run(BLOCK_MIGRATION_VERSION, documentId);
+    if (!this.chunkStoreReady()) writes.insertMigration.run(CHUNK_MIGRATION_VERSION, documentId);
+  }
+
+  private insertChunk(documentId: number, chunk: BuiltChunk, writes: ReturnType<IndexStore["writes"]>,
+    insertTokens: (tables: ReturnType<IndexStore["writes"]>["chunkFts"], rowid: number, normalized: string) => void): void {
+    const { id } = writes.insertChunk.get(documentId, chunk.ordinal, chunk.text, chunk.layout) as { id: number };
+    insertTokens(writes.chunkFts, id, chunk.normalized);
   }
 
 
@@ -1146,7 +1243,7 @@ export class IndexStore {
       const row = this.getDocument(document.path)!;
       if (root) writes.bindRoot.run(row.id, root);
       this.replaceNgramDocument(row.id, document.filename, writes);
-      if (!writes.documentBlockIds.get(row.id)) {
+      if (!(writes.hasContent.get(row.id) as { found: number }).found) {
         this.deleteBlockIndexRows(row.id, writes);
         this.writeBlockIndexRows(row.id, document.filename, [], writes);
       } else {
@@ -1178,34 +1275,39 @@ export class IndexStore {
       if (root) writes.bindRoot.run(row.id, root);
       if (timings) timings.writeMs += performance.now() - writeStarted;
       const deleteStarted = performance.now();
-      // Block index rows are keyed by the old block ids, so remove them before the blocks.
+      // Index rows are keyed by the old chunk／block ids, so remove them before the content rows.
       this.deleteBlockIndexRows(row.id, writes);
-      writes.deletePayloadBlocks.run(row.id);
-      writes.deletePayloads.run(row.id);
-      writes.legacyBloom?.deletePayloadBlooms.run(row.id);
-      writes.legacyBloom?.deleteBloom.run(row.id);
-      writes.deleteBlocks.run(row.id);
+      const { legacy } = writes;
+      if (legacy) {
+        legacy.deletePayloadBlocks.run(row.id);
+        legacy.deletePayloads.run(row.id);
+        writes.legacyBloom?.deletePayloadBlooms.run(row.id);
+        writes.legacyBloom?.deleteBloom.run(row.id);
+        legacy.deleteBlocks.run(row.id);
+      }
       if (timings) timings.deleteMs += performance.now() - deleteStarted;
       const entries: { id: number; ordinal: number; heading: string | null; content: string }[] = [];
-      for (const block of document.blocks) {
-        const insertStarted = performance.now();
-        writes.insertBlock.run(row.id, block.ordinal, block.heading, "", block.locationKind, block.locationValue);
-        const blockId = (writes.lastId.get() as { id: number }).id;
-        if (timings) timings.writeMs += performance.now() - insertStarted;
-        entries.push({ id: blockId, ordinal: block.ordinal, heading: block.heading, content: block.content });
+      if (legacy) {
+        for (const block of document.blocks) {
+          const insertStarted = performance.now();
+          legacy.insertBlock.run(row.id, block.ordinal, block.heading, "", block.locationKind, block.locationValue);
+          const blockId = (legacy.lastId.get() as { id: number }).id;
+          if (timings) timings.writeMs += performance.now() - insertStarted;
+          entries.push({ id: blockId, ordinal: block.ordinal, heading: block.heading, content: block.content });
+        }
+        this.writeDocumentPayloads(row.id, entries, timings);
+        if (writes.legacyBloom) {
+          const bloomStarted = performance.now();
+          const bloom = buildBloom(document.blocks);
+          if (timings) timings.bloomMs += performance.now() - bloomStarted;
+          const bloomWrite = performance.now();
+          writes.legacyBloom.upsertBloom.run(row.id, bloom);
+          if (timings) timings.writeMs += performance.now() - bloomWrite;
+        }
+        this.replaceNgramDocument(row.id, searchableDocumentText(document.filename, document.blocks), writes);
       }
-      this.writeDocumentPayloads(row.id, entries, timings);
-      if (writes.legacyBloom) {
-        const bloomStarted = performance.now();
-        const bloom = buildBloom(document.blocks);
-        if (timings) timings.bloomMs += performance.now() - bloomStarted;
-        const bloomWrite = performance.now();
-        writes.legacyBloom.upsertBloom.run(row.id, bloom);
-        if (timings) timings.writeMs += performance.now() - bloomWrite;
-      }
-      this.replaceNgramDocument(row.id, searchableDocumentText(document.filename, document.blocks), writes);
       const indexStarted = performance.now();
-      this.writeBlockIndexRows(row.id, document.filename, entries, writes);
+      this.writeBlockIndexRows(row.id, document.filename, document.blocks, writes, entries);
       if (timings) timings.writeMs += performance.now() - indexStarted;
       const commitStarted = performance.now();
       this.db.exec("COMMIT");
@@ -1272,9 +1374,12 @@ export class IndexStore {
     for (const id of ids) insert.run(id);
     const documents = "SELECT id FROM temp.remove_batch";
     const blocks = `SELECT id FROM blocks WHERE document_id IN (${documents})`;
+    const chunks = `SELECT id FROM document_chunks WHERE document_id IN (${documents})`;
     const headings = `SELECT id FROM search_headings WHERE document_id IN (${documents})`;
     const deletes: string[] = [
-      ...Object.values(BLOCK_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${blocks})`),
+      ...(this.hasTable(BLOCK_TABLES.tri) && this.hasTable("blocks")
+        ? Object.values(BLOCK_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${blocks})`) : []),
+      ...Object.values(CHUNK_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${chunks})`),
       ...Object.values(HEADING_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${headings})`),
       ...Object.values(FILENAME_TABLES).map(table => `DELETE FROM ${table} WHERE rowid IN (${documents})`),
       ...(this.hasNgramTables() ? [UNIGRAM_TABLE, TRIGRAM_TABLE].map(table => `DELETE FROM ${table} WHERE rowid IN (${documents})`) : []),
@@ -1658,6 +1763,82 @@ export class IndexStore {
       : this.streamBlocksFor(document.id, undefined, trace) };
   }
 
+  // ---------------------------------------------------------------------------
+  // Chunk store reads (SPEC §52). Callers verify candidates; nothing here ranks.
+
+  /** Candidate chunks per document whose index text may contain the normalized term (superset), in chunk order. */
+  chunkCandidates(term: string, trace?: SearchTraceRecorder): Map<number, number[]> {
+    const { table, match } = indexMatch(term, false);
+    const name = CHUNK_TABLES[table];
+    const rows = this.indexQuery<{ id: number; documentId: number }>(`SELECT c.id, c.document_id AS documentId
+      FROM ${name} JOIN document_chunks AS c ON c.id = ${name}.rowid WHERE ${name} MATCH ? ORDER BY c.document_id, c.ordinal`, [match], trace);
+    const byDocument = new Map<number, number[]>();
+    for (const row of rows) {
+      const documentId = Number(row.documentId);
+      let list = byDocument.get(documentId);
+      if (!list) byDocument.set(documentId, list = []);
+      list.push(Number(row.id));
+    }
+    trace?.increment("indexCandidateChunks", rows.length);
+    return byDocument;
+  }
+
+  /** Original blocks of one chunk. */
+  chunkBlocks(chunkId: number, trace?: SearchTraceRecorder): ChunkBlock[] {
+    const started = performance.now();
+    const row = (this.chunkByIdSql ??= this.db.prepare("SELECT text, layout FROM document_chunks WHERE id = ?"))
+      .get(chunkId) as { text: Uint8Array; layout: Uint8Array } | undefined;
+    if (!row) return [];
+    const blocks = decodeChunk(row.text, row.layout);
+    trace?.increment("indexVerifiedChunks");
+    trace?.increment("indexVerifiedBytes", row.text.length);
+    trace?.addPhase("payloadLookup", performance.now() - started);
+    return blocks;
+  }
+
+  /** Ordinals of the chunk's blocks whose normalized content contains each term (see blocksContaining). */
+  chunkTermHits(chunkId: number, terms: readonly string[], firstOnly: boolean, trace?: SearchTraceRecorder): Map<string, number[]> {
+    const started = performance.now();
+    const row = (this.chunkByIdSql ??= this.db.prepare("SELECT text, layout FROM document_chunks WHERE id = ?"))
+      .get(chunkId) as { text: Uint8Array; layout: Uint8Array } | undefined;
+    if (!row) return new Map(terms.map(term => [term, []]));
+    trace?.increment("indexVerifiedChunks");
+    trace?.increment("indexVerifiedBytes", row.text.length);
+    const hits = blocksContaining(row.text, row.layout, terms, firstOnly);
+    trace?.increment("exactTextMs", performance.now() - started);
+    return hits;
+  }
+
+  /** Every chunk id of one document in block order. */
+  documentChunkIds(documentId: number): number[] {
+    return (this.db.prepare("SELECT id FROM document_chunks WHERE document_id = ? ORDER BY ordinal").all(documentId) as { id: number }[])
+      .map(row => Number(row.id));
+  }
+
+  /** Heading and location of one block: stored metadata, else the derived plain-line values (SPEC §52.1). */
+  blockDisplay(documentId: number, ordinal: number): { heading: string | null; location_kind: TextBlock["locationKind"]; location: string } {
+    const row = (this.blockMetaSql ??= this.db.prepare("SELECT heading, location_kind, location_value FROM block_meta WHERE document_id = ? AND ordinal = ?"))
+      .get(documentId, ordinal) as { heading: string | null; location_kind: TextBlock["locationKind"]; location_value: string } | undefined;
+    return row ? { heading: row.heading, location_kind: row.location_kind, location: row.location_value }
+      : { heading: null, location_kind: "line", location: derivedLocation(ordinal) };
+  }
+
+  /** All blocks of one document rebuilt from chunks and stored metadata, in ordinal order. */
+  documentBlocks(documentId: number, trace?: SearchTraceRecorder): StoredBlockRow[] {
+    const contents = new Map<number, string>();
+    for (const id of this.documentChunkIds(documentId)) for (const block of this.chunkBlocks(id, trace)) contents.set(block.ordinal, block.content);
+    const meta = new Map((this.db.prepare("SELECT ordinal, heading, location_kind, location_value FROM block_meta WHERE document_id = ?")
+      .all(documentId) as { ordinal: number; heading: string | null; location_kind: TextBlock["locationKind"]; location_value: string }[])
+      .map(row => [Number(row.ordinal), row]));
+    const ordinals = [...new Set([...contents.keys(), ...meta.keys()])].sort((a, b) => a - b);
+    trace?.increment("blocksMetadataRows", ordinals.length);
+    return ordinals.map(ordinal => {
+      const row = meta.get(ordinal);
+      return { ordinal, heading: row ? row.heading : null, content: contents.get(ordinal) ?? "",
+        location_kind: row ? row.location_kind : "line", location_value: row ? row.location_value : derivedLocation(ordinal) };
+    });
+  }
+
   candidateByPath(filePath: string, trace?: SearchTraceRecorder): SearchCandidate | undefined {
     const started = performance.now();
     const document = this.db.prepare("SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents WHERE path = ?")
@@ -1666,11 +1847,19 @@ export class IndexStore {
     if (!document) return undefined;
     trace?.increment("documentsConsidered");
     trace?.increment("documentsAfterPruning");
-    const blocks = this.blocksFor(document.id, trace);
+    const blocks = this.chunkStoreReady() ? this.documentBlocks(document.id, trace) : this.blocksFor(document.id, trace);
     return { document, blocks };
   }
 
   blockSource(documentId: number, ordinal: number, source: "heading" | "content", trace?: SearchTraceRecorder): string | null {
+    if (this.chunkStoreReady()) {
+      if (source === "heading") return this.blockDisplay(documentId, ordinal).heading;
+      // The chunk holding a block is the last one starting at or before its ordinal.
+      const chunk = this.db.prepare("SELECT id FROM document_chunks WHERE document_id = ? AND ordinal <= ? ORDER BY ordinal DESC LIMIT 1")
+        .get(documentId, ordinal) as { id: number } | undefined;
+      if (!chunk) return null;
+      return this.chunkBlocks(Number(chunk.id), trace).find(block => block.ordinal === ordinal)?.content ?? null;
+    }
     const started = performance.now();
     const blockQuery = this.db.prepare("SELECT id, heading FROM blocks WHERE document_id = ? AND ordinal = ?");
     trace?.recordPayloadSql("blocksMetadata", "prepare", performance.now() - started);
@@ -1860,6 +2049,8 @@ export class IndexStore {
 
   private writeDocumentPayloads(documentId: number, entries: { id: number; ordinal: number; content: string }[], timings?: UpsertTimings): void {
     const writes = this.writes();
+    const legacy = writes.legacy;
+    if (!legacy) throw new Error("payload docstore 已由區段儲存取代。");
     let batch: [number, string][] = []; let bytes = 2; let ordinal = 0;
     const flush = () => {
       if (!batch.length) return;
@@ -1875,8 +2066,8 @@ export class IndexStore {
         if (timings) timings.bloomMs += performance.now() - bloomStarted;
       }
       const writeStarted = performance.now();
-      writes.insertPayload.run(documentId, ordinal, payload);
-      for (const id of new Set(batch.map(item => item[0]))) writes.insertPayloadBlock.run(documentId, ordinal, id);
+      legacy.insertPayload.run(documentId, ordinal, payload);
+      for (const id of new Set(batch.map(item => item[0]))) legacy.insertPayloadBlock.run(documentId, ordinal, id);
       if (bloom) writes.legacyBloom!.insertPayloadBloom.run(documentId, ordinal, bloom);
       if (timings) timings.writeMs += performance.now() - writeStarted;
       ordinal++; batch = []; bytes = 2;
@@ -1902,6 +2093,8 @@ export class IndexStore {
     options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式", current: completed, total });
     const blocksQuery = this.db.prepare("SELECT id, ordinal, content FROM blocks WHERE document_id = ? ORDER BY ordinal");
     const legacyQuery = this.db.prepare("SELECT payload FROM block_payloads WHERE block_id = ? ORDER BY ordinal");
+    const legacy = this.writes().legacy;
+    if (!legacy) throw new Error("舊索引缺少 payload docstore 資料表。");
     const writes = this.writes();
     for (const document of documents) {
       throwIfAborted(options.signal);
@@ -1914,8 +2107,8 @@ export class IndexStore {
       }));
       this.db.exec("BEGIN IMMEDIATE");
       try {
-        writes.deletePayloadBlocks.run(document.id);
-        writes.deletePayloads.run(document.id);
+        legacy.deletePayloadBlocks.run(document.id);
+        legacy.deletePayloads.run(document.id);
         writes.legacyBloom?.deletePayloadBlooms.run(document.id);
         this.writeDocumentPayloads(document.id, entries);
         this.db.prepare("DELETE FROM block_payloads WHERE block_id IN (SELECT id FROM blocks WHERE document_id = ?)").run(document.id);
@@ -1943,9 +2136,10 @@ export class IndexStore {
   }
 
   /** Every block of one document with its stored id and complete content (full payload read). */
-  private documentBlocksWithIds(documentId: number): { id: number; ordinal: number; heading: string | null; content: string }[] {
-    const blocks = this.db.prepare("SELECT id, ordinal, heading, content FROM blocks WHERE document_id = ? ORDER BY ordinal")
-      .all(documentId) as { id: number; ordinal: number; heading: string | null; content: string }[];
+  private documentBlocksWithIds(documentId: number): (StoredBlockRow & { id: number; locationKind: TextBlock["locationKind"]; locationValue: string })[] {
+    const blocks = (this.db.prepare(`SELECT id, ordinal, heading, content, location_kind, location_value
+      FROM blocks WHERE document_id = ? ORDER BY ordinal`).all(documentId) as unknown as StoredBlockDatabaseRow[])
+      .map(block => ({ ...block, locationKind: block.location_kind, locationValue: block.location_value }));
     const payloads = this.db.prepare("SELECT payload FROM document_payloads WHERE document_id = ? ORDER BY ordinal")
       .all(documentId) as { payload: Uint8Array }[];
     const contents = new Map<number, string>();
@@ -1962,12 +2156,12 @@ export class IndexStore {
    * rows together with `block_index_1` markers, so cancellation keeps committed
    * documents and the next writer resumes. Payload bytes are never rewritten.
    */
-  private async migrateBlockIndex(options: UpgradeOptions): Promise<void> {
-    const message = "建立 block 級搜尋索引";
+  private async migrateChunkStore(options: UpgradeOptions): Promise<void> {
+    const message = "建立區段儲存與搜尋索引";
     const documents = this.db.prepare(`SELECT d.id, d.path, d.filename FROM documents d
       WHERE NOT EXISTS (SELECT 1 FROM index_migration_documents m
         WHERE m.version = ? AND m.document_id = d.id)
-      ORDER BY d.id`).all(BLOCK_MIGRATION_VERSION) as { id: number; path: string; filename: string }[];
+      ORDER BY d.id`).all(CHUNK_MIGRATION_VERSION) as { id: number; path: string; filename: string }[];
     const total = Number((this.db.prepare("SELECT count(*) AS count FROM documents").get() as { count: number }).count);
     let completed = total - documents.length;
     options.onProgress?.({ stage: "upgrade", message, current: completed, total });
@@ -1988,8 +2182,11 @@ export class IndexStore {
       this.db.exec("BEGIN IMMEDIATE");
       try {
         for (const { document, blocks } of batch) {
-          this.deleteBlockIndexRows(document.id, writes);
-          this.writeBlockIndexRows(document.id, document.filename, blocks, writes);
+          // A 0.38.0 block index keeps serving read-only search until completion; its rows are already
+          // current, so only chunk, filename and heading rows are (re)written here.
+          this.deleteBlockIndexRows(document.id, writes, true);
+          this.writeBlockIndexRows(document.id, document.filename, blocks.map(block => ({ ordinal: block.ordinal, heading: block.heading,
+            content: block.content, locationKind: block.locationKind, locationValue: block.locationValue })), writes);
         }
         this.db.exec("COMMIT");
       } catch (error) {
@@ -2003,28 +2200,47 @@ export class IndexStore {
     throwIfAborted(options.signal);
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of LEGACY_SEARCH_TABLES) this.db.exec(`DROP TABLE IF EXISTS ${table}`);
-      this.db.exec(`DELETE FROM index_migration_documents WHERE version IN ('payload_bloom_1', 'payload_bloom_2', '${NGRAM_MIGRATION_VERSION}', '${BLOCK_MIGRATION_VERSION}');
-        DELETE FROM metadata WHERE key IN ('payload_bloom_version', 'ngram_index_version');`);
-      this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('block_index_version', ?)").run(BLOCK_INDEX_VERSION);
+      for (const table of PRE_CHUNK_TABLES) this.db.exec(`DROP TABLE IF EXISTS ${table}`);
+      this.db.exec(`DELETE FROM index_migration_documents;
+        DELETE FROM metadata WHERE key IN ('payload_bloom_version', 'ngram_index_version', 'block_index_version');`);
+      this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('chunk_store_version', ?)").run(CHUNK_STORE_VERSION);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
-    // Statements prepared against the dropped legacy tables must not be reused.
+    // Statements prepared against the dropped tables must not be reused.
     this.cachedWrites = null;
     this.shortTermsReady = false;
-    options.onProgress?.({ stage: "upgrade", message: "block 級搜尋索引升級完成", current: total, total });
+    this.blockIndexReadyCache = false;
+    options.onProgress?.({ stage: "upgrade", message: "區段儲存升級完成", current: total, total });
+    if (this.freePageRatio() > 0.5) {
+      options.onProgress?.({ stage: "upgrade", message: "壓縮資料庫" });
+      this.db.exec("VACUUM");
+    }
+  }
+
+  /** Share of the database file that is free pages (reclaimable by VACUUM). */
+  freePageRatio(): number {
+    const pages = Number((this.db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count);
+    const free = Number((this.db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count);
+    return pages ? free / pages : 0;
+  }
+
+  /** Rewrite the database without free pages (SPEC §52.4 `compact`); the caller holds the writer lock. */
+  compact(): void {
+    if (this.readOnly) throw new Error("唯讀索引不能壓縮。");
+    this.db.exec("VACUUM");
   }
 
   /** Empty every search structure (full clear／rebuild). */
   private clearAllSearchRows(): void {
-    const tables: string[] = [...Object.values(BLOCK_TABLES), ...Object.values(FILENAME_TABLES), ...Object.values(HEADING_TABLES)];
+    const tables: string[] = [...Object.values(CHUNK_TABLES), ...Object.values(FILENAME_TABLES), ...Object.values(HEADING_TABLES)];
+    if (this.hasTable(BLOCK_TABLES.tri)) tables.push(...Object.values(BLOCK_TABLES));
     if (this.hasNgramTables()) tables.push(UNIGRAM_TABLE, TRIGRAM_TABLE);
     for (const table of tables) this.db.exec(`INSERT INTO ${table}(${table}) VALUES ('delete-all')`);
-    this.db.exec(`DELETE FROM search_headings;
-      DELETE FROM index_migration_documents WHERE version IN ('${BLOCK_MIGRATION_VERSION}', '${NGRAM_MIGRATION_VERSION}');`);
+    this.db.exec(`DELETE FROM search_headings; DELETE FROM document_chunks; DELETE FROM block_meta;
+      DELETE FROM index_migration_documents WHERE version IN ('${BLOCK_MIGRATION_VERSION}', '${NGRAM_MIGRATION_VERSION}', '${CHUNK_MIGRATION_VERSION}');`);
   }
 
   counts(): Record<string, number> {

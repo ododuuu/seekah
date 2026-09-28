@@ -1601,6 +1601,7 @@ docsearch doctor
   - 每份文件的非空段落依 ordinal 串接成區段，以 `"\n"` 分隔；區段累積到 65,536 個 UTF-16 單位前換下一個。單一段落不切開，超過上限時獨佔一個區段。
   - `text` 是原文（不是正規化文字）的 UTF-8，以 zstd 壓縮。
   - `layout` 是 varint 序列：段落數，接著每段的「起點 UTF-16 偏移差」與「ordinal 差」。
+  - `ordinal` 是區段第一個段落的 ordinal；某段落所在的區段＝`ordinal` 不大於它的最後一個區段。
   - `document_id` 參照 `documents(id) ON DELETE CASCADE`，並有 `(document_id, ordinal)` 索引。
 - `block_meta(document_id, ordinal, heading, location_kind, location_value)`，主鍵 `(document_id, ordinal)`：
   - 只存「無法推算」的段落：凡是 `location_kind` 不是 `line`、`heading` 不是 null，或 `location_value` 不等於「第 {ordinal+1} 行」者都要存。
@@ -1633,7 +1634,7 @@ docsearch doctor
 - 介面：
   - Workbench：設定頁「總筆數」選項（快速／精確），存於索引 metadata `search_total_mode`，預設快速。精確模式下，搜尋先回傳結果與下限，前端再以 `POST /api/search/count`（相同查詢參數）取得精確數並更新畫面；計數期間顯示「計算中」。
   - CLI：`search` 新增 `--exact-total`；預設快速。`context` 只取前 500 筆內的結果，不受影響。
-  - TUI：一律快速模式，總數為下限時顯示「500 筆以上」。
+  - TUI：一律快速模式，總數為下限時顯示「500 筆以上」，可瀏覽已驗證的前 500 筆。
   - MCP `search_documents`：新增選填 `exactTotal`（boolean，預設 false）；回應新增 `totalRelation`，`total` 在 `gte` 時為下限。
 - 結果內搜尋的每一層各自依同一模式計數。
 

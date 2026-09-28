@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-import { IndexBusyError } from "./write-lock.js";
+import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
 import { interactiveContext, ContextError } from "./context.js";
 import { runWatch, WatchError, resolveWatchDebounce, resolveWatchRescan } from "./watch.js";
 import { runAutoupdateCommand } from "./autoupdate.js";
 import { actOnDocument, DocumentActionError } from "./open-document.js";
 import { defaultDatabasePath, describeDatabaseLocation, formatMib, IndexStore, inspectDatabaseFile, type ExtensionStats, type StorageFootprint } from "./store.js";
 import { parseTypes, type SearchResult } from "./search.js";
-import { runSearchSession, SearchSession, SearchIndexChangedError } from "./search-session.js";
+import { formatTotal, runSearchSession, SearchSession, SearchIndexChangedError } from "./search-session.js";
 import { resolveUserRootPath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
 import path from "node:path";
@@ -15,7 +15,7 @@ import { IgnoreConfigurationError } from "./ignore.js";
 import { reprocessReasonLabels, reprocessReasons, type Diagnostic, type SyncSummary } from "./model.js";
 import { supportedExtensions } from "./model.js";
 import { ClipboardError } from "./clipboard.js";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { createProgressReporter, OperationCancelledError } from "./progress.js";
 import { createInterface } from "node:readline/promises";
 import { runTui, TuiInputDecoder, type TuiEvent, type TuiStopReason } from "./tui.js";
@@ -81,7 +81,7 @@ export function buildHelpText(): string {
     "主要入口：seekah／seekah.cmd；下列 docsearch 命令保留相容，參數完全相同。",
     "",
     "  docsearch index [root] [--verbose] [--profile <新檔案>]    # 立即完整校正",
-    "  docsearch search <query> [--all-terms] [--page <正整數>] [--page-size <1～100>] [--limit <正整數>] [--type <格式清單>] [--root <路徑>] [--verbose]",
+    "  docsearch search <query> [--all-terms] [--page <正整數>] [--page-size <1～100>] [--limit <正整數>] [--type <格式清單>] [--root <路徑>] [--exact-total] [--verbose]",
     "    --verbose（search）：stderr 輸出一行 SEARCH_TRACE <JSON>，供診斷查詢 phase、counts 與候選來源。",
     "    每次完成的 search trace 也追加至索引資料目錄 trace.log；Workbench 頂列 Trace 可開啟獨立診斷頁。",
     "  docsearch context [query] (--out <新檔案>|--clipboard) [--all-terms] [--format json|md] [--passages <1～10>] [--select <文件代碼,...>] [--type <格式>] [--root <路徑>] [--limit <1～500>]",
@@ -100,6 +100,7 @@ export function buildHelpText(): string {
     "  docsearch mcp",
     "  docsearch setup codex [--dry-run]",
     "  docsearch doctor",
+    "  docsearch compact                                 # 回收刪除後留下的空白頁（需先停止背景自動更新）",
     "",
     "search 在互動終端預設每頁 20 筆，可用 n／p 翻頁、/ 關鍵字縮小結果、back 撤回、reset 重設、q 結束；單頁與零結果仍可操作。非互動輸出可用 --page 與 --page-size。--limit 保留為單次輸出的相容選項。",
     "index 可將涵蓋的既有子根合併為上層登錄；已包含於上層的子目錄只同步該子樹。--root 可為已登錄根目錄或其下子樹／已合併原子根。",
@@ -210,6 +211,24 @@ export async function main(args: readonly string[]): Promise<number> {
     const { runDoctor } = await import("./host-setup.js");
     return runDoctor({ databasePath: defaultDatabasePath(), cliPath: path.resolve(process.argv[1] ?? "dist/src/cli.js") });
   }
+  if (command === "compact") {
+    // SPEC §52.4: rewrite the index without free pages; refuses while background autoupdate may write.
+    if (args.length !== 1) { console.error("用法：docsearch compact"); return 2; }
+    const databasePath = defaultDatabasePath();
+    if (!existsSync(databasePath)) { console.error("索引尚未建立。"); return 2; }
+    const { autoupdateStatus } = await import("./autoupdate.js");
+    const running = await autoupdateStatus(databasePath).then(result => result.code === 0, () => false);
+    if (running) { console.error("背景自動更新執行中；請先執行 autoupdate stop，壓縮完成後再 autoupdate start。"); return 3; }
+    const before = statSync(databasePath).size;
+    const store = new IndexStore(databasePath);
+    const release = acquireWriteLock(databasePath);
+    try {
+      console.log(`壓縮資料庫中（可回收約 ${formatMib(before * store.freePageRatio())}）…`);
+      store.compact();
+    } finally { release(); store.close(); }
+    console.log(`壓縮完成：${formatMib(before)} → ${formatMib(statSync(databasePath).size)}。`);
+    return 0;
+  }
   if (!["index", "search", "status", "rebuild", "open", "reveal", "roots", "context", "watch", "tui"].includes(command ?? "")) {
     console.error(`未知命令：${command}`);
     return 2;
@@ -217,6 +236,7 @@ export async function main(args: readonly string[]): Promise<number> {
   let contextOutput: string | undefined;
   let contextClipboard = false;
   let allTerms = false;
+  let exactTotal = false;
   let selectedReferences: string[] | undefined;
   let contextFormat: "json" | "md" = "json";
   let contextPassages = 3;
@@ -315,6 +335,8 @@ export async function main(args: readonly string[]): Promise<number> {
           contextClipboard = true;
         } else if (option === "--all-terms") {
           allTerms = true;
+        } else if (option === "--exact-total" && command === "search") {
+          exactTotal = true;
         } else if (option === "--select" && command === "context") {
           const value = args[++i];
           if (!value) throw new Error("--select 缺少文件代碼。");
@@ -350,7 +372,7 @@ export async function main(args: readonly string[]): Promise<number> {
           const value = args[++i];
           if (value === undefined) throw new Error("--type 缺少格式清單。");
           types = parseTypes(value);
-        } else throw new Error(command === "context" ? "用法：docsearch context [query] (--out <新檔案>|--clipboard) [--all-terms] [--select <文件代碼,...>] [--limit <1～500>] [--type <格式>] [--root <路徑>]" : "用法：docsearch search <query> [--all-terms] [--page <正整數>] [--page-size <1～100>] [--limit <正整數>] [--type <格式清單>] [--root <路徑>] [--verbose]");
+        } else throw new Error(command === "context" ? "用法：docsearch context [query] (--out <新檔案>|--clipboard) [--all-terms] [--select <文件代碼,...>] [--limit <1～500>] [--type <格式>] [--root <路徑>]" : "用法：docsearch search <query> [--all-terms] [--page <正整數>] [--page-size <1～100>] [--limit <正整數>] [--type <格式清單>] [--root <路徑>] [--exact-total] [--verbose]");
       }
       if (command === "context" && (Boolean(contextOutput) === contextClipboard || limit > 500)) throw new Error("context 需要在 --out <新檔案> 與 --clipboard 中擇一；--limit 限 1～500；--format 為 json|md，--passages 為 1～10。");
       if (command === "search" && limitSpecified && (searchPageSpecified || searchPageSizeSpecified)) throw new Error("--limit 不可與 --page 或 --page-size 同時使用。");
@@ -628,10 +650,9 @@ export async function main(args: readonly string[]): Promise<number> {
     }
     if (command === "status") {
       const format = store.formatStatus();
-      console.log(`索引格式：文字儲存 ${format.contentStorageVersion ?? "舊版"}；block 搜尋索引 ${format.blockIndexVersion ?? "未完成"}${format.legacySearchStructures ? "；舊版 Bloom／文件 postings 仍保留（遷移完成後移除）" : ""}`);
-      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（block 搜尋索引 ${format.blockIndexCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。升級前搜尋使用舊路徑，結果相同但較慢。`);
+      console.log(`索引格式：區段儲存 ${format.chunkStoreVersion ?? "未完成"}${format.legacySearchStructures ? "；舊版段落／payload／搜尋索引仍保留（遷移完成後移除）" : ""}`);
+      if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（區段儲存 ${format.chunkStoreCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。升級前搜尋使用舊路徑，結果相同但較慢。`);
       else console.log("儲存格式升級：已完成。");
-      console.log(format.mappingIndexReady ? "輔助索引：document_payload_blocks.block_id 已就緒。" : "輔助索引：待下一次寫入程序升級；唯讀狀態不會強行寫入。");
       const pendingText = format.textUpgradeByExtension.map(item => `${item.extension}=${item.count}`).join("、");
       console.log(`文字解析升級待處理：${format.textUpgradePending}（${pendingText || "無"}）。此數由已存 metadata 推導，不是磁碟精確剩餘工作量。`);
       printStorage(store.storageFootprint());
@@ -667,9 +688,11 @@ export async function main(args: readonly string[]): Promise<number> {
       }
       return 0;
     }
-    const session = new SearchSession(store, args[1]!, types, selectedRoot, allTerms ? "all-terms" : "phrase", selectedSubtree);
+    const session = new SearchSession(store, args[1]!, types, selectedRoot, allTerms ? "all-terms" : "phrase", selectedSubtree,
+      "all", undefined, "relevance", exactTotal ? "exact" : "fast");
     const availablePages = Math.max(1, Math.ceil(session.originalTotal / searchPageSize));
-    if (!limitSpecified && searchPage > availablePages) {
+    // A lower-bound total (fast mode) may have later pages that are verified on demand (SPEC §52.3).
+    if (!limitSpecified && searchPage > availablePages && session.originalTotalRelation === "eq") {
       console.error(`頁碼超出範圍；共有 ${availablePages} 頁。`);
       return 2;
     }
@@ -689,17 +712,18 @@ export async function main(args: readonly string[]): Promise<number> {
       if (!interactive) return 0;
     } else if (limitSpecified) {
       const page = session.page(1, limit);
-      console.log(`符合 ${page.total} 份文件；顯示前 ${page.results.length} 份（--limit 單次輸出）。`);
+      console.log(`符合 ${formatTotal(page.total, session.currentTotalRelation)} 份文件；顯示前 ${page.results.length} 份（--limit 單次輸出）。`);
       printSearchResults(page.results, verbose);
       if (verbose) printSearchTrace(session.trace);
       return 0;
     }
     if (!interactive) {
       const page = session.page(searchPage, searchPageSize);
-      console.log(`符合 ${page.total} 份文件；第 ${page.page}/${page.pageCount} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`);
+      console.log(`符合 ${formatTotal(page.total, session.currentTotalRelation)} 份文件；第 ${page.page}/${page.pageCount}${session.currentTotalRelation === "gte" ? "+" : ""} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`);
+      if (session.currentTotalRelation === "gte") console.log("提示：總數為下限；加上 --exact-total 可算出精確總數。");
       printSearchResults(page.results, verbose);
       if (verbose) printSearchTrace(session.trace);
-      if (page.page < page.pageCount) console.log(`提示：尚有結果；使用 --page ${page.page + 1} --page-size ${page.pageSize} 查看下一頁。`);
+      if (page.page < page.pageCount || session.currentTotalRelation === "gte") console.log(`提示：尚有結果；使用 --page ${page.page + 1} --page-size ${page.pageSize} 查看下一頁。`);
       return 0;
     }
     const readline = createInterface({ input: process.stdin, output: process.stdout });

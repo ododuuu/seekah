@@ -20,6 +20,8 @@ export interface SearchDocumentsInput {
   field?: SearchField;
   statuses?: readonly import("./model.js").DocumentStatus[];
   sort?: SearchSort;
+  /** Verify every candidate for an exact total instead of stopping at 500 (SPEC §52.3). */
+  exactTotal?: boolean;
 }
 
 function resolveScope(store: IndexStore, root?: string): { root?: string; subtree?: string } {
@@ -55,7 +57,9 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
   const sort = input.sort ?? "relevance";
   if (!["all", "filename", "content"].includes(field)) throw new McpToolError("MCP_FIELD_INVALID", "field 必須是 all、filename 或 content。");
   if (!["relevance", "filename", "modified"].includes(sort)) throw new McpToolError("MCP_SORT_INVALID", "sort 必須是 relevance、filename 或 modified。");
-  const session = new SearchSession(store, query, types, scope.root, mode, scope.subtree, field, input.statuses, sort);
+  if (input.exactTotal !== undefined && typeof input.exactTotal !== "boolean") throw new McpToolError("MCP_EXACT_TOTAL_INVALID", "exactTotal 必須是 boolean。");
+  const session = new SearchSession(store, query, types, scope.root, mode, scope.subtree, field, input.statuses, sort,
+    input.exactTotal ? "exact" : "fast");
   const accessibleTotal = Math.min(session.originalTotal, 500);
   const pageCount = Math.max(1, Math.ceil(accessibleTotal / pageSize));
   if (page > pageCount) throw new McpToolError("MCP_PAGE_INVALID", `頁碼超出範圍；可瀏覽頁數為 ${pageCount}。`);
@@ -77,8 +81,10 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
     query,
     mode,
     total: session.originalTotal,
+    /** `gte`: `total` is a lower bound because fast mode stopped at 500 matches. */
+    totalRelation: session.originalTotalRelation,
     accessibleTotal,
-    truncatedToFirst500: session.originalTotal > 500,
+    truncatedToFirst500: session.originalTotal > 500 || session.originalTotalRelation === "gte",
     page,
     pageSize,
     pageCount,
@@ -151,6 +157,8 @@ export function indexStatus(store: IndexStore) {
       ngramTablesReady: format.ngramTablesReady,
       blockIndexVersion: format.blockIndexVersion,
       blockIndexCompletedDocuments: format.blockIndexCompletedDocuments,
+      chunkStoreVersion: format.chunkStoreVersion,
+      chunkStoreCompletedDocuments: format.chunkStoreCompletedDocuments,
       legacySearchStructures: format.legacySearchStructures,
       needsUpgrade: format.needsUpgrade,
       completedDocuments: format.completedDocuments,

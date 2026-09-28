@@ -3,7 +3,7 @@ import { actOnDocument } from "./open-document.js";
 import { copyToClipboard } from "./clipboard.js";
 import { prepareSelectedContext, terminalText, type SelectedContextReference } from "./context.js";
 import type { SearchMode, SearchResult, SearchResultPage } from "./search.js";
-import { SearchIndexChangedError, SearchSession } from "./search-session.js";
+import { formatTotal, SearchIndexChangedError, SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
 import { productVersion } from "./version.js";
 
@@ -354,6 +354,8 @@ export interface TuiScreenModel {
   documents: number;
   page: SearchResultPage | null;
   conditions: readonly string[];
+  /** `gte` when the fast-mode total is a lower bound (SPEC §52.3). */
+  totalRelation?: "eq" | "gte";
   mode: SearchMode;
   selected: readonly SelectedItem[];
   viewLines: readonly string[];
@@ -517,7 +519,7 @@ export function renderTuiScreen(model: TuiScreenModel): string {
   } else if (model.state.view === "results") {
     activeLines.push(...titleRows(
       "搜尋結果",
-      `${model.page?.total ?? 0} 份文件`,
+      `${formatTotal(model.page?.total ?? 0, model.totalRelation ?? "eq")} 份文件`,
       `${model.conditions.join(" → ") || "尚未搜尋"} · ${mode} · 第 ${model.page?.page ?? 1}/${model.page?.pageCount ?? 1} 頁`,
     ));
     if (!model.page?.results.length) activeLines.push(row("找不到符合的文件。試著減少關鍵字。", "muted"));
@@ -685,7 +687,7 @@ export async function runTui(
       color: io.ansi && io.color !== false,
       colorDepth: io.colorDepth ?? 24, recentQueries, workflow,
       roots: store.roots(), documents: Object.values(counts).reduce((sum, count) => sum + count, 0),
-      page, conditions: session?.conditions ?? [], mode, selected: selectedValues(), viewLines, message,
+      page, conditions: session?.conditions ?? [], totalRelation: session?.currentTotalRelation ?? "eq", mode, selected: selectedValues(), viewLines, message,
       confirming: pendingContext !== null,
     });
     io.write(`${io.ansi ? "\u001b[?25l\u001b[H\u001b[J" : ""}${screen}${io.ansi ? "" : "\n"}`);
@@ -717,7 +719,7 @@ export async function runTui(
     const modeLabel = searchMode === "all-terms" ? "全部關鍵字" : "精確片語";
     appendWorkflow(
       { kind: "prompt", text: normalizedQuery, detail: modeLabel },
-      { kind: "search", text: `找到 ${session.originalTotal} 份文件`, detail: `${modeLabel} · 真實索引結果` },
+      { kind: "search", text: `找到 ${formatTotal(session.originalTotal, session.originalTotalRelation)} 份文件`, detail: `${modeLabel} · 真實索引結果` },
     );
     message = session.originalTotal ? "↑↓ 移動、Space 選取、Enter 預覽、PgUp/PgDn 翻頁。" : "沒有符合的結果。";
   };

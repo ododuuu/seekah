@@ -39,8 +39,9 @@ Seekah 只在 `127.0.0.1` 啟動本機工作台。若瀏覽器沒有自動開啟
 
 1. 在頂列或文件頁搜尋欄輸入關鍵字，選擇 `phrase` 或 `all-terms`，按「搜尋」。
 2. 每列顯示檔名、格式、完整路徑、命中原因、位置與 server 片段。Preview list／Table 只是兩種顯示，不會改變查詢或選取集合。
-   0.38.0 起，搜尋使用 block 級搜尋索引，排序前不必解壓文件正文。0.38.0 以前建立的索引第一次在工作台搜尋時，會在背景建立這個索引：API 暫回 202，畫面保留原查詢並在完成後自動重送。CLI 的 `index` 等寫入命令也會先完成升級。升級逐批提交、可中斷，下次會從中斷處接續；完成後會移除舊版 Bloom 與文件級 postings。
-   索引檔約變為原本的 2.4 倍（實例：23.5 萬份文件 1.37 GiB → 約 3.3 GiB），SQLite 檔案不會自動縮小。本機 23.5 萬份文件的一次性升級約 35 分鐘。CLI `search`、`status` 與 MCP 是唯讀，不會偷偷升級；升級完成前它們使用舊候選路徑，結果相同但較慢。
+   0.39.0 起，文字以壓縮區段儲存，搜尋只驗證需要的候選，找滿當頁即停止；索引約為文字量的 0.5–1 倍（0.38 約 6 倍）。0.39.0 以前建立的索引第一次在工作台搜尋時，會在背景轉成區段儲存：API 暫回 202，畫面保留原查詢並在完成後自動重送。CLI 的 `index` 等寫入命令也會先完成升級。升級逐批提交、可中斷，下次會從中斷處接續；完成後移除舊的段落表、payload 與所有舊搜尋索引，空白頁超過一半時自動壓縮資料庫一次（期間無法中斷）。
+   CLI `search`、`status` 與 MCP 是唯讀，不會偷偷升級；升級完成前它們使用舊路徑，結果相同但較慢，總數永遠精確。
+   **總筆數**：預設「快速」，命中超過 500 份時顯示「500 筆以上」；設定頁可改為「精確」，常見詞會先顯示結果，再於數秒內補上精確總數。CLI 用 `search --exact-total`，MCP `search_documents` 用 `exactTotal: true`，回應的 `totalRelation` 為 `gte` 時 `total` 是下限。工作台、MCP 與 TUI 只開放前 500 筆；CLI 翻到之後的頁會繼續驗證。
 3. 點「檢視」進入明細；在結果、明細或上下文抽屜按「開啟檔案」／「顯示位置」，只送出該結果的 stable reference，不送任意路徑。
 4. 開啟前，Seekah 會用搜尋結果的文件代碼重新確認檔案仍位於已索引根目錄、不是連結、是可讀的一般檔案。檔案已移動、刪除或索引過期時會拒絕操作，請重新搜尋或重新索引。
 
@@ -64,7 +65,7 @@ Seekah 只在 `127.0.0.1` 啟動本機工作台。若瀏覽器沒有自動開啟
 - 「完整校正」在同一輪可能先列舉／檢查，再進行解析或搜尋 postings 升級；這些是同一個索引請求的不同階段，不代表 UI 自己送出了第二次。只有按下按鈕或 API 明確送出才會開始新一輪。
 - 勾選根目錄後按「移至垃圾桶」：預設顯示確認對話框，明確說明只移除索引、不刪來源。勾選「下次不再提醒」只在刪除成功後保存；設定可重新開啟提醒。
 - 「垃圾桶」列出根路徑、文件數與 `deletedAt` metadata。可還原並重新索引，或在永久刪除確認後只刪 metadata；來源資料夾與檔案不會被刪除。
-- 設定頁可保存刪除提醒，並實際啟動／停止既有 detached 背景自動更新。背景更新以檔案事件做增量更新，預設每 6 小時完整校正；這不是只改畫面的假開關。
+- 設定頁可保存刪除提醒與總筆數模式（快速／精確），並實際啟動／停止既有 detached 背景自動更新。背景更新以檔案事件做增量更新，預設每 6 小時完整校正；這不是只改畫面的假開關。
 
 ## 終端使用方式
 
@@ -76,8 +77,8 @@ node dist/src/cli.js search "付款 例外 規格" --all-terms
 node dist/src/cli.js search "合約" --verbose
 node dist/src/cli.js status
 ```
-加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 4 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
-0.38.0 的 `candidateStrategy` 為 `block-index`（結果內搜尋為 `block-index+restricted-ids`）；`indexPostingRows` 是檔名／heading／block 索引回傳列數，`indexCandidateBlocks` 是命中的 content block 數，`indexVerifiedBlocks` 只在含 U+0000 的查詢回讀正文驗證時大於 0。排序階段的 `payloadsRead` 應為 0，只剩當頁 snippet 的回讀。以下 payload 欄位說明適用於升級完成前的舊路徑：
+加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 5 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
+0.39.0 的 `candidateStrategy` 為 `chunk-index`（結果內搜尋為 `chunk-index+restricted-ids`）；`indexPostingRows` 是檔名／heading／區段索引回傳列數，`indexCandidateChunks` 是候選區段數，`indexVerifiedChunks`／`indexVerifiedBytes` 是實際解壓驗證（含當頁 snippet）的區段數與壓縮位元組；`totalRelation` 為 `gte` 表示快速模式提前停止、總數是下限。`payloadsRead` 恆為 0。以下 payload 欄位說明只適用於升級完成前的舊路徑：
 `postings` 只回傳文件 ID，不回傳 payload ordinal；payload-level pruning 與 block reconstruction 的數字分別看 `payloadsAfterPruning`、`expandedPayloads` 與 `blockExpansionRatio`。`payloadsRead` 是所有實際 stream pass 的總和，page materialization 可能重新讀取同一文件，因此不必等於或小於 `payloadsConsidered`。
 診斷慢查詢時，`diagnostics.payloadSql` 分開顯示 metadata、owning-block mapping、blob 查詢的 prepare／execute 次數與時間；execute 含 SQLite 回傳 JS rows／blob 的成本，不等於純磁碟 I/O。`blocksMetadataRows` 是 metadata query 回傳列數，`owningBlockMappingRows` 只含獨立 `blockSource` mapping rows；filtered ranking／snippet 的 selected CTE 內部 mapping 不重複計數。`candidatePayloadOrdinals`、`owningBlocksFound`、`blockExpansionInputPayloads` 可對照候選 payload、selected owners 與 block expansion 輸入。`diagnostics.payloadReads` 分開 ranking、snippet 回讀與其他讀取；`uniquePayloadsRead`／`duplicatePayloadsRead` 可辨識跨 pass 重讀。`compressedBytesRead`／`decompressedBytes` 包含實際重讀／解壓量；`payloadBrotliMs` 與 `payloadDecodeParseMs` 是 decompression phase 的子計時，不能再相加到總 phase。`exactTextMs` 是 block 正規化／比對，不等於包含重建與 Map 成本的 exact self。詳細量測與限制見 [0.37.0 驗證](0.37.0-VALIDATION.md)。
 
@@ -148,7 +149,8 @@ ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 | 索引百分比長時間不變 | 先看目前檔名與 API 狀態；Workbench 仍可操作時可按「停止同步」，再重新按「完整校正」。若剛關閉命令視窗，重新開啟後看到「上次索引程序已中斷」屬預期，已提交文件會保留。 |
 | 重新整理後顯示索引狀態未知 | 先等待一次狀態輪詢；UI 會保留最後一次成功進度，短暫 SQLite busy／locked 不應清空畫面。若仍顯示暫時無法讀取，確認索引資料目錄可寫且只啟動一個工作台程序。 |
 | 索引卡在單一檔案且停止沒有立刻完成 | 某些 parser／檔案 IO 只能在安全點取消；停止最多等待約兩秒後終止背景 worker。下次完整校正會依已提交 SQLite 交易重新檢查未完成文件。 |
-| 用 `.localdocsearchignore` 排除大量檔案後同步較久 | 掃描後會顯示「刪除校正」目前／總數，每 1,000 份提交一次。可按「停止同步」或 Ctrl+C，已刪部分會保留，下次同步接續刪除其餘。資料庫檔不會自動變小，釋放的空間供之後寫入重用。 |
+| 用 `.localdocsearchignore` 排除大量檔案後同步較久 | 掃描後會顯示「刪除校正」目前／總數，每 1,000 份提交一次。可按「停止同步」或 Ctrl+C，已刪部分會保留，下次同步接續刪除其餘。資料庫檔不會自動變小；先 `autoupdate stop`，再執行 `compact` 回收空白頁，完成後 `autoupdate start`。 |
+| 常見詞只顯示「500 筆以上」 | 這是預設的快速模式。要精確總數：工作台設定頁改為「精確」，或 CLI 加 `--exact-total`。 |
 | 搜不到剛修改的檔案 | 到設定開啟背景自動更新，等狀態完成局部更新後再搜；也可按「完整校正」或執行一次 `index`。 |
 | 要移除已索引目錄 | 若正在同步，先按「停止同步」。再到「根目錄」勾選目錄、按「移除所選」或個別「移至垃圾桶」並確認。來源資料不會刪除。 |
 | autoupdate status 顯示工作佇列降級 | 工作狀態無法落盤。先確認磁碟空間與索引目錄可寫，再 `autoupdate stop` 後重新 `start`。 |

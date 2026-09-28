@@ -14,7 +14,7 @@ function record(root: string, content: string): DocumentRecord {
     blocks: [{ ordinal: 0, heading: "壓縮標題", content, locationKind: "line", locationValue: "第 1 行" }] };
 }
 
-test("M20 stores new block text as Brotli payloads and preserves cross-chunk exact search", async () => {
+test("M20 stores new block text in compressed chunks and preserves exact search in a very large block", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m20-"));
   const database = path.join(temp, "index.db");
   const content = `${"前".repeat(65_535)}跨區段精確命中${"後".repeat(65_535)}`;
@@ -26,8 +26,9 @@ test("M20 stores new block text as Brotli payloads and preserves cross-chunk exa
     store.close();
     const db = new DatabaseSync(database, { readOnly: true });
     try {
-      assert.equal((db.prepare("SELECT content FROM blocks").get() as { content: string }).content, "");
-      assert.ok((db.prepare("SELECT count(*) AS count FROM document_payloads").get() as { count: number }).count >= 2);
+      // SPEC §52.1: a block larger than the chunk target owns one zstd chunk; no blocks／payload tables exist.
+      assert.equal((db.prepare("SELECT count(*) AS count FROM document_chunks").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('blocks', 'document_payloads')").get() as { count: number }).count, 0);
     } finally { db.close(); }
   } finally { try { store.close(); } catch {} await rm(temp, { recursive: true, force: true }); }
 });
@@ -51,9 +52,11 @@ test("M20 migrates a legacy text block atomically and preserves its search resul
     store.close();
     const db = new DatabaseSync(database, { readOnly: true });
     try {
-      assert.equal((db.prepare("SELECT content FROM blocks WHERE id = 1").get() as { content: string }).content, "");
-      assert.equal((db.prepare("SELECT count(*) AS count FROM document_payloads WHERE document_id = 1").get() as { count: number }).count, 1);
+      // The inline text went through the payload docstore into the chunk store (SPEC §52.4).
+      assert.equal((db.prepare("SELECT count(*) AS count FROM document_chunks WHERE document_id = 1").get() as { count: number }).count, 1);
+      assert.equal((db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('blocks', 'document_payloads')").get() as { count: number }).count, 0);
       assert.equal((db.prepare("SELECT value FROM metadata WHERE key = 'content_storage_version'").get() as { value: string }).value, "2");
+      assert.equal((db.prepare("SELECT value FROM metadata WHERE key = 'chunk_store_version'").get() as { value: string }).value, "1");
     } finally { db.close(); }
   } finally { try { store.close(); } catch {} await rm(temp, { recursive: true, force: true }); }
 });
