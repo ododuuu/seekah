@@ -13,6 +13,7 @@ import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
 import { sync } from "../src/sync.js";
 import { parseDocument } from "../src/parser.js";
+import { RootExclusion } from "../src/root-exclusion.js";
 import type { LocalUpdateResult } from "../src/local-update.js";
 
 const DEBOUNCE = 200;
@@ -171,6 +172,121 @@ test("M52 one writer lock commits multiple prepared files", async () => {
     assert.equal(search(fixtureValue.store, "群組提交第一份").length, 1);
     assert.equal(search(fixtureValue.store, "群組提交第二份").length, 1);
   } finally {
+    await closeFixture(fixtureValue);
+  }
+});
+
+test("M52 prepared path reuses one root exclusion for a multi-file batch", async () => {
+  const fixtureValue = await fixture("seekah-m52-prepared-exclusion-");
+  const ignoreFile = path.join(fixtureValue.root, ".localdocsearchignore");
+  await writeFile(ignoreFile, "secret/\n", "utf8");
+  const queue = new LiveWorkQueue(fixtureValue.store.databasePath);
+  const stop = deferred();
+  const ready = deferred();
+  let loadCalls = 0;
+  let asyncLoadCalls = 0;
+  const originalLoad = RootExclusion.load;
+  const originalLoadSync = RootExclusion.loadSync;
+  RootExclusion.load = async (root, store) => {
+    asyncLoadCalls++;
+    return originalLoad(root, store);
+  };
+  RootExclusion.loadSync = (root, store) => {
+    loadCalls++;
+    return originalLoadSync(root, store);
+  };
+  let running: Promise<number> | undefined;
+  try {
+    const engine = new LiveUpdateEngine(fixtureValue.store, [fixtureValue.root], {
+      mode: "foreground",
+      debounceMs: DEBOUNCE,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      sleep: async () => {},
+      workQueue: queue,
+    }, {
+      write: text => { if (text.startsWith("監看中：")) ready.resolve(); },
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await ready.promise;
+    loadCalls = 0;
+    asyncLoadCalls = 0;
+    const firstPath = path.join(fixtureValue.root, "first.txt");
+    const secondPath = path.join(fixtureValue.root, "second.txt");
+    await writeFile(firstPath, "prepared exclusion 第一份", "utf8");
+    await writeFile(secondPath, "prepared exclusion 第二份", "utf8");
+    queue.acceptPath(fixtureValue.root, "first.txt");
+    queue.acceptPath(fixtureValue.root, "second.txt");
+    (engine as unknown as { enqueueReady(root: string): void }).enqueueReady(fixtureValue.root);
+    await waitUntil(() => search(fixtureValue.store, "prepared exclusion 第一份").length === 1
+      && search(fixtureValue.store, "prepared exclusion 第二份").length === 1);
+    assert.equal(loadCalls, 1, "一批正式 prepared 更新只應載入一次 RootExclusion");
+    assert.equal(asyncLoadCalls, 0, "傳入 exclusion 時 prepare 不應逐檔 async load");
+    assert.equal(queue.pendingCount(), 0);
+    stop.resolve();
+    await running;
+    running = undefined;
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
+    RootExclusion.load = originalLoad;
+    RootExclusion.loadSync = originalLoadSync;
+    await closeFixture(fixtureValue);
+  }
+});
+
+test("M52 prepared path keeps invalid ignore rules unacknowledged and retryable", async () => {
+  const fixtureValue = await fixture("seekah-m52-prepared-ignore-error-");
+  const ignoreFile = path.join(fixtureValue.root, ".localdocsearchignore");
+  await writeFile(ignoreFile, "secret/\n", "utf8");
+  const blockedPath = path.join(fixtureValue.root, "secret", "blocked.txt");
+  const relativeBlockedPath = path.relative(fixtureValue.root, blockedPath);
+  await mkdir(path.dirname(blockedPath), { recursive: true });
+  const queue = new LiveWorkQueue(fixtureValue.store.databasePath);
+  const stop = deferred();
+  const ready = deferred();
+  let running: Promise<number> | undefined;
+  try {
+    const engine = new LiveUpdateEngine(fixtureValue.store, [fixtureValue.root], {
+      mode: "foreground",
+      debounceMs: DEBOUNCE,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      sleep: async () => {},
+      workQueue: queue,
+    }, {
+      write: text => { if (text.startsWith("監看中：")) ready.resolve(); },
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await ready.promise;
+    await writeFile(ignoreFile, "!\n", "utf8");
+    await writeFile(blockedPath, "invalid ignore should not be indexed", "utf8");
+    queue.acceptPath(fixtureValue.root, relativeBlockedPath);
+    (engine as unknown as { enqueueReady(root: string): void }).enqueueReady(fixtureValue.root);
+    await waitUntil(() => engine.snapshot().roots[0]?.watch === "offline");
+    assert.equal(queue.pendingCount(), 1, "規則錯誤時不應 ack queued path");
+    assert.equal(search(fixtureValue.store, "invalid ignore should not be indexed").length, 0);
+    assert.equal(fixtureValue.store.getDocument(blockedPath), undefined);
+
+    await writeFile(ignoreFile, "secret/\n", "utf8");
+    queue.acceptPath(fixtureValue.root, relativeBlockedPath);
+    (engine as unknown as { enqueueReady(root: string): void }).enqueueReady(fixtureValue.root);
+    await waitUntil(() => queue.pendingCount() === 0);
+    assert.equal(search(fixtureValue.store, "invalid ignore should not be indexed").length, 0);
+    assert.equal(fixtureValue.store.getDocument(blockedPath), undefined);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    stop.resolve();
+    await running;
+    running = undefined;
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
     await closeFixture(fixtureValue);
   }
 });
