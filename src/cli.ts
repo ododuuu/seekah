@@ -226,7 +226,8 @@ export async function main(args: readonly string[]): Promise<number> {
     const store = new IndexStore(databasePath);
     const release = acquireWriteLock(databasePath);
     try {
-      const reclaimable = before.totalBytes === null ? "未知" : formatMib(before.totalBytes * store.freePageRatio());
+      const mainBytes = before.files.find(file => file.suffix === "")?.bytes;
+      const reclaimable = mainBytes == null ? "未知" : formatMib(mainBytes * store.freePageRatio());
       console.log(`壓縮資料庫中（可回收約 ${reclaimable}）…`);
       store.compact();
     } finally { release(); store.close(); }
