@@ -189,6 +189,7 @@ const COMPLETED_MIGRATION_MARKERS = [
   { key: "block_index_version", value: BLOCK_INDEX_VERSION, marker: BLOCK_MIGRATION_VERSION },
   { key: "chunk_store_version", value: CHUNK_STORE_VERSION, marker: CHUNK_MIGRATION_VERSION },
 ] as const;
+const PATH_ORDER_METADATA_KEY = "path_order";
 // removeMissing commits deletions in batches of this many documents (SPEC §51.3).
 const REMOVE_BATCH_SIZE = 1000;
 const LEGACY_SEARCH_TABLES = ["document_blooms", "document_payload_blooms", UNIGRAM_TABLE, TRIGRAM_TABLE] as const;
@@ -526,7 +527,7 @@ export class IndexStore {
       // a system call per page when verifying chunks on a cold page cache (SPEC §52.2).
       this.db.exec(`PRAGMA mmap_size = ${MMAP_BYTES}`);
       this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
-      this.pathOrder = this.detectPathOrder();
+      this.pathOrder = this.loadPathOrder();
       return;
     }
     mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -542,18 +543,29 @@ export class IndexStore {
         // A fresh index starts on the chunk store and never creates blocks, payloads or older search structures.
         this.db.exec(`INSERT OR REPLACE INTO metadata(key, value) VALUES
           ('content_storage_version', '2'), ('multi_root_version', '1'),
-          ('root_merge_version', '1'), ('chunk_store_version', '${CHUNK_STORE_VERSION}')`);
+          ('root_merge_version', '1'), ('chunk_store_version', '${CHUNK_STORE_VERSION}'),
+          ('path_order', 'native')`);
       } else {
         this.purgeCompletedMigrationMarkers();
       }
+      this.pathOrder = this.loadPathOrder();
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
-    this.pathOrder = this.detectPathOrder();
   }
   private registerSearchFunctions(): void {
     this.db.function("seekah_utf16_sort_key", { deterministic: true }, value =>
       typeof value === "string" ? utf16SortKey(value) : new Uint8Array());
   }
+  private loadPathOrder(): ChunkPathOrder {
+    const stored = this.metadata(PATH_ORDER_METADATA_KEY);
+    if (stored === "native" || stored === "utf16") return stored;
+    if (this.readOnly) return "utf16";
+    const detected = this.detectPathOrder();
+    this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)")
+      .run(PATH_ORDER_METADATA_KEY, detected);
+    return detected;
+  }
+
   private detectPathOrder(): ChunkPathOrder {
     const row = this.db.prepare("SELECT 1 FROM documents WHERE path GLOB ? LIMIT 1")
       .get(SUPPLEMENTARY_PATH_GLOB);
@@ -1357,6 +1369,7 @@ export class IndexStore {
   }
 
   upsert(document: DocumentRecord, root?: string, timings?: UpsertTimings): void {
+    const upgradePathOrder = this.pathOrder === "native" && SUPPLEMENTARY_PATH.test(document.path);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const parseVersion = textParseExtensions.has(document.extension) ? TEXT_PARSE_VERSION : null;
@@ -1402,10 +1415,14 @@ export class IndexStore {
       const indexStarted = performance.now();
       this.writeBlockIndexRows(row.id, document.filename, document.blocks, writes, entries);
       if (timings) timings.writeMs += performance.now() - indexStarted;
+      if (upgradePathOrder) {
+        this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)")
+          .run(PATH_ORDER_METADATA_KEY, "utf16");
+      }
       const commitStarted = performance.now();
       this.db.exec("COMMIT");
       if (timings) timings.commitMs += performance.now() - commitStarted;
-      if (this.pathOrder === "native" && SUPPLEMENTARY_PATH.test(document.path)) this.pathOrder = "utf16";
+      if (upgradePathOrder) this.pathOrder = "utf16";
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
