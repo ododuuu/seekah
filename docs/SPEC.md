@@ -2103,7 +2103,7 @@ docsearch doctor
 - 主索引的 journal mode 與有限 busy timeout 依 §66；work state／write-lock／live-lease／live-queue 仍維持 timeout=0，不設定它們的全域非零 busy timeout。
 - 不把一般 SQLite 寫入全面改成無限重試；只沿用既有背景更新 backoff，其他非 busy 錯誤維持原本失敗分類。
 - 不改 schema、generation、搜尋結果、索引內容、排除規則或本機處理邊界；不加入網路或外部服務。
-- `test/m55.test.ts` 以第二條主庫連線持有 writer transaction 觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放主庫鎖後下一輪完成，且新增內容可搜尋。`test/m57.test.ts` 另驗證 prepared 群組第 2 份 busy 時第 1 份 generation 已 ack、其餘待辦保留、coordination lock 已釋放，釋放主庫鎖後下一輪完成。
+- `test/m55.test.ts` 以第二條主庫連線持有 writer transaction 觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放主庫鎖後下一輪完成，且新增內容可搜尋。`test/m59.test.ts` 另驗證 prepared 群組第 2 份 busy 時第 1 份 generation 已 ack、其餘待辦保留、coordination lock 已釋放，釋放主庫鎖後下一輪完成。
 - package 版本維持 0.42.0。
 
 ## 66. 主索引 WAL 與有上限的鎖等待
@@ -2139,11 +2139,11 @@ docsearch doctor
 
 ### 66.5 驗收
 
-- 新增 `test/m56.test.ts`：reader 開啟 transaction 時，Seekah 真實 writer 仍可提交；reader 持續看到舊版本，結束後新連線看到新版本。
+- 新增 `test/m58.test.ts`：reader 開啟 transaction 時，Seekah 真實 writer 仍可提交；reader 持續看到舊版本，結束後新連線看到新版本。
 - 同一測試涵蓋既有 rollback index 切換 WAL、另一連線造成切換失敗但 writable open 不失敗、釋放後下一次 writable open 成功，以及 readonly WAL database 在 `-wal`／`-shm` 不存在且資料夾可寫時成功開啟。
 - 以另一主庫 writer 持鎖超過上限，驗證 bounded wait 在上限加合理 margin 內回傳 busy，root／CLI 對外為 `INDEX_BUSY`；不得使用無限等待或長 sleep。
-- 以大量 WAL 寫入驗證自動 checkpoint／`journal_size_limit` 設定，並在大型 transaction 後執行 non-fatal `TRUNCATE` checkpoint，sidecar 不超過 4 MiB 上限；另以連續重疊 reader 驗證 64 MiB threshold checkpoint 會被觸發且 WAL 不會隨批次無上限成長。
-- 執行 `npm run build`、完整 `npm test`，並將 `src/store.ts` 暫時還原至 `fix/live-sqlite-busy`：m56 的 reader-vs-writer 測試必須失敗；還原 WAL 實作後同一測試必須通過。公司 Windows 人工驗收未回報前，不得宣稱 Windows 通過。
+- 以實際 `IndexStore.upsert` 寫入、長時間持有 reader snapshot 驗證 WAL 超過 64 MiB 門檻時仍不阻塞 writer；釋放 reader 後執行 non-fatal `TRUNCATE` checkpoint，sidecar 回收至 4 MiB 上限。
+- 執行 `npm run build`、完整 `npm test`，並將 `src/store.ts` 暫時還原至 `fix/live-sqlite-busy`：m58 的 reader-vs-writer 測試必須失敗；還原 WAL 實作後同一測試必須通過。公司 Windows 人工驗收未回報前，不得宣稱 Windows 通過。
 
 ### 66.6 明確不做
 

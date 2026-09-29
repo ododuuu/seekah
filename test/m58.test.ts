@@ -52,8 +52,8 @@ async function createIndexedDatabase(prefix: string): Promise<{ temp: string; ro
   return { temp, root, database, file };
 }
 
-test("m56: WAL 讓 reader 保留舊快照且 Seekah writer 可提交新版本", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-snapshot-");
+test("m58: WAL 讓 reader 保留舊快照且 Seekah writer 可提交新版本", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-snapshot-");
   const store = new IndexStore(fixture.database);
   const reader = new DatabaseSync(fixture.database);
   try {
@@ -74,8 +74,8 @@ test("m56: WAL 讓 reader 保留舊快照且 Seekah writer 可提交新版本", 
   }
 });
 
-test("m56: writable constructor uses the short initialization busy bound", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-init-bound-");
+test("m58: writable constructor uses the short initialization busy bound", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-init-bound-");
   setRollbackJournal(fixture.database);
   const blocker = new DatabaseSync(fixture.database);
   blocker.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
@@ -95,8 +95,8 @@ test("m56: writable constructor uses the short initialization busy bound", async
   }
 });
 
-test("m56: 舊 rollback index 轉 WAL，切換競爭失敗仍可開庫且下次重試", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-switch-");
+test("m58: 舊 rollback index 轉 WAL，切換競爭失敗仍可開庫且下次重試", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-switch-");
   setRollbackJournal(fixture.database);
   const before = new DatabaseSync(fixture.database);
   try { assert.equal(pragmaValue(before, "PRAGMA journal_mode"), "delete"); }
@@ -135,8 +135,8 @@ test("m56: 舊 rollback index 轉 WAL，切換競爭失敗仍可開庫且下次�
   }
 });
 
-test("m56: 唯讀 WAL 索引在 sidecar 不存在且資料夾可寫時仍可開啟", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-readonly-");
+test("m58: 唯讀 WAL 索引在 sidecar 不存在且資料夾可寫時仍可開啟", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-readonly-");
   const writer = new IndexStore(fixture.database);
   writer.close();
   await rm(`${fixture.database}-wal`, { force: true });
@@ -151,8 +151,8 @@ test("m56: 唯讀 WAL 索引在 sidecar 不存在且資料夾可寫時仍可開�
   }
 });
 
-test("m56: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-bounded-");
+test("m58: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-bounded-");
   const store = new IndexStore(fixture.database);
   const holder = new DatabaseSync(fixture.database);
   try {
@@ -175,8 +175,8 @@ test("m56: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () =>
   }
 });
 
-test("m56: 大型 WAL 寫入後 TRUNCATE checkpoint 將 sidecar 控制在上限內", async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-size-");
+test("m58: 大型 WAL 寫入後 TRUNCATE checkpoint 將 sidecar 控制在上限內", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-size-");
   const store = new IndexStore(fixture.database);
   const raw = new DatabaseSync(fixture.database);
   try {
@@ -197,8 +197,8 @@ test("m56: 大型 WAL 寫入後 TRUNCATE checkpoint 將 sidecar 控制在上限�
   }
 });
 
-test("m56: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後可回收", { timeout: 120_000 }, async () => {
-  const fixture = await createIndexedDatabase("seekah-m56-threshold-");
+test("m58: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後可回收", { timeout: 120_000 }, async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-threshold-");
   const store = new IndexStore(fixture.database);
   const reader = new DatabaseSync(fixture.database);
   try {

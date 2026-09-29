@@ -43,11 +43,11 @@ async function waitUntil(check: () => boolean, timeoutMs = 5_000): Promise<void>
     if (check()) return;
     await new Promise<void>(resolve => setImmediate(resolve));
   }
-  throw new Error("m57 背景更新未在測試期限內完成");
+  throw new Error("m59 背景更新未在測試期限內完成");
 }
 
-test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lock", { timeout: 10_000 }, async () => {
-  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m57-partial-group-"));
+test("m59: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lock", { timeout: 10_000 }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m59-partial-group-"));
   const root = path.join(temp, "root");
   const database = path.join(temp, "index.db");
   await mkdir(root, { recursive: true });
@@ -64,7 +64,7 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
   let mainHolder: DatabaseSync | undefined;
   try {
     await sync(root, store);
-    for (const [name, content] of [["a.txt", "m57-a"], ["b.txt", "m57-b"], ["c.txt", "m57-c"]] as const) {
+    for (const [name, content] of [["a.txt", "m59-a"], ["b.txt", "m59-b"], ["c.txt", "m59-c"]] as const) {
       await writeFile(path.join(root, name), content, "utf8");
       queue.acceptPath(root, name, "event");
     }
@@ -99,7 +99,7 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
       now: () => bPrepared ? LOCAL_PREPARED_GROUP_MAX_MS : 0,
       workQueue: queue,
       sleep: async ms => {
-        if (ms >= WRITER_BACKOFF_MS[0]!) throw new Error("m57 detected unbounded prepared busy retry");
+        if (ms >= WRITER_BACKOFF_MS[0]!) throw new Error("m59 detected unbounded prepared busy retry");
       },
       setTimer: (fn, ms) => {
         const timer = { id: ++timerId, ms, fn };
@@ -125,15 +125,15 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
     await waitUntil(() => busySeen || failed());
     assert.equal(failed(), false);
     assert.deepEqual([...new Set(attemptedPaths.map(filePath => path.relative(root, filePath)))].sort(), ["a.txt", "b.txt"]);
-    assert.equal(search(store, "m57-a").length, 1, "第一輪成功的 a.txt 應已 ack");
-    assert.equal(search(store, "m57-b").length, 0);
-    assert.equal(search(store, "m57-c").length, 0);
+    assert.equal(search(store, "m59-a").length, 1, "第一輪成功的 a.txt 應已 ack");
+    assert.equal(search(store, "m59-b").length, 0);
+    assert.equal(search(store, "m59-c").length, 0);
     assert.deepEqual(queue.listPaths(root).map(item => item.relPath).sort(), ["b.txt", "c.txt"]);
     await waitUntil(() => timers.some(timer => timer.ms === WRITER_BACKOFF_MS[0]));
 
     const probeRelease = acquireWriteLock(database);
     probeRelease();
-    if (!mainHolder) throw new Error("m57 應持有主庫 busy transaction");
+    if (!mainHolder) throw new Error("m59 應持有主庫 busy transaction");
     mainHolder.exec("ROLLBACK");
     mainHolder.close();
     mainHolder = undefined;
@@ -142,9 +142,9 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
     assert.ok(retry, "busy 後應排程下一輪");
     retry.fn();
     await waitUntil(() => queue.listPaths(root).length === 0
-      && search(store, "m57-a").length === 1
-      && search(store, "m57-b").length === 1
-      && search(store, "m57-c").length === 1);
+      && search(store, "m59-a").length === 1
+      && search(store, "m59-b").length === 1
+      && search(store, "m59-c").length === 1);
     stop.resolve();
     assert.equal(await running, 0);
   } finally {
@@ -160,7 +160,7 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
   }
 });
 
-test("m57: withWriterBackoff 用盡有限次數後回傳 INDEX_BUSY", async () => {
+test("m59: withWriterBackoff 用盡有限次數後回傳 INDEX_BUSY", async () => {
   let attempts = 0;
   const delays: number[] = [];
   await assert.rejects(
