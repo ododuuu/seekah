@@ -2,7 +2,7 @@ import { acquireWriteLock } from "./write-lock.js";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import {
   documentStatuses, TEXT_PARSE_VERSION, emptyStatusCounts, textParseExtensions,
@@ -196,6 +196,9 @@ const BLOCK_TABLES = { tri: "search_block_trigrams", uni: "search_block_unigrams
 const FILENAME_TABLES = { tri: "search_filename_trigrams", uni: "search_filename_unigrams", bi: "search_filename_bigrams" } as const;
 const HEADING_TABLES = { tri: "search_heading_trigrams", uni: "search_heading_unigrams", bi: "search_heading_bigrams" } as const;
 type IndexTables = { tri: string; uni: string; bi: string };
+export type ChunkCandidatePhase = "filename" | "heading" | "possible";
+export type ChunkPathOrder = "native" | "utf16";
+
 
 // Per-connection page cache (negative = KiB). The 2 MiB SQLite default makes FTS5
 // segment merges and large posting scans on multi-GiB indexes re-read pages.
@@ -472,6 +475,17 @@ export function collectIndexStorage(
 function databaseOptions(options: { readOnly?: boolean } = {}): ConstructorParameters<typeof DatabaseSync>[1] {
   return { ...options, timeout: 0 } as ConstructorParameters<typeof DatabaseSync>[1];
 }
+function utf16SortKey(value: string): Uint8Array {
+  const key = new Uint8Array(value.length * 2);
+  for (let index = 0; index < value.length; index++) {
+    const codeUnit = value.charCodeAt(index);
+    key[index * 2] = codeUnit >>> 8;
+    key[index * 2 + 1] = codeUnit & 0xff;
+  }
+  return key;
+}
+const SUPPLEMENTARY_PATH_GLOB = "*[𐀀-􏿿]*";
+const SUPPLEMENTARY_PATH = /[\u{10000}-\u{10ffff}]/u;
 
 export interface IndexStoreOptions {
   readOnly?: boolean;
@@ -481,6 +495,7 @@ export class IndexStore {
   private readonly db: DatabaseSync;
   private readonly readOnly: boolean;
   readonly databasePath: string;
+  private pathOrder: ChunkPathOrder = "native";
   private documentByPathSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private documentByIdSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private parseVersionKnown: boolean | null = null;
@@ -492,6 +507,9 @@ export class IndexStore {
   private traceLog: TraceLog | undefined;
   private cachedWrites: ReturnType<IndexStore["createWrites"]> | null = null;
   private chunkByIdSql: ReturnType<DatabaseSync["prepare"]> | null = null;
+  private readonly chunkCandidateByDocumentSql = new Map<string, StatementSync>();
+  private readonly headingCandidateByDocumentSql = new Map<string, StatementSync>();
+
   private blockMetaSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private cachedWritesSchema = -1;
 
@@ -501,12 +519,14 @@ export class IndexStore {
     if (this.readOnly) {
       this.db = new DatabaseSync(databasePath, databaseOptions({ readOnly: true }));
       this.db.exec("PRAGMA query_only = ON");
+      this.registerSearchFunctions();
       this.db.exec("PRAGMA busy_timeout = 0");
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
       // Searches open a fresh read-only connection each time; memory-mapped reads avoid
       // a system call per page when verifying chunks on a cold page cache (SPEC §52.2).
       this.db.exec(`PRAGMA mmap_size = ${MMAP_BYTES}`);
       this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
+      this.pathOrder = this.detectPathOrder();
       return;
     }
     mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -515,6 +535,7 @@ export class IndexStore {
     try {
       this.db = new DatabaseSync(databasePath, databaseOptions());
       this.db.exec("PRAGMA busy_timeout = 0");
+      this.registerSearchFunctions();
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
       this.initializeSchema(fresh);
       if (fresh) {
@@ -527,7 +548,19 @@ export class IndexStore {
       }
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
+    this.pathOrder = this.detectPathOrder();
   }
+  private registerSearchFunctions(): void {
+    this.db.function("seekah_utf16_sort_key", { deterministic: true }, value =>
+      typeof value === "string" ? utf16SortKey(value) : new Uint8Array());
+  }
+  private detectPathOrder(): ChunkPathOrder {
+    const row = this.db.prepare("SELECT 1 FROM documents WHERE path GLOB ? LIMIT 1")
+      .get(SUPPLEMENTARY_PATH_GLOB);
+    return row === undefined ? "native" : "utf16";
+  }
+
+
 
   /** Markers only track an in-progress migration; 0.38.0 left them behind after completion (SPEC §51.2). */
   private purgeCompletedMigrationMarkers(): void {
@@ -1372,6 +1405,7 @@ export class IndexStore {
       const commitStarted = performance.now();
       this.db.exec("COMMIT");
       if (timings) timings.commitMs += performance.now() - commitStarted;
+      if (this.pathOrder === "native" && SUPPLEMENTARY_PATH.test(document.path)) this.pathOrder = "utf16";
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -1832,22 +1866,133 @@ export class IndexStore {
   // ---------------------------------------------------------------------------
   // Chunk store reads (SPEC §52). Callers verify candidates; nothing here ranks.
 
-  /** Candidate chunks per document whose index text may contain the normalized term (superset), in chunk order. */
-  chunkCandidates(term: string, trace?: SearchTraceRecorder): Map<number, number[]> {
+
+  /**
+   * Candidate chunks for one document. The query is intentionally per-document:
+   * the search stream can verify only the rows that survive SQL ordering and
+   * avoids materialising every term's posting list in JavaScript.
+   */
+  chunkCandidatesForDocument(term: string, documentId: number, trace?: SearchTraceRecorder): number[] {
     const { table, match } = indexMatch(term, false);
     const name = CHUNK_TABLES[table];
-    const rows = this.indexQuery<{ id: number; documentId: number }>(`SELECT c.id, c.document_id AS documentId
-      FROM ${name} JOIN document_chunks AS c ON c.id = ${name}.rowid WHERE ${name} MATCH ? ORDER BY c.document_id, c.ordinal`, [match], trace);
-    const byDocument = new Map<number, number[]>();
-    for (const row of rows) {
-      const documentId = Number(row.documentId);
-      let list = byDocument.get(documentId);
-      if (!list) byDocument.set(documentId, list = []);
-      list.push(Number(row.id));
-    }
+    const rows = this.cachedIndexRows<{ id: number }>(this.chunkCandidateByDocumentSql, name,
+      `SELECT c.id FROM ${name} JOIN document_chunks AS c ON c.id = ${name}.rowid
+       WHERE ${name} MATCH ? AND c.document_id = ? ORDER BY c.ordinal`, [match, documentId], trace);
     trace?.increment("indexCandidateChunks", rows.length);
-    return byDocument;
+    return rows.map(row => Number(row.id));
   }
+
+  /** Heading posting rows for one document, verified by the search stream. */
+  chunkHeadingCandidatesForDocument(term: string, documentId: number, trace?: SearchTraceRecorder):
+    { ordinal: number; heading: string }[] {
+    const { table, match } = indexMatch(term, false);
+    const name = HEADING_TABLES[table];
+    const rows = this.cachedIndexRows<{ ordinal: number; heading: string }>(this.headingCandidateByDocumentSql, name,
+      `SELECT h.min_ordinal AS ordinal, h.heading FROM ${name}
+       JOIN search_headings AS h ON h.id = ${name}.rowid
+       WHERE ${name} MATCH ? AND h.document_id = ? ORDER BY h.min_ordinal`, [match, documentId], trace);
+    return rows.map(row => ({ ordinal: Number(row.ordinal), heading: row.heading }));
+  }
+  /** Path sort remains equivalent to the existing JavaScript comparator. */
+  chunkPathOrder(): ChunkPathOrder {
+    return this.pathOrder;
+  }
+
+
+  /**
+   * Stream document candidates from SQL. The CTEs deliberately return a
+   * superset: exact filename／heading／chunk verification remains in search.ts.
+   */
+  *chunkCandidateDocuments(
+    terms: readonly string[],
+    allTerms: boolean,
+    field: "all" | "filename" | "content",
+    phase: ChunkCandidatePhase,
+    types?: readonly string[],
+    root?: string,
+    subtree?: string,
+    statuses?: readonly DocumentStatus[],
+    sort: "relevance" | "filename" | "modified" = "relevance",
+    trace?: SearchTraceRecorder,
+    pathOrder: ChunkPathOrder = "native",
+  ): Generator<StoredDocumentRow> {
+    const uniqueTerms = [...new Set(terms)];
+    type CandidateSource = "filename" | "heading" | "chunk";
+    if ((phase === "filename" && field === "content") || (phase === "heading" && field === "filename")) return;
+    const sources: CandidateSource[] = phase === "filename" ? ["filename"]
+      : phase === "heading" ? ["heading"]
+      : field === "filename" ? ["filename"]
+      : field === "content" ? ["heading", "chunk"]
+      : ["filename", "heading", "chunk"];
+
+    const parameters: string[] = [];
+    const sourceSql = (term: string): string => sources.map(source => {
+      const { table, match } = indexMatch(term, false);
+      parameters.push(match);
+      if (source === "filename") {
+        const name = FILENAME_TABLES[table];
+        return `SELECT rowid AS document_id FROM ${name} WHERE ${name} MATCH ?`;
+      }
+      if (source === "heading") {
+        const name = HEADING_TABLES[table];
+        return `SELECT DISTINCT h.document_id FROM ${name}
+          JOIN search_headings AS h ON h.id = ${name}.rowid WHERE ${name} MATCH ?`;
+      }
+      const name = CHUNK_TABLES[table];
+      return `SELECT DISTINCT c.document_id FROM ${name}
+        JOIN document_chunks AS c ON c.id = ${name}.rowid WHERE ${name} MATCH ?`;
+    }).join(" UNION ");
+    const termSql = uniqueTerms.map(sourceSql);
+    const ctes = termSql.map((sql, index) => `term_${index}(document_id) AS (${sql})`).join(", ");
+    const intersection = allTerms
+      ? termSql.map((_, index) => `SELECT document_id FROM term_${index}`).join(" INTERSECT ")
+      : "SELECT document_id FROM term_0";
+    const base = this.documentWhere(types, root, subtree);
+    parameters.push(...base.values);
+    const filters: string[] = [];
+    if (base.sql) filters.push(base.sql.slice(" WHERE ".length));
+    if (statuses?.length) {
+      filters.push(`d.status IN (${statuses.map(() => "?").join(", ")})`);
+      parameters.push(...statuses);
+    }
+    const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
+    const pathOrderSql = pathOrder === "utf16" ? "seekah_utf16_sort_key(d.path)" : "d.path";
+    const order = sort === "filename"
+      ? `${pathOrderSql} ASC, d.modified_at_ms DESC, d.id ASC`
+      : `d.modified_at_ms DESC, ${pathOrderSql} ASC, d.id ASC`;
+    const sql = `WITH ${ctes}, candidate_ids(document_id) AS (${intersection})
+      SELECT d.id, d.path, d.filename, d.extension, d.size_bytes, d.modified_at_ms, d.status
+      FROM candidate_ids AS candidates JOIN documents AS d ON d.id = candidates.document_id${where}
+      ORDER BY ${order}`;
+    const statement = this.db.prepare(sql);
+    const started = performance.now();
+    try {
+      for (const row of statement.iterate(...parameters) as Iterable<StoredDocumentRow>) {
+        trace?.increment("indexPostingRows");
+        yield row;
+      }
+    } finally {
+      trace?.addPhase("postingsLookup", performance.now() - started);
+    }
+  }
+
+  private cachedIndexRows<T>(cache: Map<string, StatementSync>, key: string, sql: string,
+    parameters: (string | number)[], trace?: SearchTraceRecorder): T[] {
+    let statement = cache.get(key);
+    if (!statement) {
+      statement = this.db.prepare(sql);
+      cache.set(key, statement);
+    }
+    const started = performance.now();
+    try {
+      const rows = statement.all(...parameters) as T[];
+      trace?.increment("indexPostingRows", rows.length);
+      return rows;
+    } finally {
+      trace?.addPhase("postingsLookup", performance.now() - started);
+    }
+  }
+
 
   /** Original blocks of one chunk. */
   chunkBlocks(chunkId: number, trace?: SearchTraceRecorder): ChunkBlock[] {

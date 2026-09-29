@@ -1,5 +1,23 @@
 # 設計決策紀錄
 
+## D094：chunk candidate 延遲化與 SQL 排序／bounded top-K
+
+- 日期：2026-09-29。依 P0-1 效能審查與 SPEC §62；版本待合併時決定。
+- 問題：chunk store 搜尋目前對每個 term 呼叫 `chunkCandidates()`，以 `.all()` 取得所有 posting row，建立完整 `Map<documentId, number[]>`；之後再一次載入候選文件並在 JavaScript 全量排序。常見詞的準備工作造成不必要的 row materialization、Map、文件 metadata 與 GC 峰值。
+- 決定：
+  - 新增只讀 candidate iterator，將 term 的 filename／heading／chunk posting 聯集與 `all-terms` 交集推入 SQLite，並在 SQL 套用 type、root、subtree、status 範圍。
+  - `filename`／`modified` 直接以 SQL 的穩定 tie-break 順序使用可續 cursor；`relevance` 分開檔名、heading、content rank，content 維持可續的有界 top-K 驗證，不預先載入所有候選。
+  - 路徑排序維持既有 JavaScript UTF-16 code-unit 順序：索引沒有 supplementary code point 時走 SQLite 原生文字排序；有時改用 UTF-16 big-endian BLOB sort key，避免 Unicode tie-break 改變結果。
+  - 每份文件只在被 iterator 取到時讀取 metadata；每份文件的 heading／chunk candidate 也延遲到 rank verification，`within` 則完全保留上一層 document ID 順序。
+  - 保留既有 `rankOne`／exact verification 的正規化、all-terms coverage、代表 block、片段與 passage 選擇；SQL 只提供 superset，不把 FTS candidate 當成命中。
+  - fast／exact 仍由 `totalTarget()` 決定驗證邊界；精確模式排空 iterator，快速模式超過 500 份仍只回報下限。
+- 否決：
+  - 不用 JavaScript `Map` 收集每個 term 的完整 chunk postings。
+  - 不以 SQLite 的候選 row 順序取代既有 exact verification，也不將 content rank 直接推定為命中。
+  - 不改 schema、FTS tokenizer、chunk 格式、總數契約或未完成 migration 的舊路徑。
+- 相容：搜尋文件集合、順序、rank、代表 block、passage、snippet、reason、片段狀態與快速／精確 total 必須與改動前逐筆相同；所有文件留在本機處理。
+- 驗證：`test/m51.test.ts` 對照舊路徑完整結果；`npm run build`、`npm test`；同一資料與查詢量測常見詞 `e`、稀有詞、多詞第 1 頁的 wall time 與 RSS／heap 前後差異。
+
 ## D092：局部更新重用 RootExclusion 避免每檔重讀規則（perf P0-4）
 
 - 日期：2026-09-29。依 P0-4 分析與 SPEC §61 實作純效能改動。
