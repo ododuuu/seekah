@@ -106,7 +106,7 @@ test("0.39.2 a flood of queued files waits once per batch, not once per file", a
     assert.ok(stabilityWaits >= batches, `至少每批一次：${stabilityWaits}`);
     assert.ok(stabilityWaits <= batches * 3, `不是每個檔案各等一次：${stabilityWaits}`);
     assert.ok(waits.every(ms => ms === DEBOUNCE), "沒有原地退避");
-    assert.equal(lockBusyDuringWait, stabilityWaits, "批內持有 writer lock");
+    assert.equal(lockBusyDuringWait, 0, "穩定等待期間 writer lock 必須可取得");
     assert.ok(lockFreeBetweenBatches >= batches - 1, "輪與輪之間釋放 writer lock");
     assert.equal(search(store, "plugin-0").length, 1);
     assert.equal(search(store, `plugin-${count - 1}`).length, 1);

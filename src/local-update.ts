@@ -1,4 +1,5 @@
 import { lstat, readdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import { RootExclusion } from "./root-exclusion.js";
@@ -145,6 +146,213 @@ async function documentFromFile(
   document.sizeBytes = info.size;
   document.modifiedAtMs = info.mtimeMs;
   return { document, parserCalls: 1 };
+}
+
+export type PreparedFileUpdate =
+  | {
+    kind: "file";
+    filePath: string;
+    root: string;
+    identity: string;
+    action: "skip" | "metadata" | "parse";
+    document?: DocumentRecord;
+    parserCalls: number;
+  }
+  | { kind: "result"; result: LocalUpdateResult };
+
+function deferredResult(filePath: string, root: string, code: string): LocalUpdateResult {
+  const result = emptyResult("unstable", filePath, root);
+  result.complete = false;
+  result.deferred = true;
+  result.diagnostics.push({ stage: "read", path: filePath, code, message: "檔案仍在變動，延後重新核對" });
+  return result;
+}
+
+function skippedResult(filePath: string, root: string, notice?: string): LocalUpdateResult {
+  const result = emptyResult("skipped", filePath, root);
+  if (notice) result.notices.push(notice);
+  return result;
+}
+
+/**
+ * 在 writer lock 外準備一份局部更新。LiveUpdateEngine 會先傳入批次第二次
+ * metadata 觀察結果，避免在整批一次穩定等待後再重複做一次觀察。
+ */
+export async function prepareFileUpdate(
+  filePath: string,
+  root: string,
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+  observed?: Stats,
+): Promise<PreparedFileUpdate> {
+  const lstatFn = options.lstat ?? lstat;
+  const sleep = options.sleep ?? sleepMs;
+  const info = observed ?? await (async () => {
+    try {
+      const first = await lstatFn(filePath);
+      const stableMs = options.stableMs ?? 0;
+      if (stableMs <= 0) return first;
+      await sleep(stableMs);
+      const second = await lstatFn(filePath);
+      if (identityKey(second) !== identityKey(first)) return undefined;
+      return second;
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return undefined;
+      if (isTransient(error) && options.deferUnstable) return undefined;
+      throw error;
+    }
+  })();
+
+  if (!info) {
+    return { kind: "result", result: deferredResult(filePath, root, "FILE_UNSTABLE") };
+  }
+  if (!store.roots().includes(root)) return { kind: "result", result: skippedResult(filePath, root, "根目錄已移除或尚未登錄") };
+  if (isIndexArtifact(filePath, store.databasePath)) return { kind: "result", result: skippedResult(filePath, root) };
+  if (info.isSymbolicLink()) return { kind: "result", result: skippedResult(filePath, root, "略過符號連結") };
+  if (!info.isFile()) return { kind: "result", result: skippedResult(filePath, root) };
+
+  const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
+  if (shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, false)) {
+    return { kind: "result", result: skippedResult(filePath, root) };
+  }
+
+  const previous = store.getDocument(filePath);
+  const extension = path.extname(filePath).toLowerCase();
+  const reason = classifyReprocess({
+    previous: previous ?? null, extension, sizeBytes: info.size, modifiedAtMs: info.mtimeMs,
+  });
+  const action = reprocessAction(reason, extension);
+  const identity = identityKey(info);
+  if (action === "skip") {
+    return { kind: "file", filePath, root, identity, action, parserCalls: 0 };
+  }
+  if (action === "metadata") {
+    return {
+      kind: "file", filePath, root, identity, action, parserCalls: 0,
+      document: {
+        path: filePath,
+        filename: path.basename(filePath),
+        extension,
+        sizeBytes: info.size,
+        modifiedAtMs: info.mtimeMs,
+        status: "unsupported",
+        errorCode: null,
+        errorMessage: null,
+        blocks: [],
+      },
+    };
+  }
+
+  throwIfAborted(options.signal);
+  try {
+    const parsed = await documentFromFile(filePath, info, options.parse ?? parseDocument);
+    throwIfAborted(options.signal);
+    const afterInfo = await lstatFn(filePath);
+    if (afterInfo.isSymbolicLink() || !afterInfo.isFile() || identityKey(afterInfo) !== identity) {
+      return { kind: "result", result: deferredResult(filePath, root, "FILE_UNSTABLE") };
+    }
+    return {
+      kind: "file", filePath, root, identity, action, parserCalls: parsed.parserCalls,
+      document: parsed.document,
+    };
+  } catch (error) {
+    if (error instanceof IgnoreConfigurationError) throw error;
+    if (isTransient(error) && options.deferUnstable) {
+      return { kind: "result", result: deferredResult(filePath, root, errorCode(error)) };
+    }
+    throw error;
+  }
+}
+
+/**
+ * 只執行鎖內的 metadata 重新確認與單份提交。呼叫者必須已持有 writer lock；
+ * `commitPreparedFileUpdate` 提供一般呼叫者的 backoff 包裝。
+ */
+export async function commitPreparedFileUpdateLocked(
+  prepared: PreparedFileUpdate,
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult> {
+  if (prepared.kind === "result") return prepared.result;
+  const result = emptyResult("file-upsert", prepared.filePath, prepared.root);
+  if (!store.roots().includes(prepared.root)) {
+    result.kind = "skipped";
+    result.notices.push("根目錄已移除或尚未登錄");
+    return result;
+  }
+  if (isIndexArtifact(prepared.filePath, store.databasePath)) {
+    result.kind = "skipped";
+    return result;
+  }
+
+  throwIfAborted(options.signal);
+  const lstatFn = options.lstat ?? lstat;
+  let current: Stats;
+  try {
+    current = await lstatFn(prepared.filePath);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return applyPathDeleteLocked(prepared.filePath, prepared.root, store, options);
+    if (isTransient(error) && options.deferUnstable) return deferredResult(prepared.filePath, prepared.root, errorCode(error));
+    throw error;
+  }
+  if (current.isSymbolicLink() || !current.isFile() || identityKey(current) !== prepared.identity) {
+    return deferredResult(prepared.filePath, prepared.root, "FILE_UNSTABLE");
+  }
+  const exclusion = options.exclusion ?? await RootExclusion.load(prepared.root, store);
+  if (shouldIgnoreWatchPath(prepared.filePath, prepared.root) || exclusion.excludes(prepared.filePath, false)) {
+    result.kind = "skipped";
+    return result;
+  }
+  throwIfAborted(options.signal);
+  if (prepared.action === "skip") {
+    result.unchanged = 1;
+    return result;
+  }
+  const previous = store.getDocument(prepared.filePath);
+  if (!prepared.document) throw new Error("局部更新準備結果缺少文件資料。");
+  if (prepared.action === "metadata") {
+    store.touchMetadata(prepared.document, prepared.root);
+  } else {
+    store.upsert(prepared.document, prepared.root);
+  }
+  result.updated = 1;
+  result.added = previous ? 0 : 1;
+  result.parserCalls = prepared.parserCalls;
+  return result;
+}
+/**
+ * 在同一把已持有的 writer lock 內重新確認並提交一組準備結果。
+ * 呼叫者必須自行持有鎖；每份結果仍各自核對 metadata，不能因同批而略過。
+ */
+export async function commitPreparedFileUpdatesLocked(
+  prepared: readonly PreparedFileUpdate[],
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult[]> {
+  const results: LocalUpdateResult[] = [];
+  for (const item of prepared) {
+    results.push(await commitPreparedFileUpdateLocked(item, store, options));
+  }
+  return results;
+}
+
+/**
+ * 取得一次 writer lock，提交一組已準備結果後才釋放。
+ */
+export async function commitPreparedFileUpdates(
+  prepared: readonly PreparedFileUpdate[],
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult[]> {
+  return withWriterBackoff(store.databasePath, options, () => commitPreparedFileUpdatesLocked(prepared, store, options));
+}
+
+export async function commitPreparedFileUpdate(
+  prepared: PreparedFileUpdate,
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult> {
+  return withWriterBackoff(store.databasePath, options, () => commitPreparedFileUpdateLocked(prepared, store, options));
 }
 
 export async function applyFileUpdate(

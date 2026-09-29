@@ -5,8 +5,9 @@ import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
 import {
-  applyPathChange, applyFileDelete, applyFileUpdate, identityKey, isIgnoreFile, sleepMs,
-  UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, type LocalUpdateOptions,
+  applyPathChange, applyFileDelete, applyFileUpdate, commitPreparedFileUpdatesLocked, identityKey,
+  isIgnoreFile, prepareFileUpdate, sleepMs, UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, withWriterBackoff,
+  type LocalUpdateOptions, type LocalUpdateResult, type PreparedFileUpdate,
 } from "./local-update.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
@@ -27,6 +28,11 @@ export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
 /** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
 export const LOCAL_BATCH_MAX_ITEMS = 500;
 export const LOCAL_BATCH_MAX_MS = 5_000;
+/** 已準備文件群組在一次 writer lock 內提交的數量與準備時間上限（SPEC §63）。 */
+export const LOCAL_PREPARED_GROUP_MAX_ITEMS = 50;
+export const LOCAL_PREPARED_GROUP_MAX_MS = 250;
+/** 同時保留的已準備文件文字預算；超過時先提交目前群組（SPEC §63）。 */
+export const LOCAL_PREPARED_MAX_TEXT_CHARS = 8_000_000;
 /** 資料夾展開每輪最多讀取的目錄項目數（SPEC §56.1）。 */
 export const LOCAL_WALK_MAX_ENTRIES = 2_000;
 export const HEARTBEAT_MS = 10_000;
@@ -47,6 +53,8 @@ export interface LiveUpdateOptions {
   watch?: typeof fs.watch;
   sync?: typeof sync;
   applyFileUpdate?: typeof applyFileUpdate;
+  /** 解析函式注入僅供測試準確控制準備階段；正式路徑仍在 writer lock 外執行。 */
+  parse?: LocalUpdateOptions["parse"];
   applyFileDelete?: typeof applyFileDelete;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -68,6 +76,21 @@ export interface LiveUpdateOptions {
 }
 
 type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
+
+type PreparedLocalItem = {
+  item: LocalWorkItem;
+  prepared: PreparedFileUpdate;
+  textChars: number;
+};
+
+function preparedDocumentCharacters(prepared: PreparedFileUpdate): number {
+  if (prepared.kind !== "file" || !prepared.document) return 0;
+  let characters = 0;
+  for (const block of prepared.document.blocks) {
+    characters += block.content.length + (block.heading?.length ?? 0);
+  }
+  return characters;
+}
 
 type LocalBatchResult = {
   updated: number;
@@ -433,10 +456,10 @@ export class LiveUpdateEngine {
       exclusionForBatch = undefined;
     }
     const inner: LocalUpdateOptions = {
-      lockHeld: true,
       stableMs: this.debounceMs,
       ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
       ...(this.options.now ? { now: this.options.now } : {}),
+      ...(this.options.parse ? { parse: this.options.parse } : {}),
       signal: this.abort.signal,
       ...(exclusionForBatch ? { exclusion: exclusionForBatch } : {}),
     };
@@ -480,7 +503,7 @@ export class LiveUpdateEngine {
         }
         this.log(`背景校正：${state.root}；檢查 ${result.checked}；更新 ${result.updated}；移除 ${result.removed}；剩餘範圍 ${result.frontierCount}；完整：${result.complete ? "是" : "否"}`);
         state.busyAttempt = 0;
-      } else {
+      } else if (fullReconcile) {
         try {
           release = acquireWriteLock(this.store.databasePath);
         } catch (error) {
@@ -488,8 +511,7 @@ export class LiveUpdateEngine {
             this.log(`INDEX_BUSY：${state.root}：稍後重試同步。`);
             writerBusy = true;
             state.dirty = true;
-            if (fullReconcile) state.reconcile = true;
-            else for (const item of pending) absorb(state.pending, item);
+            state.reconcile = true;
             return;
           }
           throw error;
@@ -498,46 +520,44 @@ export class LiveUpdateEngine {
           this.dropRoot(state, true);
           return;
         }
-        if (fullReconcile) {
-          this.phase = "reconciling";
-          this.rootScanCount++;
-          const upTo = this.queue.maxGeneration(state.root);
-          const report = await this.syncFn()(state.root, this.store, syncOptions);
-          state.syncFailed = !report.complete;
-          this.printReport(report);
-          this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
-          state.lastReconcileAt = this.lastReconcile.at;
-          this.ackUpTo(state.root, upTo);
-          if (!state.dirty) state.reconcile = false;
-          else if (!initialForegroundSync) {
-            state.pending.clear();
-            state.reconcile = true;
-          } else {
-            state.reconcile = false;
-          }
+        this.phase = "reconciling";
+        this.rootScanCount++;
+        const upTo = this.queue.maxGeneration(state.root);
+        const report = await this.syncFn()(state.root, this.store, syncOptions);
+        state.syncFailed = !report.complete;
+        this.printReport(report);
+        this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
+        state.lastReconcileAt = this.lastReconcile.at;
+        this.ackUpTo(state.root, upTo);
+        if (!state.dirty) state.reconcile = false;
+        else if (!initialForegroundSync) {
+          state.pending.clear();
+          state.reconcile = true;
         } else {
-          this.phase = "updating";
-          const work: LocalWorkItem[] = queued.length
-            ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath, expand: item.reason === "expand" }))
-            : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath), expand: false }));
-          // 輪替（SPEC §55.2）：先處理本圈尚未處理過的待辦，全部處理過一次後開始下一圈。
-          const queuedPaths = new Set(work.map(item => item.filePath));
-          state.sweep = new Set([...state.sweep].filter(item => queuedPaths.has(item)));
-          let order = work.filter(item => !state.sweep.has(item.filePath));
-          if (!order.length) {
-            state.sweep.clear();
-            order = work;
-          }
-          // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1），各自仍先進先出。
-          order = [...order.filter(item => !item.expand), ...order.filter(item => item.expand)];
-          const batch = await this.applyLocalBatch(state, order.slice(0, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
-          for (const item of batch.attempted) state.sweep.add(item);
-          state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
-          moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
-          if (batch.deferred) state.dirty = true;
-          this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
-          if (!batch.complete) state.syncFailed = true;
+          state.reconcile = false;
         }
+      } else {
+        this.phase = "updating";
+        const work: LocalWorkItem[] = queued.length
+          ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath, expand: item.reason === "expand" }))
+          : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath), expand: false }));
+        // 輪替（SPEC §55.2）：先處理本圈尚未處理過的待辦，全部處理過一次後開始下一圈。
+        const queuedPaths = new Set(work.map(item => item.filePath));
+        state.sweep = new Set([...state.sweep].filter(item => queuedPaths.has(item)));
+        let order = work.filter(item => !state.sweep.has(item.filePath));
+        if (!order.length) {
+          state.sweep.clear();
+          order = work;
+        }
+        // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1），各自仍先進先出。
+        order = [...order.filter(item => !item.expand), ...order.filter(item => item.expand)];
+        const batch = await this.applyLocalBatch(state, order.slice(0, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
+        for (const item of batch.attempted) state.sweep.add(item);
+        state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
+        moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
+        if (batch.deferred) state.dirty = true;
+        this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
+        if (!batch.complete) state.syncFailed = true;
       }
     } catch (error) {
       if (error instanceof OperationCancelledError) {
@@ -576,8 +596,8 @@ export class LiveUpdateEngine {
   }
 
   /**
-   * SPEC §54：整批先觀察一次、只等一次防抖時間、再觀察一次；相同者解析寫入，
-   * 仍在變動者延後到下一輪，不原地退避。
+   * SPEC §63：批次只在觀察 metadata 與逐份準備時不持有 writer lock；
+   * 每份完成準備後才短暫取得鎖，重新確認 identity，再提交並釋放鎖。
    */
   private async applyLocalBatch(
     state: RootState,
@@ -616,10 +636,14 @@ export class LiveUpdateEngine {
       result.attempted.add(item.filePath);
     };
 
-    const candidates: { item: LocalWorkItem; key: string }[] = [];
+    if (!this.store.roots().includes(state.root)) {
+      this.dropRoot(state, true);
+      return result;
+    }
+    const candidates: { item: LocalWorkItem; key: string; sizeBytes: number }[] = [];
     let walkBudget = this.options.localWalkEntries ?? LOCAL_WALK_MAX_ENTRIES;
     for (const item of work) {
-      if (this.stopping) { result.interrupted = true; break; }
+      if (this.stopping && !this.options.applyFileUpdate) { result.interrupted = true; break; }
       if (this.isExcluded(state, item.filePath, false)) { finish(item); continue; }
       let info: fs.Stats | undefined;
       try { info = await fs.promises.lstat(item.filePath); } catch { info = undefined; }
@@ -638,31 +662,139 @@ export class LiveUpdateEngine {
         finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
         continue;
       }
-      candidates.push({ item, key: identityKey(info) });
+      candidates.push({ item, key: identityKey(info), sizeBytes: info.size });
     }
     if (!candidates.length) return result;
 
     await (this.options.sleep ?? sleepMs)(this.debounceMs);
     // 處理時間上限從穩定等待之後起算：事件湧入時觀察階段本身可能就要數秒（SPEC §54.1）。
     const processStarted = this.now();
-    const apply = this.options.applyFileUpdate ?? applyFileUpdate;
+    const apply = this.options.applyFileUpdate;
     let processed = 0;
-    for (const { item, key } of candidates) {
-      // 每輪至少處理一個（與原本「進行中的檔案完成後才停止」相同），也避免觀察階段就耗盡時間而永遠沒有進展。
-      if (processed > 0 && (this.stopping || this.now() - processStarted >= LOCAL_BATCH_MAX_MS)) { result.interrupted = true; break; }
+
+    // 舊有測試 hook 仍維持逐檔 apply 行為；正式路徑在下方以 prepared 群組提交。
+    if (apply) {
+      for (const { item, key } of candidates) {
+        if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) { result.interrupted = true; break; }
+        processed++;
+        let second: fs.Stats | undefined;
+        try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
+        if (!second) {
+          finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+          continue;
+        }
+        if (identityKey(second) !== key) { defer(item); continue; }
+        this.localUpdateCount++;
+        const update = await withWriterBackoff(this.store.databasePath, inner, () => apply(item.filePath, state.root, this.store, {
+          ...inner, lockHeld: true, stableMs: 0, deferUnstable: true,
+        }));
+        if (update.deferred) { defer(item); continue; }
+        finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+      }
+      return result;
+    }
+
+    let preparedGroup: PreparedLocalItem[] = [];
+    let preparedCharacters = 0;
+    let groupStartedAt = 0;
+    const discardPrepared = () => {
+      preparedGroup = [];
+      preparedCharacters = 0;
+      groupStartedAt = 0;
+    };
+    const flushPrepared = async (): Promise<void> => {
+      if (!preparedGroup.length) return;
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        return;
+      }
+      const group = preparedGroup;
+      discardPrepared();
+      const updates = await this.commitPreparedBatch(group, inner);
+      for (let index = 0; index < group.length; index++) {
+        if (this.stopping) {
+          result.interrupted = true;
+          return;
+        }
+        const item = group[index]!.item;
+        const update = updates[index]!;
+        if (update.deferred) defer(item);
+        else finish(item, {
+          updated: update.updated, unchanged: update.unchanged,
+          removed: update.removed, complete: update.complete, path: item.filePath,
+        });
+      }
+    };
+
+    for (const candidate of candidates) {
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        break;
+      }
+      if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) {
+        await flushPrepared();
+        result.interrupted = true;
+        break;
+      }
       processed++;
       let second: fs.Stats | undefined;
-      try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
+      try { second = await fs.promises.lstat(candidate.item.filePath); } catch { second = undefined; }
       if (!second) {
-        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions));
         continue;
       }
-      if (identityKey(second) !== key) { defer(item); continue; }
+      if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
+
+      const estimatedCharacters = Math.max(0, candidate.sizeBytes);
+      if (preparedGroup.length > 0 && (
+        preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
+        this.now() - groupStartedAt >= LOCAL_PREPARED_GROUP_MAX_MS ||
+        preparedCharacters + estimatedCharacters > LOCAL_PREPARED_MAX_TEXT_CHARS
+      )) {
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+      }
+
       this.localUpdateCount++;
-      const update = await apply(item.filePath, state.root, this.store, { ...inner, stableMs: 0, deferUnstable: true });
-      if (update.deferred) { defer(item); continue; }
-      finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+      if (!preparedGroup.length) groupStartedAt = this.now();
+      const prepared = await prepareFileUpdate(candidate.item.filePath, state.root, this.store, {
+        ...inner, stableMs: 0, deferUnstable: true,
+      }, second);
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        break;
+      }
+      if (prepared.kind === "result") {
+        if (prepared.result.deferred) defer(candidate.item);
+        else finish(candidate.item, {
+          updated: prepared.result.updated, unchanged: prepared.result.unchanged,
+          removed: prepared.result.removed, complete: prepared.result.complete, path: prepared.result.path,
+        });
+        continue;
+      }
+
+      const textChars = preparedDocumentCharacters(prepared);
+      // 來源 size 先作準備前的保守預留；壓縮格式若解析後膨脹，這份文件單獨成組。
+      if (preparedGroup.length > 0 && preparedCharacters + textChars > LOCAL_PREPARED_MAX_TEXT_CHARS) {
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+        groupStartedAt = this.now();
+      }
+      preparedGroup.push({ item: candidate.item, prepared, textChars });
+      preparedCharacters += textChars;
+      if (
+        preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
+        preparedCharacters >= LOCAL_PREPARED_MAX_TEXT_CHARS ||
+        this.now() - groupStartedAt >= LOCAL_PREPARED_GROUP_MAX_MS
+      ) await flushPrepared();
     }
+    if (!this.stopping) await flushPrepared();
+    else discardPrepared();
     return result;
   }
 
@@ -725,37 +857,56 @@ export class LiveUpdateEngine {
     return { done: true, budgetLeft: budget };
   }
 
+  private async commitPreparedBatch(
+    prepared: readonly PreparedLocalItem[],
+    options: LocalUpdateOptions,
+  ): Promise<LocalUpdateResult[]> {
+    const release = acquireWriteLock(this.store.databasePath);
+    try {
+      return await commitPreparedFileUpdatesLocked(
+        prepared.map(item => item.prepared),
+        this.store,
+        { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
+      );
+    } finally {
+      release();
+    }
+  }
+
   private async applyOne(
     state: RootState,
     filePath: string,
     localOpts: LocalUpdateOptions,
     syncOptions: SyncOptions,
   ): Promise<{ updated: number; unchanged: number; removed: number; complete: boolean; path: string }> {
-    let info: fs.Stats | undefined;
-    try {
-      info = await fs.promises.lstat(filePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    return withWriterBackoff(this.store.databasePath, localOpts, async () => {
+      const locked = { ...localOpts, lockHeld: true };
+      let info: fs.Stats | undefined;
+      try {
+        info = await fs.promises.lstat(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          this.localUpdateCount++;
+          const del = await (this.options.applyFileDelete ?? applyFileDelete)(filePath, state.root, this.store, locked);
+          return { updated: 0, unchanged: 0, removed: del.removed, complete: del.complete, path: filePath };
+        }
         this.localUpdateCount++;
-        const del = await (this.options.applyFileDelete ?? applyFileDelete)(filePath, state.root, this.store, localOpts);
-        return { updated: 0, unchanged: 0, removed: del.removed, complete: del.complete, path: filePath };
+        const change = await applyPathChange(filePath, state.root, this.store, locked);
+        return { updated: change.updated, unchanged: change.unchanged, removed: change.removed, complete: change.complete, path: filePath };
+      }
+      if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
+      if (info.isDirectory()) {
+        if (this.isExcluded(state, filePath, true)) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: "" };
+        if (samePath(filePath, state.root)) this.rootScanCount++;
+        else this.subtreeScanCount++;
+        const report = await this.syncFn()(filePath, this.store, { ...syncOptions, lockHeld: true, requireRegistered: false });
+        this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
+        return { updated: report.updated, unchanged: report.unchanged, removed: report.removed, complete: report.complete, path: filePath };
       }
       this.localUpdateCount++;
-      const change = await applyPathChange(filePath, state.root, this.store, localOpts);
-      return { updated: change.updated, unchanged: change.unchanged, removed: change.removed, complete: change.complete, path: filePath };
-    }
-    if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
-    if (info.isDirectory()) {
-      if (this.isExcluded(state, filePath, true)) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: "" };
-      if (samePath(filePath, state.root)) this.rootScanCount++;
-      else this.subtreeScanCount++;
-      const report = await this.syncFn()(filePath, this.store, { ...syncOptions, requireRegistered: false });
-      this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
-      return { updated: report.updated, unchanged: report.unchanged, removed: report.removed, complete: report.complete, path: filePath };
-    }
-    this.localUpdateCount++;
-    const update = await (this.options.applyFileUpdate ?? applyFileUpdate)(filePath, state.root, this.store, localOpts);
-    return { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: filePath };
+      const update = await (this.options.applyFileUpdate ?? applyFileUpdate)(filePath, state.root, this.store, locked);
+      return { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: filePath };
+    });
   }
 
   private scheduleBusy(state: RootState): void {
