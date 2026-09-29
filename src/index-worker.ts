@@ -3,6 +3,7 @@ import { IndexStore } from "./store.js";
 import { sync, type SyncReport } from "./sync.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { IndexBusyError, isSqliteBusy } from "./write-lock.js";
+import { INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
 
 const INDEX_BUSY_CLIENT_MESSAGE = "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。";
 
@@ -83,6 +84,8 @@ async function run(): Promise<void> {
   } catch (error) {
     if (error instanceof OperationCancelledError || abort.signal.aborted) {
       post({ type: "stopped", message: "索引同步已停止。" });
+    } else if (isRecoveryRequired(error)) {
+      post({ type: "error", message: INDEX_RECOVERY_REQUIRED_MESSAGE, code: "INDEX_RECOVERY_REQUIRED" });
     } else {
       const busy = error instanceof IndexBusyError || isSqliteBusy(error);
       const code = busy ? "INDEX_BUSY" : errorCode(error);
@@ -99,11 +102,15 @@ async function run(): Promise<void> {
 }
 
 void run().catch(error => {
-  const busy = error instanceof IndexBusyError || isSqliteBusy(error);
-  post({
-    type: "error",
-    message: busy ? INDEX_BUSY_CLIENT_MESSAGE : error instanceof Error ? error.message : "索引無法完成。",
-    ...(busy ? { code: "INDEX_BUSY" } : {}),
-  });
+  if (isRecoveryRequired(error)) {
+    post({ type: "error", message: INDEX_RECOVERY_REQUIRED_MESSAGE, code: "INDEX_RECOVERY_REQUIRED" });
+  } else {
+    const busy = error instanceof IndexBusyError || isSqliteBusy(error);
+    post({
+      type: "error",
+      message: busy ? INDEX_BUSY_CLIENT_MESSAGE : error instanceof Error ? error.message : "索引無法完成。",
+      ...(busy ? { code: "INDEX_BUSY" } : {}),
+    });
+  }
   workerPort.close();
 });

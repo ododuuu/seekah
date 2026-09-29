@@ -11,10 +11,11 @@
   - 新增 `withIndexStore`，重用 `openStore` 的重試節奏；settings 讀寫與 trash 端點改走它。最終仍 busy 時 HTTP 409 與固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」
   - API catch 將 `isSqliteBusy`／`IndexBusyError` 一律轉成同一 409 訊息。
   - 索引 worker 對 busy 使用 `code: "INDEX_BUSY"` 與同一固定訊息，接上工作台既有分支。
-- 理由：WAL 或背景重試之後仍可能 BUSY；工作台是使用者看得見的最後一層，必須把 SQLite 原文擋在 API 邊界。
+  - 補註（同編號）：SQLite 回復類 `errcode` 776／1288／1294 不重試、不走 409。工作台 HTTP 503 與 CLI 同一段 `INDEX_RECOVERY_REQUIRED` 固定訊息（含勿刪 journal／WAL）；worker 使用 `code: INDEX_RECOVERY_REQUIRED`。判斷用完整 extended code，不得 `& 0xff`。共用分類放在 `src/index-errors.ts`，不改 CLI／store／write-lock／live-update／local-update。
+- 理由：WAL 或背景重試之後仍可能 BUSY；工作台是使用者看得見的最後一層，必須把 SQLite 原文擋在 API 邊界。回復類錯誤不是暫時忙碌，重試無效且可能誤導使用者刪 sidecar。
 - 不做什麼：
-  - 不改 `busy_timeout`、不動 `src/store.ts`／`src/live-update.ts`／`src/local-update.ts`／`src/write-lock.ts`。
-  - 不把非 busy 錯誤改成 INDEX_BUSY，不改 schema 或搜尋語意。
+  - 不改 `busy_timeout`、不動 `src/store.ts`／`src/live-update.ts`／`src/local-update.ts`／`src/write-lock.ts`／`src/cli.ts`。
+  - 不把非 busy 錯誤改成 INDEX_BUSY，不把 recovery 誤判成 busy，不改 schema 或搜尋語意。
 - 版本：0.42.0。
 
 ## D097：背景自動更新遇主庫 SQLITE_BUSY 走 INDEX_BUSY 重試

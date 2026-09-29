@@ -2118,6 +2118,13 @@ docsearch doctor
 - 共用 API catch 對任何仍冒出的 `isSqliteBusy`／`IndexBusyError` 同樣轉成上述 409 與固定訊息，作為最後防線；非 busy 錯誤維持原狀態碼與原文。
 - `/api/search` 經 `openStore` 最終仍 busy 時走同一 409 契約。
 
+### 67.4 需要 SQLite 回復的錯誤
+
+- `errcode` 為 776（`SQLITE_READONLY_ROLLBACK`）、1288（`SQLITE_READONLY_CANTINIT`）或 1294（`SQLITE_CANTOPEN_DIRTYWAL`）時，比對**完整** extended code，不得 `& 0xff`。
+- 工作台 `withIndexStore` 對此類錯誤不重試；HTTP 503，`error` 為「INDEX_RECOVERY_REQUIRED：索引有未完成交易，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。」（與 CLI 現有原文一致）。
+- `GET /api/index-status` 的 `unavailable` 在此情況使用同一段固定 `message` 與 `errorCode: INDEX_RECOVERY_REQUIRED`。
+- 索引 worker 使用 `code: "INDEX_RECOVERY_REQUIRED"` 與同一固定訊息。原文 SQLite 診斷不得出現在 `error` 欄或索引進度。
+
 ### 67.2 索引 worker
 
 - `src/index-worker.ts` 失敗時若為 `IndexBusyError` 或 `isSqliteBusy`，`post({ type: "error", message, code: "INDEX_BUSY" })` 使用同一固定訊息。工作台既有 `code === "INDEX_BUSY"` 分支繼續顯示該訊息。
@@ -2125,6 +2132,6 @@ docsearch doctor
 ### 67.3 明確不做與驗收
 
 - 不改 `busy_timeout`、journal mode、`src/store.ts`、`src/live-update.ts`、`src/local-update.ts`、`src/write-lock.ts`。
-- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，`POST /api/settings` 與兩個 trash 端點回 409、含固定 `INDEX_BUSY`、不含 `database is locked`。`/api/search` 不得含原文 `database is locked`；狀態為 200，或 409 且訊息為同一固定 `INDEX_BUSY`（WAL 下讀不擋寫時可為 200）。放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。
+- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，`POST /api/settings` 與兩個 trash 端點回 409、含固定 `INDEX_BUSY`、不含 `database is locked`。`/api/search` 不得含原文 `database is locked`；狀態為 200，或 409 且訊息為同一固定 `INDEX_BUSY`（WAL 下讀不擋寫時可為 200）。放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。注入 776／1288／1294 時回 503 與固定 `INDEX_RECOVERY_REQUIRED` 訊息、不含原文；busy 路徑仍為 409。
 - package 版本維持 0.42.0。
 

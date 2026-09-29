@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "../src/index-errors.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -128,3 +129,73 @@ test("m56: 工作台 BUSY 回 409 INDEX_BUSY 且不含原文；非 busy 不被�
     }
   }
 });
+
+function sqliteError(message: string, errcode: number): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, "errcode", { value: errcode });
+  return error;
+}
+
+test("m56: recovery errcode 不重試、回 503 固定訊息；busy 仍 409", { timeout: 20_000 }, async () => {
+  assert.equal(isRecoveryRequired(sqliteError("attempt to write a readonly database", 776)), true);
+  assert.equal(isRecoveryRequired(sqliteError("unable to open database file", 1288)), true);
+  assert.equal(isRecoveryRequired(sqliteError("disk I/O error", 1294)), true);
+  assert.equal(isRecoveryRequired(sqliteError("database is locked", 5)), false);
+  assert.equal(isRecoveryRequired(sqliteError("database is locked", 6)), false);
+  assert.equal(isRecoveryRequired(sqliteError("readonly", 8)), false);
+
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m56-recovery-"));
+  const { databasePath } = await seedIndex(temp);
+  const recoveryHandle = await createWorkbench({
+    databasePath, token: "m56-recovery", secret: Buffer.alloc(32, 12), environment: {}, tempParent: temp,
+    createIndexStore: () => { throw sqliteError("attempt to write a readonly database", 776); },
+  });
+  const recoveryOrigin = recoveryHandle.url.split("/#")[0]!;
+  try {
+    const settings = await jsonRequest(recoveryOrigin, "m56-recovery", "POST", "/api/settings", { deleteConfirmation: false });
+    assert.equal(settings.status, 503);
+    assert.equal(settings.error, INDEX_RECOVERY_REQUIRED_MESSAGE);
+    assert.equal(settings.raw.includes("attempt to write a readonly database"), false);
+    assert.equal(settings.raw.includes("database is locked"), false);
+    assert.match(settings.raw, /請勿刪除 journal 或 WAL/u);
+
+    const statusResponse = await fetch(recoveryOrigin + "/api/index-status", {
+      headers: { "X-LocalDocSearch-Token": "m56-recovery" },
+    });
+    assert.equal(statusResponse.status, 200);
+    const statusBody: unknown = await statusResponse.json();
+    assert.equal(statusBody && typeof statusBody === "object" && "state" in statusBody && statusBody.state === "unavailable", true);
+    assert.equal(statusBody && typeof statusBody === "object" && "errorCode" in statusBody && statusBody.errorCode === "INDEX_RECOVERY_REQUIRED", true);
+    assert.equal(statusBody && typeof statusBody === "object" && "message" in statusBody && statusBody.message === INDEX_RECOVERY_REQUIRED_MESSAGE, true);
+    const statusRaw = JSON.stringify(statusBody);
+    assert.equal(statusRaw.includes("attempt to write a readonly database"), false);
+  } finally {
+    await recoveryHandle.close();
+  }
+
+  const busyHandle = await createWorkbench({
+    databasePath, token: "m56-busy-after", secret: Buffer.alloc(32, 13), environment: {}, tempParent: temp,
+  });
+  const busyOrigin = busyHandle.url.split("/#")[0]!;
+  let holder: DatabaseSync | undefined;
+  try {
+    holder = new DatabaseSync(databasePath);
+    holder.exec("BEGIN EXCLUSIVE");
+    assertBusy(await jsonRequest(busyOrigin, "m56-busy-after", "POST", "/api/settings", { deleteConfirmation: false }), "busy-after-recovery");
+    holder.exec("ROLLBACK");
+    holder.close();
+    holder = undefined;
+  } finally {
+    if (holder) {
+      try { holder.exec("ROLLBACK"); } catch { /* 已結束 */ }
+      holder.close();
+    }
+    await busyHandle.close();
+    try { await rm(temp, { recursive: true, force: true }); }
+    catch (cleanup) {
+      if (cleanup && typeof cleanup === "object" && "code" in cleanup && cleanup.code === "EBUSY") return;
+      throw cleanup;
+    }
+  }
+});
+
