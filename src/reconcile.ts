@@ -247,6 +247,7 @@ export async function runBackgroundReconcileBatch(
     }
     if (state.frontier.length > 0) {
       flush();
+      store.checkpointWal();
       return resultFrom(state, startedAt, { started, done: false, complete: false, updated, unchanged, removed, parserCalls, pendingAfter: true }, now);
     }
     flush();
@@ -256,6 +257,7 @@ export async function runBackgroundReconcileBatch(
     }
     const complete = state.readFailures.length === 0 && state.deferredChecks.length === 0 && !pendingAfter;
     queue.finishReconcile(root, state.generation, complete, state.readFailures, state.deferredChecks);
+    store.checkpointWal();
     return resultFrom(state, startedAt, { started, done: true, complete, updated, unchanged, removed, parserCalls, pendingAfter }, now);
   } catch (e) {
     if (e instanceof OperationCancelledError) {

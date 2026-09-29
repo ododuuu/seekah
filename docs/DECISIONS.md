@@ -1,5 +1,28 @@
 # 設計決策紀錄
 
+## D098：主索引改用 WAL 並將 busy 等待設為有上限
+
+- 日期：2026-09-29。
+- 事實：
+  - SQLite 官方 WAL 文件（[`sqlite.org/wal.html`](https://sqlite.org/wal.html)）明確區分 reader snapshot、單一 writer、checkpoint 與 `-wal`／`-shm` sidecar；WAL 可讓 reader 與 writer 並行，但不能取消 writer 間互斥，也不能把 checkpoint 忙碌當成資料遺失。
+  - Firefox Places 的資料庫實作（[`toolkit/components/places/Database.cpp`](https://searchfox.org/mozilla-central/source/toolkit/components/places/Database.cpp)）是長期本機 SQLite 使用者，提供採用 WAL、保護 checkpoint 與處理 sidecar／回復限制的可比對工程脈絡；Seekah 不複製 Firefox 程式碼或產品行為。
+  - Seekah 既有主索引與 readonly 連線曾在 `store.ts` 使用建構時 `timeout=0`／`PRAGMA busy_timeout=0`；coordination、live lease、live queue 另有零等待互斥需求。D097 的 rollback-journal 假設使 reader `SHARED` lock 直接把背景主庫提交打成 SQLITE_BUSY。
+  - 索引容量列舉已包含主庫 `-wal`／`-shm`／`-journal` 與 coordination／live／work sidecar；WAL 轉換、readonly 缺 sidecar、hot journal 及 copy／清理路徑仍需逐一驗證。
+- 決定：
+  - writable `IndexStore` 在 coordination writer lock 內嘗試 `PRAGMA journal_mode=WAL`；fresh database 直接建 WAL，既有 rollback database 在下一次 writable open 轉換。轉換因 busy 或 SQLite 回傳非 WAL 時記錄診斷、保留原模式、不中止 writable open，下一次再試；readonly 永不改 mode。
+  - 主索引 centralized constants：readonly busy 上限 200 ms、writable busy 上限 1500 ms；開庫 constructor timeout 與後續 PRAGMA 同時設定。`write-lock.ts`、live lease、live queue 與 work state 維持零等待。
+  - WAL writable connection 以 page size 換算約 2 MiB `wal_autocheckpoint`，設定 4 MiB `journal_size_limit`；full sync／rebuild、migration、compact／VACUUM 與 background reconcile batch 完成後嘗試 non-fatal `wal_checkpoint(TRUNCATE)`。
+  - CLI 將 `SQLITE_READONLY_ROLLBACK` 776、`SQLITE_READONLY_CANTINIT` 1288、`SQLITE_CANTOPEN_DIRTYWAL` 1294 視為 `INDEX_RECOVERY_REQUIRED`；既有 hot journal 回復與 sidecar status 列舉保留。
+- 理由：
+  - WAL 直接解決本機搜尋 reader snapshot 阻塞索引 writer 的主要互斥；bounded busy timeout 仍保留錯誤邊界，不把等待拖成不可取消的全域停頓。
+  - 以 constructor timeout 加 PRAGMA 雙層設定，覆蓋 sqlite3_open_v2 後的第一個查詢與後續 transaction；coordination 零等待則保留跨程序 `INDEX_BUSY` 的即時語意。
+  - 自動 checkpoint 與大型交易後 truncate 限制 sidecar 成長；checkpoint 失敗非致命，避免以容量整理破壞已提交資料。
+- 不做什麼與風險：
+  - 不刪除 WAL／SHM／journal，不關閉 durability，不把 writer lock 改成 timeout，不改 schema、搜尋結果、generation、資料目錄相容性或本機處理邊界。
+  - 長時間 readonly transaction 仍可能延後 checkpoint 使 WAL 暫時變大；4 MiB limit 是 SQLite 的回收目標，不保證讀者持鎖時立即 truncate。一般主庫 busy 仍可能在 1500 ms 後回報 `INDEX_BUSY`。
+  - WAL sidecar 需要資料夾權限；readonly 開啟缺 sidecar 的成功條件與 `SQLITE_READONLY_*`／dirty-WAL 錯誤碼必須由測試覆蓋。公司 Windows 人工驗收未回報前，不把本機結果稱為 Windows 通過。
+- 版本：0.42.0。
+
 ## D097：背景自動更新遇主庫 SQLITE_BUSY 走 INDEX_BUSY 重試
 
 - 日期：2026-09-29。

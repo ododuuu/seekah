@@ -762,7 +762,10 @@ export async function main(args: readonly string[]): Promise<number> {
       return 130;
     }
     const sqliteCode = sqliteExtendedCode(error);
-    if (sqliteCode === 776) { console.error("INDEX_RECOVERY_REQUIRED：索引有未完成交易，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。"); return 3; }
+    if (sqliteCode === 776 || sqliteCode === 1288 || sqliteCode === 1294) {
+      console.error("INDEX_RECOVERY_REQUIRED：索引有未完成交易或 WAL 無法初始化，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。");
+      return 3;
+    }
     if (isSqliteBusy(error)) { console.error("INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"); return 3; }
     if (error instanceof SearchIndexChangedError) { console.error(`SEARCH_INDEX_CHANGED：${error.message}`); return 3; }
     if (error instanceof IndexBusyError || error instanceof ContextError || error instanceof WatchError || error instanceof ClipboardError) { console.error(`${error.code}：${error.message}`); return 3; }

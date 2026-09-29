@@ -57,8 +57,7 @@ test("m55: 背景更新遇主庫 SQLITE_BUSY 保留待辦並在下一輪完成",
     queue.markDirtyScope(root, "m55");
 
     holder = new DatabaseSync(database);
-    holder.exec("BEGIN");
-    holder.prepare("SELECT COUNT(*) AS count FROM documents").get();
+    holder.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
 
     const timers: FakeTimer[] = [];
     let timerId = 0;

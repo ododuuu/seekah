@@ -150,6 +150,12 @@ const NGRAM_INDEX_VERSION = "1";
 const NGRAM_MIGRATION_VERSION = "ngram_1";
 const UNIGRAM_TABLE = "search_unigrams";
 const TRIGRAM_TABLE = "search_trigrams";
+/** 主索引連線的 busy 等待上限；協調資料庫仍由 write-lock.ts 維持零等待。 */
+export const MAIN_READ_BUSY_TIMEOUT_MS = 200;
+export const MAIN_WRITE_BUSY_TIMEOUT_MS = 1_500;
+/** WAL 自動 checkpoint 目標約 2 MiB；實際值依 page size 換算。 */
+export const MAIN_WAL_AUTOCHECKPOINT_BYTES = 2 * 1024 * 1024;
+export const MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function normalizeSearchText(value: string): string {
   return value.normalize("NFKC").toLowerCase();
@@ -471,10 +477,10 @@ export function collectIndexStorage(
 
 
 // Node.js 22.16.0 起支援建構時設定 timeout，但目前鎖定的 @types/node
-// 尚未宣告此欄位。必須在 sqlite3_open_v2() 後、任何查詢前就安裝
-// 零等待 busy handler，不能只依賴稍後執行的 PRAGMA。
-function databaseOptions(options: { readOnly?: boolean } = {}): ConstructorParameters<typeof DatabaseSync>[1] {
-  return { ...options, timeout: 0 } as ConstructorParameters<typeof DatabaseSync>[1];
+// 尚未宣告此欄位。開庫即安裝主索引的 bounded busy handler；協調資料庫
+// 仍在 write-lock.ts 使用 timeout=0，避免第一個 BEGIN IMMEDIATE 等待。
+function databaseOptions(timeoutMs: number, options: { readOnly?: boolean } = {}): ConstructorParameters<typeof DatabaseSync>[1] {
+  return { ...options, timeout: timeoutMs } as ConstructorParameters<typeof DatabaseSync>[1];
 }
 function utf16SortKey(value: string): Uint8Array {
   const key = new Uint8Array(value.length * 2);
@@ -490,11 +496,16 @@ const SUPPLEMENTARY_PATH = /[\u{10000}-\u{10ffff}]/u;
 
 export interface IndexStoreOptions {
   readOnly?: boolean;
+  /** 只在 WAL 切換因忙碌而延後時呼叫；預設寫到 stderr。 */
+  onWarning?: (message: string) => void;
 }
 
 export class IndexStore {
   private readonly db: DatabaseSync;
   private readonly readOnly: boolean;
+  private readonly onWarning: (message: string) => void;
+  private walSwitchDeferred = false;
+  private walEnabled = false;
   readonly databasePath: string;
   private pathOrder: ChunkPathOrder = "native";
   private documentByPathSql: ReturnType<DatabaseSync["prepare"]> | null = null;
@@ -517,11 +528,12 @@ export class IndexStore {
   constructor(databasePath = defaultDatabasePath(), options: IndexStoreOptions = {}) {
     this.databasePath = databasePath;
     this.readOnly = options.readOnly ?? false;
+    this.onWarning = options.onWarning ?? (message => console.error(message));
     if (this.readOnly) {
-      this.db = new DatabaseSync(databasePath, databaseOptions({ readOnly: true }));
+      this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_READ_BUSY_TIMEOUT_MS, { readOnly: true }));
       this.db.exec("PRAGMA query_only = ON");
       this.registerSearchFunctions();
-      this.db.exec("PRAGMA busy_timeout = 0");
+      this.db.exec(`PRAGMA busy_timeout = ${MAIN_READ_BUSY_TIMEOUT_MS}`);
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
       // Searches open a fresh read-only connection each time; memory-mapped reads avoid
       // a system call per page when verifying chunks on a cold page cache (SPEC §52.2).
@@ -534,8 +546,9 @@ export class IndexStore {
     const fresh = !existsSync(databasePath);
     const release = acquireWriteLock(databasePath);
     try {
-      this.db = new DatabaseSync(databasePath, databaseOptions());
-      this.db.exec("PRAGMA busy_timeout = 0");
+      this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_WRITE_BUSY_TIMEOUT_MS));
+      this.db.exec(`PRAGMA busy_timeout = ${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
+      this.configureWal();
       this.registerSearchFunctions();
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
       this.initializeSchema(fresh);
@@ -545,12 +558,42 @@ export class IndexStore {
           ('content_storage_version', '2'), ('multi_root_version', '1'),
           ('root_merge_version', '1'), ('chunk_store_version', '${CHUNK_STORE_VERSION}'),
           ('path_order', 'native')`);
-      } else {
+      } else if (!this.walSwitchDeferred) {
         this.purgeCompletedMigrationMarkers();
       }
       this.pathOrder = this.loadPathOrder();
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
+  }
+  private configureWal(): void {
+    let mode = "";
+    try {
+      const row = this.db.prepare("PRAGMA journal_mode = WAL").get();
+      mode = row && typeof row === "object" && "journal_mode" in row
+        ? String(row.journal_mode ?? "").toLowerCase() : "";
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      this.walSwitchDeferred = true;
+      this.onWarning("主索引 WAL 切換因 SQLite 忙碌延後；目前維持 rollback journal，下次 writable open 重試。");
+      return;
+    }
+    if (mode !== "wal") {
+      this.walSwitchDeferred = true;
+      this.onWarning(`主索引 WAL 切換未完成（SQLite 回傳 ${mode || "未知模式"}）；目前維持 rollback journal，下次 writable open 重試。`);
+      return;
+    }
+    this.walEnabled = true;
+    const pageRow = this.db.prepare("PRAGMA page_size").get();
+    const pageSize = pageRow && typeof pageRow === "object" && "page_size" in pageRow && typeof pageRow.page_size === "number"
+      ? pageRow.page_size : 4096;
+    const checkpointPages = Math.max(1, Math.floor(MAIN_WAL_AUTOCHECKPOINT_BYTES / Math.max(1, pageSize)));
+    try {
+      this.db.exec(`PRAGMA wal_autocheckpoint = ${checkpointPages}`);
+      this.db.exec(`PRAGMA journal_size_limit = ${MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES}`);
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      this.onWarning("主索引 WAL 已啟用，但 checkpoint 大小設定因 SQLite 忙碌延後；下次 writable open 重試。");
+    }
   }
   private registerSearchFunctions(): void {
     this.db.function("seekah_utf16_sort_key", { deterministic: true }, value =>
@@ -798,6 +841,7 @@ export class IndexStore {
   async upgrade(options: UpgradeOptions = {}): Promise<void> {
     if (this.readOnly) throw new Error("唯讀索引不能執行升級。");
     const release = options.lockHeld ? undefined : acquireWriteLock(this.databasePath);
+    let completed = false;
     try {
       throwIfAborted(options.signal);
       if (this.metadata("content_storage_version") !== "2") {
@@ -809,7 +853,11 @@ export class IndexStore {
       // The chunk store replaces the payload Bloom／ngram and block index
       // migrations; every older structure is dropped when it completes (SPEC §52.4).
       if (!this.chunkStoreReady()) await this.migrateChunkStore(options);
-    } finally { release?.(); }
+      completed = true;
+    } finally {
+      if (completed) this.checkpointWal();
+      release?.();
+    }
   }
 
   private async runTxWithBusyRetry(body: () => void, options: UpgradeOptions = {}): Promise<void> {
@@ -2435,11 +2483,18 @@ export class IndexStore {
     const free = Number((this.db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count);
     return pages ? free / pages : 0;
   }
+  /** Finish a large WAL transaction without making checkpoint failure fatal to the write. */
+  checkpointWal(): void {
+    if (this.readOnly || !this.walEnabled) return;
+    try { this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); }
+    catch { /* a concurrent reader may defer truncation; the next large write retries */ }
+  }
 
   /** Rewrite the database without free pages (SPEC §52.4 `compact`); the caller holds the writer lock. */
   compact(): void {
     if (this.readOnly) throw new Error("唯讀索引不能壓縮。");
     this.db.exec("VACUUM");
+    this.checkpointWal();
   }
 
   /** Empty every search structure (full clear／rebuild). */

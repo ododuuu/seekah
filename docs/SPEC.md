@@ -2,7 +2,7 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.42.0（第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.42.0（第 66 節主索引 WAL 與有上限的鎖等待；第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-29
 - 狀態：package 為 0.42.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
@@ -661,8 +661,8 @@ M5 維持 Node.js／TypeScript、SQLite、純本機、單根目錄及六種格�
 
 後續證據修正：明確指定 timeout 為防禦性設定，沒有證據證明它是 Windows 逾時的根因或已改善逾時；0.26.2 全套仍有逾時，單獨逐檔執行則通過。
 
-- Node.js 22.17.0 已支援在 `DatabaseSync` 建構時指定 busy timeout。主索引的唯讀／寫入連線與 writer 協調資料庫必須在開庫時即指定零等待，不可只在開庫後以 PRAGMA 補設；鎖競爭仍須立即轉為 `INDEX_BUSY`，hot journal 的唯讀檢查仍須轉為 `INDEX_RECOVERY_REQUIRED`。
-- 開庫後保留明確的 `PRAGMA busy_timeout=0` 作防禦性設定；不得以延長測試或產品 timeout 掩蓋 Windows 的鎖等待。
+- Node.js 22.17.0 已支援在 `DatabaseSync` 建構時指定 busy timeout。主索引唯讀／寫入連線的 WAL、有限 busy timeout 與 checkpoint 規則改依 §66；writer 協調資料庫仍在開庫時指定零等待。鎖競爭仍須轉為 `INDEX_BUSY`，hot journal／WAL 無法初始化的唯讀檢查仍須轉為 `INDEX_RECOVERY_REQUIRED`。
+- 本節原先「主索引與 writer 協調資料庫全部零等待」的要求由 §66 取代；協調檔仍保留明確的 `PRAGMA busy_timeout=0`，主索引則使用建構時設定的有上限等待。
 - 從 GitHub 原始碼下載的目錄沒有預先編譯的 `dist` 時，標準 `npm ci` 必須完成 TypeScript 編譯，使 README 所列 CLI 命令可直接執行。
 - Windows cmd launcher 測試若專案絕對路徑含空白或括號，應避免把該路徑同時交給 Node argv 與 `cmd.exe /c` 做兩層字串解析；仍須從不同工作目錄實際呼叫 `docsearch.cmd`。
 
@@ -1914,7 +1914,7 @@ docsearch doctor
 
 - 不改 write-lock.ts / live-lease.ts / live-queue.ts 的 timeout:0 與 PRAGMA busy_timeout=0。
 - 不對非遷移寫入加入重試（避免隱藏並行問題）。
-- 不設定非零全域 busy_timeout（Windows 繼承與鎖定語意考量）。
+- 不為遷移以外的 work state／coordination 連線設定非零全域 busy_timeout；主索引一般唯讀／寫入連線的有限等待與 WAL 由 §66 規定，本節的遷移重試仍保留。
 - 不無限等待或 blocking sleep。
 - 不改變 lockHeld、upgrade 契約或 schema。
 - 不影響搜尋或讀取命令的回應時間。
@@ -2100,9 +2100,52 @@ docsearch doctor
 
 ### 65.4 明確不做與驗收
 
-- 不改主索引或 work state 的 `busy_timeout = 0`、journal mode、write-lock／live-lease／live-queue timeout，不設定全域非零 busy timeout。
+- 主索引的 journal mode 與有限 busy timeout 依 §66；work state／write-lock／live-lease／live-queue 仍維持 timeout=0，不設定它們的全域非零 busy timeout。
 - 不把一般 SQLite 寫入全面改成無限重試；只沿用既有背景更新 backoff，其他非 busy 錯誤維持原本失敗分類。
 - 不改 schema、generation、搜尋結果、索引內容、排除規則或本機處理邊界；不加入網路或外部服務。
 - `test/m55.test.ts` 以第二條主庫連線持有讀鎖觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放讀鎖後下一輪完成，且新增內容可搜尋。
 - package 版本維持 0.42.0。
 
+## 66. 主索引 WAL 與有上限的鎖等待
+
+依 D098。本節取代 §34.6 對主索引「全部零等待」及 §65.4 對主索引 journal mode／timeout 的舊要求；不改變 LocalDocSearch 相容資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、既有 IPC／MCP 識別或 `docsearch` 相容入口。
+
+### 66.1 WAL 切換時機與失敗降級
+
+- 每次 writable `IndexStore` 開啟都必須先取得既有 coordination writer lock，再由該主索引連線嘗試 `PRAGMA journal_mode=WAL`；fresh database 直接以 WAL 建立，既有 rollback-journal database 在下一次 writable open 切換。
+- readonly `IndexStore` 不得改變 journal mode，不得建 schema、寫 metadata、建立或刪除 WAL／SHM。開啟既有 WAL database 時，即使 `-wal`／`-shm` 尚未存在，只要資料夾可寫且 SQLite 能建立必要 sidecar，唯讀讀取必須成功。
+- WAL 切換因其他連線、`SQLITE_BUSY`／`SQLITE_LOCKED` 或 SQLite 回傳仍為 `delete`／其他 rollback mode 時，不得使 writable open 失敗；連線維持原 journal mode，記錄可診斷訊息，下一次 writable open 再試。切換失敗不得刪除 journal、WAL 或 SHM。
+- WAL 切換、schema 初始化、migration、一般同步及背景校正仍受同一 writer lock 保護；WAL 只縮小主庫讀寫互斥，不取代 coordination lock。
+
+### 66.2 主庫 busy 等待上限
+
+- 主索引 writable connection 的開庫 timeout 為 `MAIN_WRITE_BUSY_TIMEOUT_MS = 1500` ms，readonly connection 為 `MAIN_READ_BUSY_TIMEOUT_MS = 200` ms；建構時設定後，再以對應 `PRAGMA busy_timeout` 明確固定，避免只依賴開庫後設定。
+- `write-lock.ts` 的 coordination database、`live-lease`、`live-queue` 與 work state connection 維持 `timeout=0`／`PRAGMA busy_timeout=0`；coordination lock 競爭仍立即轉為 `INDEX_BUSY`。
+- 一般主庫 busy 只等待上述上限，之後回傳 SQLite busy 給既有 CLI／Workbench／LiveUpdate root catch。§59 的 migration transaction retries 與 §65 的 background safety retry 保留，但不得形成無限重試。
+
+### 66.3 WAL 大小與 checkpoint
+
+- writable WAL connection 必須依主庫 `page_size` 設定約 2 MiB 的 `wal_autocheckpoint`，並設定 `journal_size_limit = 4 MiB`。實際 checkpoint page 數為 `floor(2 MiB / page_size)`，至少一頁。
+- full rebuild／完整 sync、migration、`compact`／`VACUUM` 及 background reconcile batch 完成大型寫入後，嘗試 `PRAGMA wal_checkpoint(TRUNCATE)`；checkpoint 忙碌或失敗不得回滾已完成的主交易、不得取代 root catch 的錯誤分類，下一次大型寫入可再試。
+- checkpoint 不改變搜尋內容、文件 ID、generation、transaction 原子性或已提交資料；WAL／SHM 是主索引儲存足跡的一部分。
+
+### 66.4 回復、status 與檔案相容
+
+- readonly WAL 殘留無法初始化時，CLI 必須把 `SQLITE_READONLY_ROLLBACK`（776）、`SQLITE_READONLY_CANTINIT`（1288）及 `SQLITE_CANTOPEN_DIRTYWAL`（1294）歸為 `INDEX_RECOVERY_REQUIRED`；不得刪除或忽略 WAL／journal。
+- hot rollback journal 的既有 776 回復路徑保留；WAL 讀取若缺 sidecar、目錄權限不足或 WAL 損壞，必須顯示可操作的回復／重試錯誤，不能假裝索引為空。
+- `status` 的索引容量與完整性列舉必須包含主庫 `-wal`／`-shm`、`-journal` 及既有 coordination／live／work sidecar；`compact`／`VACUUM` 必須在 WAL 下仍可用並在完成後嘗試 truncate checkpoint。
+- 任何主庫 copy、delete、backup、rebuild、測試 fixture 或清理 helper 都必須把 `-wal`／`-shm` 與 rollback `-journal` 視為同一索引的附屬檔，避免只複製 `.db` 造成遺失已提交內容。
+
+### 66.5 驗收
+
+- 新增 `test/m56.test.ts`：reader 開啟 transaction 時，Seekah 真實 writer 仍可提交；reader 持續看到舊版本，結束後新連線看到新版本。
+- 同一測試涵蓋既有 rollback index 切換 WAL、另一連線造成切換失敗但 writable open 不失敗、釋放後下一次 writable open 成功，以及 readonly WAL database 在 `-wal`／`-shm` 不存在且資料夾可寫時成功開啟。
+- 以另一主庫 writer 持鎖超過上限，驗證 bounded wait 在上限加合理 margin 內回傳 busy，root／CLI 對外為 `INDEX_BUSY`；不得使用無限等待或長 sleep。
+- 以大量 WAL 寫入驗證自動 checkpoint／`journal_size_limit` 設定，並在大型 transaction 後執行 non-fatal `TRUNCATE` checkpoint，sidecar 不超過 4 MiB 上限。
+- 執行 `npm run build`、完整 `npm test`，並將 `src/store.ts` 暫時還原至 `fix/live-sqlite-busy`：m56 的 reader-vs-writer 測試必須失敗；還原 WAL 實作後同一測試必須通過。公司 Windows 人工驗收未回報前，不得宣稱 Windows 通過。
+
+### 66.6 明確不做
+
+- 不加入 OCR、embedding、LAN 暴露、新文件格式、外部文件服務或文件內容外傳；所有 WAL／checkpoint／回復都在本機。
+- 不以關閉 durability、刪除 WAL／journal、跳過 transaction 或吞掉一般 SQLite 錯誤解決容量／鎖競爭；不改搜尋排序、索引正文、schema 契約或既有資料遷移語意。
+- 長時間 readonly transaction 仍可能暫時延後 checkpoint、使 WAL 增長；bounded busy wait 與下一輪 checkpoint 是既定取捨，不把它改成全域無限等待。
