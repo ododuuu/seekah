@@ -120,3 +120,36 @@ test("M53 normal flush keeps files (no mis-delete)", async () => {
     await rm(fixture.temp, { recursive: true, force: true });
   }
 });
+
+test("M53 checkpoint time from last flush not startedAt: time jump after first does not cause per-item tx", async () => {
+  const N = 5;
+  const fixture = await setupFixture(N);
+  let txCount = 0;
+  let nowCalls = 0;
+  const mockNow = () => {
+    nowCalls++;
+    if (nowCalls === 1) return 0; // only for initial startedAt
+    return 3000; // large delta for all subsequent now() calls
+  };
+  const queue = new LiveWorkQueue(fixture.database, {
+    now: mockNow,
+    persistHook: (op, phase) => {
+      if (phase === "before-commit" && op === "upsert") txCount++;
+    },
+  });
+  try {
+    const result = await runBackgroundReconcileBatch(fixture.root, fixture.store, queue, {
+      maxEntries: 10000,
+      maxMs: 60000,
+      now: mockNow,
+    });
+    assert.equal(result.checked, N);
+    // fix (lastFlush): time check triggers flush only first time, then last updated, no more time flushes per item
+    // bad (startedAt): every item after will see large delta, flush inside per item -> tx > N
+    assert.ok(txCount <= N, `should not degenerate to per-item on time, got tx=${txCount}`);
+  } finally {
+    queue.close();
+    fixture.store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});

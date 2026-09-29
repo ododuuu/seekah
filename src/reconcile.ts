@@ -135,6 +135,7 @@ export async function runBackgroundReconcileBatch(
   let release: (() => void) | undefined;
   let context: IgnoreContext;
   let pendingSteps: { seenPath: string; kind: ReconcileSeenKind }[] = [];
+  let lastFlushAt = startedAt;
   const flush = () => {
     if (pendingSteps.length > 0) {
       queue.saveReconcileSteps(state, pendingSteps);
@@ -142,6 +143,7 @@ export async function runBackgroundReconcileBatch(
     } else {
       queue.saveReconcile(state);
     }
+    lastFlushAt = now();
   };
   const hasSeen = (p: string): boolean => {
     if (pendingSteps.some(s => s.seenPath === p)) return true;
@@ -213,7 +215,7 @@ export async function runBackgroundReconcileBatch(
           pendingSteps.push({ seenPath: fullPath, kind: "ignored" });
         }
         processed++;
-        if (pendingSteps.length >= checkpointMax || (pendingSteps.length > 0 && now() - startedAt >= checkpointMs)) {
+        if (pendingSteps.length >= checkpointMax || (pendingSteps.length > 0 && now() - lastFlushAt >= checkpointMs)) {
           flush();
         }
         if (processed >= maxEntries || (processed > 0 && now() - startedAt >= maxMs)) {
