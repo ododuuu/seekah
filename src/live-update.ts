@@ -31,6 +31,8 @@ export const LOCAL_BATCH_MAX_MS = 5_000;
 /** 已準備文件群組在一次 writer lock 內提交的數量與準備時間上限（SPEC §63）。 */
 export const LOCAL_PREPARED_GROUP_MAX_ITEMS = 50;
 export const LOCAL_PREPARED_GROUP_MAX_MS = 250;
+/** 群組持鎖內的主庫 busy 短重試；用盡後交給 root catch，不在 writer lock 內無限等待。 */
+export const PREPARED_COMMIT_BUSY_RETRY_MS = [50, 100] as const;
 /** 同時保留的已準備文件文字預算；超過時先提交目前群組（SPEC §63）。 */
 export const LOCAL_PREPARED_MAX_TEXT_CHARS = 8_000_000;
 /** 資料夾展開每輪最多讀取的目錄項目數（SPEC §56.1）。 */
@@ -103,7 +105,19 @@ type LocalBatchResult = {
   attempted: Set<string>;
   deferred: boolean;
   interrupted: boolean;
+  /** 本批已提交部分完成後，交給 root catch 的原始 busy 錯誤。 */
+  busy?: unknown;
 };
+
+class PreparedBatchBusyError extends Error {
+  constructor(
+    readonly completed: readonly LocalUpdateResult[],
+    readonly busyError: unknown,
+  ) {
+    super("prepared local update group exhausted its bounded SQLite busy retries");
+    this.name = "PreparedBatchBusyError";
+  }
+}
 
 type WatchHandle = {
   path: string;
@@ -554,6 +568,7 @@ export class LiveUpdateEngine {
         const batch = await this.applyLocalBatch(state, order.slice(0, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
+        if (batch.busy) throw batch.busy;
         moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
@@ -567,7 +582,9 @@ export class LiveUpdateEngine {
         writerBusy = true;
         state.dirty = true;
         if (batchReconcile || fullReconcile) state.reconcile = true;
-        else for (const item of pending) absorb(state.pending, item);
+        else for (const item of pending) {
+          if (state.pending.has(item)) absorb(state.pending, item);
+        }
       } else if (error instanceof RootError || error instanceof IgnoreConfigurationError) {
         state.syncFailed = true;
         state.offline = true;
@@ -711,9 +728,18 @@ export class LiveUpdateEngine {
       }
       const group = preparedGroup;
       discardPrepared();
-      const updates = await this.commitPreparedBatch(group, inner);
-      for (let index = 0; index < group.length; index++) {
-        if (this.stopping) {
+      let updates: readonly LocalUpdateResult[];
+      let partialBusy = false;
+      try {
+        updates = await this.commitPreparedBatch(group, inner);
+      } catch (error) {
+        if (!(error instanceof PreparedBatchBusyError)) throw error;
+        updates = error.completed;
+        result.busy = error.busyError;
+        partialBusy = true;
+      }
+      for (let index = 0; index < updates.length; index++) {
+        if (this.stopping && !partialBusy) {
           result.interrupted = true;
           return;
         }
@@ -876,7 +902,9 @@ export class LiveUpdateEngine {
             break;
           } catch (error) {
             if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
-            await sleep(WRITER_BACKOFF_MS[Math.min(attempt, WRITER_BACKOFF_MS.length - 1)]!);
+            const delay = PREPARED_COMMIT_BUSY_RETRY_MS[attempt];
+            if (delay === undefined) throw new PreparedBatchBusyError(results, error);
+            await sleep(delay);
           }
         }
       }

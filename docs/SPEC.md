@@ -2076,7 +2076,7 @@ docsearch doctor
 
 ## 65. 背景自動更新的主庫 SQLITE_BUSY 重試
 
-依 D097。背景自動更新持有 coordination writer lock 後寫入主索引時，若搜尋或其他唯讀連線持有 rollback-journal 的 `SHARED` lock，主庫交易可能直接回傳 SQLite errcode 5（`SQLITE_BUSY`）或 6（`SQLITE_LOCKED`，含 extended code）。這類原始錯誤必須走既有 `INDEX_BUSY` 重試語意，不得成為一般同步失敗。
+依 D097 與 D098。WAL 使一般 reader snapshot 不再以 rollback-journal `SHARED` lock 阻塞主庫 writer，但外部 writer、WAL 切換、舊 rollback index、migration 或其他 SQLite 邊界仍可能回傳 errcode 5（`SQLITE_BUSY`）或 6（`SQLITE_LOCKED`，含 extended code）。這類原始錯誤必須走既有 `INDEX_BUSY` 安全重試語意，不得成為一般同步失敗。
 
 ### 65.1 共用判斷與 root 同步
 
@@ -2087,8 +2087,8 @@ docsearch doctor
 
 ### 65.2 局部更新群組提交
 
-- `withWriterBackoff` 遇到原始 SQLite busy 時，與 `IndexBusyError` 使用相同的 `WRITER_BACKOFF_MS` 重試，不提高任何 SQLite busy timeout。
-- §63 的已準備文件群組仍只取得一次 coordination writer lock。群組內每份文件重新核對後獨立提交；某份主庫交易 busy 時只重試該份，已成功提交的文件不重做，尚未提交的文件不 ack，取消或停止時仍保留待辦。
+- `withWriterBackoff` 遇到原始 SQLite busy 時，與 `IndexBusyError` 使用相同的 `WRITER_BACKOFF_MS` 序列，但單次呼叫最多初次嘗試加五次退避；用盡後釋放該次 writer lock 並回傳 `INDEX_BUSY`，跨 root 的下一輪仍可再排程，不提高主庫 busy timeout。
+- §63 的已準備文件群組仍只取得一次 coordination writer lock。群組內每份文件重新核對後獨立提交；某份主庫交易 busy 時只在持鎖群組內做 `[50, 100]` ms 的有限短重試，超限立即停止本組，釋放 writer lock 後才把 busy 拋給 root catch；已成功提交的文件照常 finish／ack generation，未提交文件與 generation 留在佇列。
 - 既有 metadata recheck、每份 transaction 原子性、50 份／250 ms 群組邊界及文字記憶體上限不變。
 
 ### 65.3 背景校正 batch
@@ -2103,7 +2103,7 @@ docsearch doctor
 - 主索引的 journal mode 與有限 busy timeout 依 §66；work state／write-lock／live-lease／live-queue 仍維持 timeout=0，不設定它們的全域非零 busy timeout。
 - 不把一般 SQLite 寫入全面改成無限重試；只沿用既有背景更新 backoff，其他非 busy 錯誤維持原本失敗分類。
 - 不改 schema、generation、搜尋結果、索引內容、排除規則或本機處理邊界；不加入網路或外部服務。
-- `test/m55.test.ts` 以第二條主庫連線持有讀鎖觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放讀鎖後下一輪完成，且新增內容可搜尋。
+- `test/m55.test.ts` 以第二條主庫連線持有 writer transaction 觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放主庫鎖後下一輪完成，且新增內容可搜尋。`test/m57.test.ts` 另驗證 prepared 群組第 2 份 busy 時第 1 份 generation 已 ack、其餘待辦保留、coordination lock 已釋放，釋放主庫鎖後下一輪完成。
 - package 版本維持 0.42.0。
 
 ## 66. 主索引 WAL 與有上限的鎖等待

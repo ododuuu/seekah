@@ -12,6 +12,8 @@ import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js"
 import { shouldIgnoreWatchPath } from "./watch-path.js";
 
 export const WRITER_BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000] as const;
+/** 單次 withWriterBackoff 最多初次嘗試加五次退避；跨 root 的下一輪仍由 LiveUpdateEngine 排程。 */
+export const WRITER_BACKOFF_MAX_ATTEMPTS = WRITER_BACKOFF_MS.length + 1;
 export const UNSTABLE_BACKOFF_MS = [1000, 2000, 5000, 15_000, 30_000] as const;
 export const TRANSIENT_CODES = new Set(["EACCES", "EPERM", "ENOENT", "EIO", "EBUSY", "EAGAIN", "EMFILE", "ENFILE"]);
 
@@ -78,7 +80,7 @@ export async function withWriterBackoff<T>(
   if (options.lockHeld) return fn();
   const acquire = options.acquireLock ?? acquireWriteLock;
   const sleep = options.sleep ?? sleepMs;
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; attempt < WRITER_BACKOFF_MAX_ATTEMPTS; attempt++) {
     throwIfAborted(options.signal);
     try {
       const release = acquire(databasePath);
@@ -86,10 +88,13 @@ export async function withWriterBackoff<T>(
       finally { release(); }
     } catch (error) {
       if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
-      const delay = WRITER_BACKOFF_MS[Math.min(attempt, WRITER_BACKOFF_MS.length - 1)]!;
-      await sleep(delay);
+      if (attempt >= WRITER_BACKOFF_MS.length) {
+        throw error instanceof IndexBusyError ? error : new IndexBusyError();
+      }
+      await sleep(WRITER_BACKOFF_MS[attempt]!);
     }
   }
+  throw new IndexBusyError();
 }
 
 export async function rootIsOnline(root: string, options: LocalUpdateOptions = {}): Promise<boolean> {
