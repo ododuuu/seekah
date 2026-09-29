@@ -34,7 +34,8 @@ export interface BackgroundReconcileResult {
   unchanged: number;
   removed: number;
   parserCalls: number;
-  failedScopes: string[];
+  readFailures: string[];
+  deferredChecks: string[];
   frontierCount: number;
   elapsedMs: number;
   pendingAfter: boolean;
@@ -73,10 +74,6 @@ function shouldSkipEntry(context: IgnoreContext, fullPath: string, entry: fs.Dir
   return context.extras.some(item => coversPath(item.base, fullPath) && item.rules.matches(path.relative(item.base, fullPath), entry.isDirectory()));
 }
 
-function failedBelow(state: ReconcileState, scope: string): boolean {
-  return state.failedScopes.some(item => coversPath(scope, item));
-}
-
 function pendingBelow(queue: LiveWorkQueue, root: string, scope: string, scopeAcks: ReconcileState["scopeAcks"]): boolean {
   const captured = new Set(scopeAcks.map(item => `${item.relPath}\u0000${item.generation}`));
   return queue.list(root).some(item => {
@@ -103,7 +100,8 @@ function resultFrom(
     unchanged: values.unchanged,
     removed: values.removed,
     parserCalls: values.parserCalls,
-    failedScopes: [...state.failedScopes],
+    readFailures: [...state.readFailures],
+    deferredChecks: [...state.deferredChecks],
     frontierCount: state.frontier.length,
     elapsedMs: Math.round((now() - startedAt) * 100) / 100,
     pendingAfter: values.pendingAfter,
@@ -143,7 +141,7 @@ export async function runBackgroundReconcileBatch(
         entries = await fs.promises.readdir(directory, { withFileTypes: true });
         entries.sort((left, right) => left.name.localeCompare(right.name));
       } catch {
-        uniquePush(state.failedScopes, directory);
+        uniquePush(state.readFailures, directory);
         state.frontier.pop();
         queue.saveReconcile(state);
         continue;
@@ -174,7 +172,7 @@ export async function runBackgroundReconcileBatch(
             result = await applyUpdate(fullPath, root, store, updateOptions);
           } catch (error) {
             if (error instanceof OperationCancelledError) throw error;
-            uniquePush(state.failedScopes, fullPath);
+            uniquePush(state.readFailures, fullPath);
             result = { kind: "unstable", path: fullPath, root, updated: 0, added: 0, removed: 0, unchanged: 0,
               parserCalls: 0, complete: false, deferred: false, diagnostics: [], notices: [] };
           }
@@ -183,7 +181,10 @@ export async function runBackgroundReconcileBatch(
           unchanged += result.unchanged;
           removed += result.removed;
           parserCalls += result.parserCalls;
-          if (!result.complete) uniquePush(state.failedScopes, fullPath);
+          if (!result.complete) {
+            const deferred = result.deferred || result.diagnostics.some(item => item.code === "FILE_UNSTABLE");
+            uniquePush(deferred ? state.deferredChecks : state.readFailures, fullPath);
+          }
           queue.saveReconcileStep(state, fullPath, "file");
         } else {
           state.checked++;
@@ -197,13 +198,15 @@ export async function runBackgroundReconcileBatch(
       }
       if (interrupted) break;
       state.frontier.pop();
-      const blocked = failedBelow(state, directory) || pendingBelow(queue, root, directory, state.scopeAcks);
-      if (!blocked) {
+      const readFailureBelow = state.readFailures.some(item => coversPath(directory, item));
+      const deferredBelow = state.deferredChecks.some(item => coversPath(directory, item));
+      const pending = pendingBelow(queue, root, directory, state.scopeAcks);
+      if (!readFailureBelow && !deferredBelow && !pending) {
         const known = new Set(queue.reconcileSeenPaths(root, state.generation));
         const removal = await store.removeMissing(known, root, directory);
         removed += removal.removed;
-      } else if (!state.failedScopes.some(item => coversPath(directory, item))) {
-        uniquePush(state.failedScopes, directory);
+      } else if (pending && !state.deferredChecks.some(item => coversPath(directory, item))) {
+        uniquePush(state.deferredChecks, directory);
       }
       queue.saveReconcile(state);
     }
@@ -211,8 +214,11 @@ export async function runBackgroundReconcileBatch(
       return resultFrom(state, startedAt, { started, done: false, complete: false, updated, unchanged, removed, parserCalls, pendingAfter: true }, now);
     }
     const pendingAfter = queue.reconcilePendingAfter(root, state.scopeAcks);
-    const complete = state.failedScopes.length === 0 && !pendingAfter;
-    queue.finishReconcile(root, state.generation, complete, state.failedScopes);
+    if (pendingAfter && !state.deferredChecks.some(item => coversPath(root, item))) {
+      uniquePush(state.deferredChecks, root);
+    }
+    const complete = state.readFailures.length === 0 && state.deferredChecks.length === 0 && !pendingAfter;
+    queue.finishReconcile(root, state.generation, complete, state.readFailures, state.deferredChecks);
     return resultFrom(state, startedAt, { started, done: true, complete, updated, unchanged, removed, parserCalls, pendingAfter }, now);
   } finally {
     release?.();

@@ -124,7 +124,6 @@ type RootState = {
   reconcileGeneration?: number;
   reconcileChecked?: number;
   reconcileFrontier?: number;
-  reconcileFailedScopes?: number;
   reconcileReason?: string;
   reconcileStartedAt?: string;
   reconcileUpdatedAt?: string;
@@ -293,7 +292,8 @@ export class LiveUpdateEngine {
             reason: reconcile.reason,
             checked: reconcile.checked,
             frontierCount: reconcile.frontier.length,
-            failedScopes: reconcile.failedScopes.length,
+            readFailures: reconcile.readFailures.length,
+            deferredChecks: reconcile.deferredChecks.length,
             startedAt: new Date(reconcile.startedAtMs).toISOString(),
             updatedAt: new Date(reconcile.updatedAtMs).toISOString(),
           },
@@ -456,7 +456,6 @@ export class LiveUpdateEngine {
         state.reconcileGeneration = result.generation;
         state.reconcileChecked = result.checked;
         state.reconcileFrontier = result.frontierCount;
-        state.reconcileFailedScopes = result.failedScopes.length;
         const current = this.queue.reconcileStatus(state.root);
         if (current) {
           state.reconcileReason = current.reason;

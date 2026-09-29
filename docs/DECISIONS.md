@@ -1,5 +1,20 @@
 # 設計決策紀錄
 
+## D091：背景校正拆分讀取失敗與延後核對
+
+- 日期：2026-09-29。NEXT-TODO 指出背景校正把讀取錯誤與本輪尚未處理完的 scope 都放在 `failedScopes`，使可讀資料夾也被使用者看到「失敗」。行為見 SPEC §60。
+- 根因：`reconcile.ts` 的目錄列舉／檔案更新錯誤，以及 scope 收尾時被待辦事件阻擋，原本都寫入同一個 `failed_scopes_json` 陣列；status 只能顯示一個無法解釋的失敗數。
+- 決定：
+  - `ReconcileState` 改為分開保存 `readFailures` 與 `deferredChecks`。權限、IO、列舉、刪除安全核對與更新流程錯誤歸入前者；檔案不穩定、待辦事件或未完成 scope 歸入後者。
+  - scope 只有在兩類集合都沒有且沒有待辦時才可執行 `removeMissing`；`deferredChecks` 仍使 `complete = false`，不把「延後」當成成功。
+  - `failed_scopes_json` 欄位與工作狀態庫 schema version 不變。新值以 `{"readFailures":[...],"deferredChecks":[...]}` 保存；舊版 JSON 陣列保守解讀為 `readFailures`，讓既有佇列可直接開啟並維持未完成語意。
+  - `autoupdate status` 改顯示「讀取失敗」與「延後核對」兩個數字，不再顯示合併的「失敗scope」。
+- 否決：
+  - 不把延後核對計入讀取失敗，避免可讀資料夾被標示為讀取錯誤。
+  - 不以資料庫 rebuild、刪檔或 schema version bump 處理既有工作狀態。
+- 相容：既有 LocalDocSearch 資料目錄、工作狀態庫、`failed_scopes_json` 欄位與 `complete` 的保守語意維持；下次保存舊陣列時才轉為新物件格式。
+- 版本：待合併時決定。
+
 ## D088：0.40.0 工作台搜尋結果改為搜尋引擎式列表，移除明細頁
 
 - 日期：2026-09-29。使用者認為明細頁的預覽「很醜」，要求改成類似 Google 搜尋；使用者同意「照建議」並確認先只改工作台畫面。行為見 SPEC §57。
