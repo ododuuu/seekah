@@ -1852,6 +1852,7 @@ docsearch doctor
 - 沿用既有 `reconcile_state.failed_scopes_json` 欄位與工作狀態庫 schema version，不要求 rebuild、刪除資料庫或刪除 WAL／journal。
 - 新資料以 JSON 物件保存：`{"readFailures":[...],"deferredChecks":[...]}`。既有 JSON 陣列格式直接解讀為 `readFailures`，採保守解讀以維持原本的未完成語意；讀取後下次保存會寫入新物件格式。
 - 缺少、格式不完整或無法解析的資料保守標為未確認的 `deferredChecks`，不能把未知狀態當成完成；任何成功判定仍須同時通過兩類 scope、frontier 與待辦檢查。
+- 新格式寫入後，若同一工作佇列改由舊版 daemon 執行，舊版無法解讀 JSON 物件並會視為沒有失敗記錄；若在校正中途接續，可能對原本讀取失敗的資料夾執行刪除核對而把文件移出索引。來源檔案不受影響，下一輪完整校正可補回；因此不支援降級後接續同一輪校正。
 
 ### 60.4 驗收
 
