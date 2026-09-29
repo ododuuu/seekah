@@ -16,7 +16,7 @@
 - 不做什麼：
   - 不改 `busy_timeout`、不動 `src/store.ts`／`src/live-update.ts`／`src/local-update.ts`／`src/write-lock.ts`／`src/cli.ts`。
   - 不把非 busy 錯誤改成 INDEX_BUSY，不把 recovery 誤判成 busy，不改 schema 或搜尋語意。
-- 版本：0.42.0。
+- 版本：0.43.0。
 
 ## D098：主索引改用 WAL 並將 busy 等待設為有上限
 
@@ -40,7 +40,7 @@
   - 不刪除 WAL／SHM／journal，不關閉 durability，不把 writer lock 改成 timeout，不改 schema、搜尋結果、generation、資料目錄相容性或本機處理邊界。
   - 初始化／寫入 busy 都是同步等待：初始化單條最壞 200 ms，正常單條寫入最壞 1500 ms；多條 SQLite statement 的總阻塞可累加。產品搜尋不新增長時間顯式 read transaction；長時間 readonly transaction 仍可能延後 checkpoint 使 WAL 暫時變大，4 MiB limit 是回收目標，不保證讀者持鎖時立即 truncate。一般主庫 busy 仍可能在 1500 ms 後回報 `INDEX_BUSY`。
   - WAL sidecar 需要資料夾權限；readonly 開啟缺 sidecar 的成功條件與 `SQLITE_READONLY_*`／dirty-WAL 錯誤碼必須由測試覆蓋。公司 Windows 人工驗收未回報前，不把本機結果稱為 Windows 通過。
-- 版本：0.42.0。
+- 版本：0.43.0。
 
 ## D097：背景自動更新遇主庫 SQLITE_BUSY 走 INDEX_BUSY 重試
 
@@ -60,7 +60,7 @@
 - 不做什麼：
   - 不改主索引、work state、write-lock、live-lease 或 live-queue 的 timeout，不設定全域非零 `busy_timeout`。
   - 不把非 busy 的 SQLite 或檔案錯誤改成重試，不改 schema、generation、搜尋／索引語意，不加入網路或外部服務。
-- 版本：0.42.0。
+- 版本：0.43.0。
 
 ## D096：背景校正 checkpoint 批次化（perf P0-3）
 

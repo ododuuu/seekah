@@ -1,8 +1,17 @@
 # 專案狀態
 
-最後更新：2026-09-29（package 0.42.0：搜尋候選延遲載入、局部更新鎖外準備、背景校正批次寫入進度）
+最後更新：2026-09-29（package 0.43.0：主索引 WAL、有上限 busy 等待、BUSY／復原錯誤固定訊息）
 
 ## 目前狀態
+
+- **2026-09-29 0.43.0**：依 SPEC §65～§67／D097～D099 完成。起因：使用者在公司電腦回報搜尋正常，但工作台健康摘要一直顯示 `database is locked`。根因：主索引 rollback journal 加零等待；搜尋唯讀連線的 SHARED lock 擋住背景自動更新寫入；症狀出現在 `/api/index-status` 的 `recentErrors`（`LIVE_UPDATE_FAILED: database is locked`），`/api/search` 仍 200。
+  - §65／D097：背景自動更新遇主庫 SQLITE_BUSY 視為 INDEX_BUSY。最終實作：coordination lock 內只做 50／100 ms 短重試；超限停止本輪、已成功者 ack、其餘保留待辦，不把 busy 記成讀取失敗。
+  - §66／D098：主索引改 WAL。讀取等待 200 ms、初始化 200 ms、寫入 1500 ms（取代 §34.6 主庫零等待）。autocheckpoint 約 2 MiB、`journal_size_limit` 4 MiB；每批 PASSIVE，超過 64 MiB 才嘗試 RESTART／TRUNCATE；compact 與完整 sync 後強制 truncate。WAL 切換失敗不使開庫失敗。
+  - §67／D099：工作台 HTTP、索引 worker、MCP、TUI、autoupdate CLI／日誌對 busy 與 776／1288／1294 顯示固定 `INDEX_BUSY`／`INDEX_RECOVERY_REQUIRED`，不再把 SQLite 原文給使用者。`isSqliteBusy` 含 errcode 與精確 `database is locked`／`database table is locked` 字串。`compact` 容量顯示納入 `-wal`／`-shm`。
+  - 壓力（本機 win32、60 s×2、合成 320 文件）：rollback／busy=0 幾乎全部寫入 BUSY（N=1 約 1435／1845 次失敗；N=4 約 1900 次全失敗）；WAL／0 與 WAL／5000 讀寫鎖錯誤為 0，無 checkpoint 時 `-wal` 最大約 542–668 MiB。真實化補測（無顯式讀交易）WAL 組仍零 BUSY。崩潰：36／36 次 `taskkill /F` 後 integrity 與搜尋通過。soak 窄查詢 `-wal` 約 1.0 MiB；寬查詢 10 分鐘最大 85.8 MiB、20 分鐘 207.4 MiB。正常 close 後 `-wal` 仍可能殘留（推測最後關閉者為唯讀連線）。
+  - 端到端 0.42.0：搜尋全 200，但 status 鎖錯誤 R1 348／R2 402 次。live-busy 補丁兩輪無 `database is locked`／`LIVE_UPDATE_FAILED`。整合版（WAL）安靜環境重測：兩輪無 `database is locked`，新增文件可被搜到的延遲 0.6～0.9 秒（main 1.2～7.3 秒、只有補丁 30～32 秒）。**已知限制：背景更新進行中時搜尋 p50 約 3.9 秒，比 main／補丁的約 2.4～3.2 秒慢約 1.3～1.6 倍（極端負載：每 100～500 ms 一個變更、4 路並行搜尋；靜止時無差異），原因未查明**，列入 NEXT-TODO。
+  - 測試：整合分支 `npm test` 397 項，394 通過、0 失敗、3 略過（含反向驗證，見 0.43.0-VALIDATION.md）。m26 路徑改為明確 posix；m36 在 Windows 略過 chmod 拒絕權限斷言（少了一項 Windows 覆蓋）。審查曾抓到 9a81171 誤刪「檔案消失後 applyOne」而完整套件當時仍全過，已補回歸並還原刪除路徑。
+  - 本機 win32 證據，不是公司 Windows 驗收。
 
 - **2026-09-29 0.42.0**：依 SPEC §62～§64／D094～D096 完成；效能審查前三項以三條平行分支實作後合併（D093）。純效能，搜尋結果、索引內容、排除與校正完整性語意不變。
   - §62 搜尋候選由 SQL 串流排序、延遲載入 heading／chunk 候選；補充平面字元路徑排序改用持久化 `path_order` 旗標，不在開啟連線時掃表。本機合成資料：常見詞 `e` 第 1 頁 148.7 → 77.5 ms、多詞 180.3 → 139.1 ms，heap 峰值約減半；32 萬份文件唯讀開啟＋第 1 頁 679 → 18 ms（相對於初版每次掃表）。

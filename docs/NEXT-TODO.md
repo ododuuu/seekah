@@ -4,7 +4,7 @@
 - [x] 核准 TUI 規格與互動稿存入 [design/](design/SEEKAH-TUI.md)，交接集中 [handoff/CURRENT.md](handoff/CURRENT.md)。
 - [x] 在 0.36.1 落地核准的整體排版與完整焦點／鍵盤操作，不只增加 /select 或 /next；已以 80×24、120×40 render fixture 與真實 PTY 終端轉錄驗收。
 
-更新：2026-09-26。程式基線為 0.36.2；0.37.0 已開工。階段 7、階段 1～6（日常局部更新、持久 queue、有界 scopes、可接續分批校正、登入啟動、all-terms pruning）已完成；本批另完成 FTS5 unigram／trigram postings 後端，package 尚未升版。公司 Windows 未驗項保留。
+更新：2026-09-29。程式基線為 0.43.0（主索引 WAL、有上限 busy 等待、BUSY／復原固定訊息）。公司 Windows 未驗項保留。
 
 ## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
 
@@ -27,9 +27,23 @@
 - [ ] 0.39.0 公司 Windows 驗收：舊 index 遷移時間與壓縮後大小、常見詞第一頁延遲、精確總數、Workbench 202→自動重送與總筆數設定。
 - [x] 0.38.1 已依 D082 修正大量刪除效能（SPEC §51）。
 - [x] 0.41.0 已依 D090 讓遷移交易遇到 SQLITE_BUSY 時有限重試（SPEC §59）；開啟資料庫的初始化仍不重試。
+- [x] 0.43.0 已依 D097～D099 處理背景更新主庫 SQLITE_BUSY、主索引 WAL 與有上限等待、入口不再顯示 SQLite 原文（SPEC §65～§67）。
 - [ ] 0.38.0 公司 Windows 驗收：舊 index 遷移時間、索引大小、`SPEC.md`／`測試`／常見詞延遲、Workbench 202→自動重送。
 - [ ] 仍待處理（原 ADR 前補證清單）：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
 - [ ] 所有使用中的 index 都遷移後，移除遷移期舊搜尋路徑（Bloom／文件級 postings）程式碼。
+
+
+## 0.43.0 後續
+
+- [ ] `compact` 仍在 `cli.ts` `main` 的 try／catch 外；SQLITE_BUSY 可能未轉成 INDEX_BUSY。
+- [ ] `live-update.ts` 的 `rememberError` 尚未對 776／1288／1294 分類；recovery 類仍可能記成 `LIVE_UPDATE_FAILED` 加 SQLite 原文。`autoupdate.ts` `formatLiveStatus` 只把含 `database is locked` 的舊項目換成固定句，是治標。
+- [ ] 寬查詢 soak（含寫入者）HandleCount 675→724 來源未查明：只有讀取者的對照（main 舊版與 WAL 版皆 220／224 固定）未重現，懷疑在寫入者或 checkpoint 嘗試。讀取者 RSS 緩升在 main 舊版同樣存在（約 100→145 MiB），推測為 SQLite 原生快取與 mmap（`cache_size` 64 MiB、`mmap_size` 1 GiB），非 JS 洩漏，未用 handle 工具證實；可評估降低唯讀連線的 `cache_size`／`mmap_size`。
+- [ ] 正常關閉後 `-wal` 仍可能殘留（窄查詢約 1.0 MiB、寬 10 分鐘 28.1 MiB、寬 20 分鐘 11.5 MiB）。推測因最後關閉者為唯讀連線、未做可寫 checkpoint；可寫重開後可清除。未確認所有關閉順序。
+- [ ] 方案 B（單一擁有者程序）與 C（不可變區段＋原子切換）仍為長期選項，0.43.0 未採用。理由：WAL＋有界等待已消主路徑讀擋寫，換引擎或單程序會大幅重寫 FTS／多入口（CLI、工作台、MCP、autoupdate）。觸發條件：WAL 在真實寬查詢下不可接受地成長、或公司環境禁止 WAL sidecar。
+- [ ] `.writer.sqlite`、`.live.sqlite`、`.work.sqlite` 是否也該 WAL 未定；目前仍零等待 rollback／既有 live-queue WAL，與主庫策略不同。
+- [ ] **背景更新進行中搜尋變慢**：安靜環境重測整合版 p50 約 3.9 秒，main／補丁約 2.4～3.2 秒（靜止時相同）。候選原因：唯讀連線每次新開需讀 wal-index、autocheckpoint 與 4 路並行交互、寫入者與讀取者搶 CPU（機器 CPU 最大僅約 40%）。建議：用 `node --cpu-prof` 與逐階段計時對照 rollback／WAL，並試 `wal_autocheckpoint`、唯讀連線 `mmap_size` 的影響；確認在真實資料量下是否重現。
+- [ ] 工作台 `/api/index-status` 沒有儲存容量欄位，不會列出 `-wal`／`-shm`（只有命令列 `status` 會）；實測資料目錄穩態約主庫 2 MB、`-wal` 4 MiB、`.work.sqlite-wal` 約 4 MiB。
+- [ ] INDEX_BUSY 固定訊息已集中到 `index-errors.ts`（工作台、worker、MCP、TUI、autoupdate 出口）。剩餘：CLI `compact` 未走同一 catch；`rememberError` 未分類 recovery。
 
 ## 已完成：0.36.2 GUI
 
