@@ -4,6 +4,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 import { IndexStore } from "./store.js";
 import { indexStatus, McpToolError, prepareContextTool, searchDocuments } from "./mcp-tools.js";
+import { describeIndexClientError } from "./index-errors.js";
 import { MCP_APP_HTML, MCP_APP_MIME_TYPE, MCP_APP_RESOURCE_URI } from "./mcp-app.js";
 import { productVersion } from "./version.js";
 
@@ -16,23 +17,28 @@ const readOnlyAnnotations = {
   openWorldHint: false,
 } as const;
 
-function errorResult(error: unknown): CallToolResult {
+export function errorResult(error: unknown): CallToolResult {
   if (error instanceof McpToolError) {
     return { content: [{ type: "text", text: `${error.code}：${error.message}` }], isError: true };
   }
+  const classified = describeIndexClientError(error);
+  if (classified) return { content: [{ type: "text", text: classified }], isError: true };
   return { content: [{ type: "text", text: "MCP_INTERNAL：無法完成本機工具呼叫。" }], isError: true };
 }
 
-async function withStore(
+export type McpIndexStoreFactory = (databasePath: string) => IndexStore;
+
+export async function mcpWithStore(
   databasePath: string,
   operation: (store: IndexStore) => Promise<CallToolResult> | CallToolResult,
+  createIndexStore: McpIndexStoreFactory = path => new IndexStore(path, { readOnly: true }),
 ): Promise<CallToolResult> {
   if (!existsSync(databasePath)) {
     return errorResult(new McpToolError("MCP_INDEX_MISSING", "索引尚未建立；請先在終端執行 docsearch index <root>。"));
   }
   let store: IndexStore | undefined;
   try {
-    store = new IndexStore(databasePath, { readOnly: true });
+    store = createIndexStore(databasePath);
     return await operation(store);
   } catch (error) {
     return errorResult(error);
@@ -44,7 +50,10 @@ async function withStore(
 const modeSchema = z.enum(["phrase", "all-terms"]).default("phrase");
 const typesSchema = z.array(z.string().min(1).max(254)).max(50).optional();
 
-export function createMcpServer(databasePath: string): McpServer {
+export function createMcpServer(databasePath: string, options: { createIndexStore?: McpIndexStoreFactory } = {}): McpServer {
+  const withStore = (
+    operation: (store: IndexStore) => Promise<CallToolResult> | CallToolResult,
+  ) => mcpWithStore(databasePath, operation, options.createIndexStore);
   const server = new McpServer(
     { name: "localdocsearch", version: productVersion },
     {
@@ -98,7 +107,7 @@ export function createMcpServer(databasePath: string): McpServer {
       annotations: readOnlyAnnotations,
       _meta: { ui: { visibility: ["model", "app"] } },
     },
-    async input => withStore(databasePath, store => {
+    async input => withStore(store => {
       const result = searchDocuments(store, {
         query: input.query,
         page: input.page,
@@ -133,7 +142,7 @@ export function createMcpServer(databasePath: string): McpServer {
       annotations: readOnlyAnnotations,
       _meta: { ui: { visibility: ["model", "app"] } },
     },
-    async input => withStore(databasePath, async store => {
+    async input => withStore(async store => {
       const result = await prepareContextTool(store, {
         selections: input.selections,
         passages: input.passages,
@@ -157,7 +166,7 @@ export function createMcpServer(databasePath: string): McpServer {
       annotations: readOnlyAnnotations,
       _meta: { ui: { visibility: ["model", "app"] } },
     },
-    async () => withStore(databasePath, store => {
+    async () => withStore(store => {
       const result = indexStatus(store);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

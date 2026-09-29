@@ -24,7 +24,7 @@ import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { isSqliteBusy, IndexBusyError } from "./write-lock.js";
-import { INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
+import { INDEX_BUSY_CLIENT_MESSAGE, INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
 import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
 import { resolveWatchDebounce } from "./live-update.js";
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus, type StartupCommandOptions } from "./autoupdate-startup.js";
@@ -155,8 +155,6 @@ function modelRoute(input: ContextRequest, keys: ProviderKeys) {
     xaiConfigured: Boolean(keys.get("xai")),
   });
 }
-
-const INDEX_BUSY_CLIENT_MESSAGE = "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。";
 
 async function withIndexStore<T>(
   databasePath: string,

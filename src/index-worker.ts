@@ -3,9 +3,7 @@ import { IndexStore } from "./store.js";
 import { sync, type SyncReport } from "./sync.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { IndexBusyError, isSqliteBusy } from "./write-lock.js";
-import { INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
-
-const INDEX_BUSY_CLIENT_MESSAGE = "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。";
+import { INDEX_BUSY_CLIENT_MESSAGE, INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
 
 interface IndexWorkerInput {
   databasePath: string;

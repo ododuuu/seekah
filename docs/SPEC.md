@@ -2135,3 +2135,12 @@ docsearch doctor
 - `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，`POST /api/settings` 與兩個 trash 端點回 409、含固定 `INDEX_BUSY`、不含 `database is locked`。`/api/search` 不得含原文 `database is locked`；狀態為 200，或 409 且訊息為同一固定 `INDEX_BUSY`（WAL 下讀不擋寫時可為 200）。放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。注入 776／1288／1294 時回 503 與固定 `INDEX_RECOVERY_REQUIRED` 訊息、不含原文；busy 路徑仍為 409。
 - package 版本維持 0.42.0。
 
+### 67.5 MCP、TUI 與 autoupdate 入口
+
+- MCP `errorResult` 對 `IndexBusyError`／`isSqliteBusy` 回固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」；對 776／1288／1294 回與 CLI 同一段 `INDEX_RECOVERY_REQUIRED`。其他錯誤維持 `MCP_INTERNAL`。判斷重用 `src/index-errors.ts`，不另複製 busy 檢查。
+- TUI 互動 catch 對 busy／recovery 顯示同一固定中文；其餘錯誤維持原訊息。
+- `autoupdate` CLI 未分類分支、daemon catch、`AUTOUPDATE_START_FAILED` 先經同一分類再寫 stderr／`autoupdate.log`，不得寫入 SQLite 原文。`formatLiveStatus` 將 `recentErrors` 內含 `database is locked` 的舊項目換成固定 INDEX_BUSY 句（治標；根治需改 `live-update.ts` 的 `rememberError`）。
+- 固定 INDEX_BUSY 訊息集中於 `index-errors.ts` 的 `INDEX_BUSY_CLIENT_MESSAGE`；工作台 HTTP 與索引 worker 改用它。
+- `test/m60.test.ts` 以注入錯誤模擬 MCP 工具路徑、TUI 與 autoupdate 分類。
+- package 版本維持 0.42.0。
+
