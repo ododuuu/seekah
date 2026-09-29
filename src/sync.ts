@@ -66,7 +66,7 @@ export async function sync(rootInput: string, store: IndexStore, options: SyncOp
       throw new RootError("根目錄已移除或尚未登錄，請重新選擇位置。");
     }
     const report = await syncLocked(rootInput, store, options);
-    store.checkpointWal();
+    store.checkpointWal({ forceTruncate: true });
     return report;
   } catch (error) {
     if (error instanceof RootError || error instanceof IgnoreConfigurationError) {

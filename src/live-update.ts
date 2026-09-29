@@ -903,11 +903,15 @@ export class LiveUpdateEngine {
           } catch (error) {
             if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
             const delay = PREPARED_COMMIT_BUSY_RETRY_MS[attempt];
-            if (delay === undefined) throw new PreparedBatchBusyError(results, error);
+            if (delay === undefined) {
+              this.store.checkpointWal();
+              throw new PreparedBatchBusyError(results, error);
+            }
             await sleep(delay);
           }
         }
       }
+      this.store.checkpointWal();
       return results;
     });
   }

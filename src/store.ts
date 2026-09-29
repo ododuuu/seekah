@@ -156,6 +156,8 @@ export const MAIN_WRITE_BUSY_TIMEOUT_MS = 1_500;
 /** WAL 自動 checkpoint 目標約 2 MiB；實際值依 page size 換算。 */
 export const MAIN_WAL_AUTOCHECKPOINT_BYTES = 2 * 1024 * 1024;
 export const MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024;
+/** WAL 超過此大小才嘗試可能受讀取者影響的 RESTART／TRUNCATE。 */
+export const MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
 function normalizeSearchText(value: string): string {
   return value.normalize("NFKC").toLowerCase();
@@ -855,7 +857,7 @@ export class IndexStore {
       if (!this.chunkStoreReady()) await this.migrateChunkStore(options);
       completed = true;
     } finally {
-      if (completed) this.checkpointWal();
+      if (completed) this.checkpointWal({ forceTruncate: true });
       release?.();
     }
   }
@@ -2483,18 +2485,38 @@ export class IndexStore {
     const free = Number((this.db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count);
     return pages ? free / pages : 0;
   }
-  /** Finish a large WAL transaction without making checkpoint failure fatal to the write. */
-  checkpointWal(): void {
+  /** Run a bounded WAL checkpoint; the caller should hold the coordination writer lock. */
+  checkpointWal(options: { forceTruncate?: boolean } = {}): void {
     if (this.readOnly || !this.walEnabled) return;
-    try { this.db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); }
-    catch { /* a concurrent reader may defer truncation; the next large write retries */ }
+    this.runWalCheckpoint("PASSIVE");
+    if (!options.forceTruncate && this.walSizeBytes() <= MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES) return;
+    this.runWalCheckpoint("RESTART");
+    if (options.forceTruncate || this.walSizeBytes() > MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES) this.runWalCheckpoint("TRUNCATE");
+  }
+
+  private walSizeBytes(): number {
+    try { return statSync(`${this.databasePath}-wal`).size; }
+    catch { return 0; }
+  }
+
+  private runWalCheckpoint(mode: "PASSIVE" | "RESTART" | "TRUNCATE"): void {
+    try {
+      // A checkpoint must not turn a reader-held snapshot into a second write
+      // backoff.  It is best effort; the next batch gets another attempt.
+      this.db.exec("PRAGMA busy_timeout=0");
+      this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get();
+    } catch {
+      // Readers can legitimately defer RESTART/TRUNCATE.
+    } finally {
+      try { this.db.exec(`PRAGMA busy_timeout=${MAIN_WRITE_BUSY_TIMEOUT_MS}`); } catch { /* closing */ }
+    }
   }
 
   /** Rewrite the database without free pages (SPEC §52.4 `compact`); the caller holds the writer lock. */
   compact(): void {
     if (this.readOnly) throw new Error("唯讀索引不能壓縮。");
     this.db.exec("VACUUM");
-    this.checkpointWal();
+    this.checkpointWal({ forceTruncate: true });
   }
 
   /** Empty every search structure (full clear／rebuild). */

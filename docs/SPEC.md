@@ -2126,7 +2126,8 @@ docsearch doctor
 ### 66.3 WAL 大小與 checkpoint
 
 - writable WAL connection 必須依主庫 `page_size` 設定約 2 MiB 的 `wal_autocheckpoint`，並設定 `journal_size_limit = 4 MiB`。實際 checkpoint page 數為 `floor(2 MiB / page_size)`，至少一頁。
-- full rebuild／完整 sync、migration、`compact`／`VACUUM` 及 background reconcile batch 完成大型寫入後，嘗試 `PRAGMA wal_checkpoint(TRUNCATE)`；checkpoint 忙碌或失敗不得回滾已完成的主交易、不得取代 root catch 的錯誤分類，下一次大型寫入可再試。
+- 每個寫入批次提交後先嘗試 `PRAGMA wal_checkpoint(PASSIVE)`；只有 `-wal` 超過 `MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES = 64 MiB` 時，才在 coordination writer lock 內各嘗試一次 `RESTART`／`TRUNCATE`。checkpoint 使用零等待、不得卡住寫入、不得重試迴圈；忙碌或失敗一律 non-fatal，下一批再嘗試。full rebuild／完整 sync、migration、`compact`／`VACUUM` 完成後可額外要求一次 `TRUNCATE`。
+- 產品程式不得為搜尋新增長時間顯式 read transaction；真實搜尋維持既有 statement 讀取邊界。外部或測試讀取者若長時間保留 snapshot，仍可能延後 checkpoint；`journal_size_limit` 是回收目標，不是讀者持鎖時的硬上限。
 - checkpoint 不改變搜尋內容、文件 ID、generation、transaction 原子性或已提交資料；WAL／SHM 是主索引儲存足跡的一部分。
 
 ### 66.4 回復、status 與檔案相容
@@ -2141,11 +2142,11 @@ docsearch doctor
 - 新增 `test/m56.test.ts`：reader 開啟 transaction 時，Seekah 真實 writer 仍可提交；reader 持續看到舊版本，結束後新連線看到新版本。
 - 同一測試涵蓋既有 rollback index 切換 WAL、另一連線造成切換失敗但 writable open 不失敗、釋放後下一次 writable open 成功，以及 readonly WAL database 在 `-wal`／`-shm` 不存在且資料夾可寫時成功開啟。
 - 以另一主庫 writer 持鎖超過上限，驗證 bounded wait 在上限加合理 margin 內回傳 busy，root／CLI 對外為 `INDEX_BUSY`；不得使用無限等待或長 sleep。
-- 以大量 WAL 寫入驗證自動 checkpoint／`journal_size_limit` 設定，並在大型 transaction 後執行 non-fatal `TRUNCATE` checkpoint，sidecar 不超過 4 MiB 上限。
+- 以大量 WAL 寫入驗證自動 checkpoint／`journal_size_limit` 設定，並在大型 transaction 後執行 non-fatal `TRUNCATE` checkpoint，sidecar 不超過 4 MiB 上限；另以連續重疊 reader 驗證 64 MiB threshold checkpoint 會被觸發且 WAL 不會隨批次無上限成長。
 - 執行 `npm run build`、完整 `npm test`，並將 `src/store.ts` 暫時還原至 `fix/live-sqlite-busy`：m56 的 reader-vs-writer 測試必須失敗；還原 WAL 實作後同一測試必須通過。公司 Windows 人工驗收未回報前，不得宣稱 Windows 通過。
 
 ### 66.6 明確不做
 
 - 不加入 OCR、embedding、LAN 暴露、新文件格式、外部文件服務或文件內容外傳；所有 WAL／checkpoint／回復都在本機。
 - 不以關閉 durability、刪除 WAL／journal、跳過 transaction 或吞掉一般 SQLite 錯誤解決容量／鎖競爭；不改搜尋排序、索引正文、schema 契約或既有資料遷移語意。
-- 長時間 readonly transaction 仍可能暫時延後 checkpoint、使 WAL 增長；bounded busy wait 與下一輪 checkpoint 是既定取捨，不把它改成全域無限等待。
+- 不把長時間 readonly transaction 加入產品搜尋；外部／測試讀取者若持續保留 snapshot，checkpoint 只能 best effort，不能以無限等待或無限重試換取 truncate。
