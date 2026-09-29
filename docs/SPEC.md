@@ -1966,3 +1966,54 @@ docsearch doctor
 - 新增 m50 測試驗證重用計數、規則變更後立即生效、不傳入時行為等價。
 - 規則檔內容錯誤時：runRoot 內 try loadSync 失敗則 state.exclusion 設 builtinOnly（事件過濾仍用），但 inner 不傳 exclusion，讓 apply 內每檔 load 拋錯、更新失敗、不寫入；與未傳 exclusion 行為一致。
 - package 版本 0.41.1。
+
+## 64. 背景校正批次寫入進度
+
+依 D096。本節實作背景校正（runBackgroundReconcileBatch）的 reconcile checkpoint 批次化：將原本每處理一個目錄項目即呼叫一次 saveReconcileStep（導致單獨 BEGIN IMMEDIATE／COMMIT）改為在單一目錄或時間窗內累積 bounded batch 後，一次交易寫入多筆 reconcile_seen 與更新 reconcile_state。
+
+### 64.1 批次上限與強制提交點
+
+- 批次上限：最多 200 個項目或約 1000 ms 即執行一次 checkpoint 提交（自訂合理值；寫入程式常數或 options）。
+- 除了定期批次外，以下時點「一定要先提交」：
+  - 目錄項目處理完成後、frontier pop 之前。
+  - removeMissing 呼叫之前。
+  - 校正結束（frontier 耗盡、呼叫 finishReconcile）之前。
+  - 收到取消（signal abort）時。
+- 處理層的 batch（DEFAULT_RECONCILE_BATCH_ENTRIES=500、DEFAULT_RECONCILE_BATCH_MS=250）維持，用於釋放 main index writer lock；checkpoint batch 可獨立或對齊。
+
+### 64.2 at-least-once 語意（硬性要求 1）
+
+- 程序在任意時點中斷後重啟接續，所有項目都至少被核對一次；重複核對可接受。
+- 實作：未提交的 batch 其 frontier 不會 pop，重啟後會重列該目錄並依 hasReconcileSeen（含 durable）跳過已提交者，重新處理未 durable 部分。
+- 檔案的 applyUpdate 可能在 seen checkpoint 前已寫入主索引；重啟時重做 apply 為冪等（依既有 local-update 契約）。
+
+### 64.3 刪除核對前提不變（硬性要求 3，最重要正確性）
+
+- removeMissing 之前，該目錄底下所有已見項目（reconcile_seen 中 kind='file' 的路徑）必須已經寫入（durable）。
+- 否則 reconcileSeenPaths 取到的 known 集合不完整，removeMissing 會把未寫入的項目視為「消失」而從索引刪除。
+- 實作保證：flush 必須在 pop 與 removeMissing 呼叫前執行；中斷時不 pop 保證下次重做。
+
+### 64.4 readFailures／deferredChecks 與 complete 語意（硬性要求 4）
+
+- 完全維持 SPEC §60 的分類與語意。
+- readFailures 記錄實際讀取/IO/權限/列舉/解析錯誤；deferredChecks 記錄尚未完成之延後核對（含 FILE_UNSTABLE）。
+- 只有兩者皆空且無 pending 時才允許 removeMissing 與 complete=true。
+- finishReconcile 與 status 顯示不變。
+
+### 64.5 其他限制（硬性要求 5）
+
+- 不改 work state schema（reconcile_seen、reconcile_state、failed_scopes_json 格式維持）。
+- 不改 PRAGMA synchronous = FULL（維持在 LiveWorkQueue ctor）。
+- 事件佇列的 acceptPath / upsert 等仍維持每筆立即交易（event durability 與 reconcile checkpoint 分開）。
+- hasReconcileSeen 在 batch 期間使用記憶體 pending 集合 + DB 查詢；reconcileSeenPaths 只在 flush 後呼叫。
+
+### 64.6 測試與驗證要求
+
+- 新增 test/m53.test.ts，至少涵蓋：
+  1. 批次後交易次數明顯減少（用 persistHook 計 before-commit 的 "upsert" 次數；例如 2000+ 檔，tx 數從 ~N 降至 ~N/200）。
+  2. 在批次中途模擬中斷（用 maxEntries/maxMs 小值 + signal），重啟後所有檔案仍被核對且沒有檔案被錯誤刪除出索引。
+  3. removeMissing 前未提交項目的情境不會誤刪；特別測試「若在 removeMissing 前不先提交就會誤刪」的案例（可暫時 patch 跳過 flush，驗證誤刪發生；該案例在有 flush 時通過）。
+- 反向驗證（.claude/rules.md 第 6 點）：把 src/reconcile.ts 與 src/live-queue.ts 暫時換回 main 版本後，至少一項 m53 測試必須失敗（例如 tx 未減少、或 restart 案例行為不同）；還原後全部通過。報告附兩次完整輸出。
+- 量測：建立數千檔合成資料夾（例如 5000 個小檔），分別在改動前後量測「背景校正完整跑完」的 wall time 與 work.sqlite 交易次數（用 persistHook）；同一資料、同一操作；報告數字如實。
+- 產品行為完全不變：搜尋結果、索引內容、排除、complete 語意、status 均與 baseline 逐位元等價。
+- package 版本 待合併時決定。

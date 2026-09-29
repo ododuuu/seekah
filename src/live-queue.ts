@@ -373,7 +373,40 @@ export class LiveWorkQueue {
       if (Number(result.changes) !== 1) throw new QueuePersistError("校正步驟保存失敗。");
     });
   }
-
+  saveReconcileSteps(state: ReconcileState, steps: readonly { seenPath: string; kind: ReconcileSeenKind }[]): void {
+    if (steps.length === 0) {
+      this.saveReconcile(state);
+      return;
+    }
+    state.updatedAtMs = this.nowFn();
+    this.runWrite("upsert", () => {
+      const insert = this.db.prepare(`
+        INSERT OR IGNORE INTO reconcile_seen(root, generation, path, kind)
+        VALUES (?, ?, ?, ?)
+      `);
+      for (const s of steps) {
+        insert.run(state.root, state.generation, s.seenPath, s.kind);
+      }
+      const result = this.db.prepare(`
+        UPDATE reconcile_state SET
+          reason = ?, phase = ?, frontier_json = ?, failed_scopes_json = ?,
+          checked = ?, started_at_ms = ?, updated_at_ms = ?, scope_acks_json = ?
+        WHERE root = ? AND generation = ?
+      `).run(
+        state.reason,
+        state.phase,
+        JSON.stringify(state.frontier),
+        failureScopesJson(state),
+        state.checked,
+        state.startedAtMs,
+        state.updatedAtMs,
+        JSON.stringify(state.scopeAcks),
+        state.root,
+        state.generation,
+      );
+      if (Number(result.changes) !== 1) throw new QueuePersistError("校正批次保存失敗。");
+    });
+  }
   hasReconcileSeen(root: string, generation: number, seenPath: string): boolean {
     return Boolean(this.db.prepare(`
       SELECT 1 AS found FROM reconcile_seen
