@@ -1,5 +1,20 @@
 # 設計決策紀錄
 
+## D092：局部更新重用 RootExclusion 避免每檔重讀規則（perf P0-4）
+
+- 日期：2026-09-29。依 P0-4 分析與 SPEC §61 實作純效能改動。
+- 問題：local-update.ts applyFileUpdateLocked 每檔呼叫 loadRootIgnore → RootExclusion.load（讀 ignore + store.ignoreBases）；live 已有 state.exclusion 卻未傳入。
+- 決定：
+  - `LocalUpdateOptions` 加入可選 `exclusion?: RootExclusion`。
+  - LiveUpdateEngine 建立 inner 時傳入 `state.exclusion`（批次內 reuse）。
+  - 未傳時 fallback 每次 load，維持 CLI/watch/其他呼叫者原有行為。
+  - 快取失效由既有 handleEvent（規則檔/root） + runRoot 前重載（scope merge 後） + newState 保證；exclusion 為 immutable 實例，換新即生效。
+  - 結果完全等價，不改排除語意。
+- 驗證：m50（spy 計數 + 規則變更生效 + 等價行為）；npm test/build。
+- 相容：不改 schema、status、API 契約、排除結果。
+- 版本：待合併時決定。
+
+
 ## D088：0.40.0 工作台搜尋結果改為搜尋引擎式列表，移除明細頁
 
 - 日期：2026-09-29。使用者認為明細頁的預覽「很醜」，要求改成類似 Google 搜尋；使用者同意「照建議」並確認先只改工作台畫面。行為見 SPEC §57。

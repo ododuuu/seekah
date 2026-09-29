@@ -1829,3 +1829,16 @@ docsearch doctor
 - 點標題與列上 Enter 送出該結果的 `open`；「顯示所在位置」送出 `reveal`；「加入上下文」切換選取且計數正確。
 - 實際瀏覽器截圖檢查結果列（1440×900、1180×800）。
 - package 版本 0.40.0。
+
+## 61. 局部更新重用根目錄排除規則
+
+- `LocalUpdateOptions` 新增可選欄位 `exclusion?: RootExclusion`。
+- `LiveUpdateEngine` 的局部更新批次（applyLocalBatch / applyOne）直接傳入目前 `state.exclusion`，一批檔案只載入規則一次（含 loadIgnoreRules 與 ignoreBases 查詢）。
+- 沒傳入 exclusion 時（CLI 直接呼叫、watch 入口或其他呼叫者），維持原有每檔 `await RootExclusion.load` / `loadRootIgnore` 的行為，產品排除語意完全不變。
+- 快取生命週期保證（SPEC §53.2 規則檔變更重建 watcher 的延伸）：
+  - 規則檔（.localdocsearchignore）或根目錄本身變更：handleEvent 偵測 isIgnoreFile / root 時執行 `state.exclusion = this.loadExclusion(root)` 再 attach 與 markReconcile。
+  - ignore scope 合併（mergeChildRoots 改變 ignoreBases）：reconcile 完成後，下次 runRoot 會重載 exclusion 再建立 inner 傳入批次。
+  - root 變更/新增：newState 即載入新 exclusion。
+- 重用只影響效能，`excludes` 結果與直接 load 必須逐位元相同（含內建、scope 疊加、上層目錄）。
+- 新增 m50 測試驗證重用計數、規則變更後立即生效、不傳入時行為等價。
+- 版本：待合併時決定。

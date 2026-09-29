@@ -424,12 +424,15 @@ export class LiveUpdateEngine {
       this.armRescan(state);
       return;
     }
+    // 確保 exclusion 為最新（規則檔已在 handleEvent 重載；scope merge 由 reconcile 造成 ignoreBases 變更後，下次 local batch 需新 exclusion）
+    state.exclusion = this.loadExclusion(state.root);
     const inner: LocalUpdateOptions = {
       lockHeld: true,
       stableMs: this.debounceMs,
       ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
       ...(this.options.now ? { now: this.options.now } : {}),
       signal: this.abort.signal,
+      exclusion: state.exclusion,
     };
     const syncOptions: SyncOptions = {
       requireRegistered: true,
