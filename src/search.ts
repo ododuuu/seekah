@@ -521,15 +521,6 @@ class ArrayHitStream implements HitStream {
   fill(): void {}
 }
 
-type OrderKey = { rank: number; modifiedAtMs: number; path: string };
-
-function compareOrder(sort: SearchSort): (a: OrderKey, b: OrderKey) => number {
-  return sort === "filename"
-    ? (a, b) => comparePath(a.path, b.path) || b.modifiedAtMs - a.modifiedAtMs
-    : sort === "modified"
-      ? (a, b) => b.modifiedAtMs - a.modifiedAtMs || comparePath(a.path, b.path)
-      : (a, b) => b.rank - a.rank || b.modifiedAtMs - a.modifiedAtMs || comparePath(a.path, b.path);
-}
 
 type HeadingRow = { ordinal: number; heading: string; normalized: string };
 
@@ -552,49 +543,38 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     try { return work(); } finally { trace.endPhase(phase); }
   };
 
-  const filenameCandidates = new Map<string, Set<number>>();
+  // These caches contain only documents that the cursor has reached, not the
+  // complete posting lists for every term.
   const headingRows = new Map<string, Map<number, HeadingRow[]>>();
   const contentChunks = new Map<string, Map<number, number[]>>();
-  if (field !== "content") {
-    for (const term of uniqueTerms) filenameCandidates.set(term, new Set(store.indexFilenameCandidates(term, trace)));
-  }
-  if (field !== "filename") {
-    for (const term of uniqueTerms) {
-      const byDocument = new Map<number, HeadingRow[]>();
-      for (const row of verify(() => store.indexHeadingCandidates(term, trace)
-        .map(row => ({ ...row, normalized: normalize(row.heading) })).filter(row => row.normalized.includes(term)))) {
-        let list = byDocument.get(row.documentId);
-        if (!list) byDocument.set(row.documentId, list = []);
-        list.push({ ordinal: row.ordinal, heading: row.heading, normalized: row.normalized });
-      }
-      headingRows.set(term, byDocument);
-      contentChunks.set(term, store.chunkCandidates(term, trace));
-    }
-  }
-  // Heading rank 2: the first heading that contains every term.
-  const headingAll = new Map<number, number>();
-  for (const [documentId, rows] of headingRows.get(uniqueTerms[0]!) ?? []) {
-    for (const row of rows) {
+  const headingRowsFor = (term: string, documentId: number): HeadingRow[] => {
+    let byDocument = headingRows.get(term);
+    if (!byDocument) headingRows.set(term, byDocument = new Map());
+    const cached = byDocument.get(documentId);
+    if (cached !== undefined) return cached;
+    const rows = store.chunkHeadingCandidatesForDocument(term, documentId, trace)
+      .map(row => ({ ...row, normalized: normalize(row.heading) }))
+      .filter(row => row.normalized.includes(term));
+    byDocument.set(documentId, rows);
+    return rows;
+  };
+  const contentChunksFor = (term: string, documentId: number): number[] => {
+    let byDocument = contentChunks.get(term);
+    if (!byDocument) contentChunks.set(term, byDocument = new Map());
+    const cached = byDocument.get(documentId);
+    if (cached !== undefined) return cached;
+    const chunks = store.chunkCandidatesForDocument(term, documentId, trace);
+    byDocument.set(documentId, chunks);
+    return chunks;
+  };
+  const headingAllFor = (documentId: number): number | undefined => {
+    if (field === "filename") return undefined;
+    let first: number | undefined;
+    for (const row of headingRowsFor(uniqueTerms[0]!, documentId)) {
       if (!includesAll(row.normalized, terms)) continue;
-      const previous = headingAll.get(documentId);
-      if (previous === undefined || row.ordinal < previous) headingAll.set(documentId, row.ordinal);
+      if (first === undefined || row.ordinal < first) first = row.ordinal;
     }
-  }
-
-  const documents = new Map<number, StoredDocumentRow>();
-  const loaded = new Set<number>();
-  const load = (ids: readonly number[], scoped: boolean) => {
-    const missing = ids.filter(id => !loaded.has(id));
-    if (!missing.length) return;
-    for (const id of missing) loaded.add(id);
-    for (let start = 0; start < missing.length; start += 50_000) {
-      const slice = missing.slice(start, start + 50_000);
-      const rows = scoped ? store.indexDocuments(slice, types, root, subtree, trace) : store.indexDocuments(slice, undefined, undefined, undefined, trace);
-      for (const row of rows) {
-        if (statuses?.length && !statuses.includes(row.status)) continue;
-        documents.set(Number(row.id), row);
-      }
-    }
+    return first;
   };
   const filenameRank = (document: StoredDocumentRow): number => {
     if (field === "content") return 0;
@@ -607,18 +587,18 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     if (byFilename) return { rank: byFilename, sourceKind: "filename", ordinal: null };
     if (field === "filename") return undefined;
     const id = Number(document.id);
-    const heading = headingAll.get(id);
+    const heading = headingAllFor(id);
     if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
     if (mode === "phrase") {
       // Candidate chunks are in block order, so the first hit is the smallest matching ordinal.
-      for (const chunk of contentChunks.get(query)?.get(id) ?? []) {
+      for (const chunk of contentChunksFor(query, id)) {
         const first = store.chunkTermHits(chunk, [query], true, trace).get(query)![0];
         if (first !== undefined) return { rank: 1, sourceKind: "content", ordinal: first };
       }
       return undefined;
     }
     // all-terms: every term not in the filename must occur in some heading or block.
-    const chunkIds = [...new Set(uniqueTerms.flatMap(term => contentChunks.get(term)?.get(id) ?? []))];
+    const chunkIds = [...new Set(uniqueTerms.flatMap(term => contentChunksFor(term, id)))];
     const presentByOrdinal = new Map<number, string[]>();
     for (const chunk of chunkIds) {
       for (const [term, ordinals] of store.chunkTermHits(chunk, uniqueTerms, false, trace)) {
@@ -632,7 +612,8 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     const blocks = [...presentByOrdinal].map(([ordinal, present]) => ({ ordinal, present }));
     blocks.sort((a, b) => a.ordinal - b.ordinal);
     const filename = normalize(document.filename);
-    const present = (term: string) => Boolean(headingRows.get(term)?.has(id)) || blocks.some(block => block.present.includes(term));
+    const present = (term: string) => headingRowsFor(term, id).length > 0
+      || blocks.some(block => block.present.includes(term));
     if (!terms.filter(term => field === "content" || !filename.includes(term)).every(present)) return undefined;
     const allTerms = blocks.find(block => block.present.length === uniqueTerms.length);
     if (allTerms) return { rank: 1, sourceKind: "content", ordinal: allTerms.ordinal };
@@ -646,7 +627,7 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     };
     const seen = new Set<string>();
     for (const term of uniqueTerms) {
-      for (const row of headingRows.get(term)?.get(id) ?? []) {
+      for (const row of headingRowsFor(term, id)) {
         const key = `${row.ordinal}:${row.heading}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -663,54 +644,51 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     return chosen ? { rank: 1, sourceKind: chosen.headingHit ? "heading" : "content", ordinal: chosen.ordinal } : undefined;
   };
 
-  // Candidate order: search within results follows the previous layer; otherwise
-  // every possible document is sorted by the final comparator (content hits rank 1).
-  let nextId: () => number | undefined;
+  let nextDocument: () => StoredDocumentRow | undefined;
+  let expectedRank: number | undefined;
   if (restrict) {
     const source = Array.isArray(restrict) ? new ArrayHitStream([]) : restrict as HitStream;
     const ids = Array.isArray(restrict) ? [...new Set(restrict as readonly number[])] : undefined;
     let position = 0;
     trace.setCount("documentsInScope", ids ? ids.length : source.results.length);
-    nextId = () => {
-      if (ids) return ids[position++];
-      if (position >= source.results.length) source.fill(position + 256);
-      const next = source.results[position++];
-      return next?.documentId;
+    nextDocument = () => {
+      while (true) {
+        const id = ids
+          ? ids[position++]
+          : (position >= source.results.length ? (source.fill(position + 256), undefined) : undefined);
+        const resolvedId = ids ? id : source.results[position++]?.documentId;
+        if (resolvedId === undefined) return undefined;
+        const row = store.indexDocuments([resolvedId], undefined, undefined, undefined, trace)[0];
+        if (!row || (statuses?.length && !statuses.includes(row.status))) continue;
+        return row;
+      }
     };
   } else {
     trace.setCount("documentsInScope", store.documentsInScope(types, root, subtree));
-    const candidates = new Set<number>();
-    if (field !== "content") {
-      let common: Set<number> | undefined;
-      for (const term of uniqueTerms) {
-        const ids = filenameCandidates.get(term)!;
-        common = common ? new Set([...common].filter(id => ids.has(id))) : new Set(ids);
+    type RelevancePhase = { phase: "filename" | "heading" | "possible"; rank: number };
+    const pathOrder = store.chunkPathOrder();
+    const phases: RelevancePhase[] = sort === "relevance"
+      ? [
+        ...(field !== "content" ? [{ phase: "filename" as const, rank: 4 }, { phase: "filename" as const, rank: 3 }] : []),
+        ...(field !== "filename" ? [{ phase: "heading" as const, rank: 2 }, { phase: "possible" as const, rank: 1 }] : []),
+      ]
+      : [{ phase: "possible", rank: 0 }];
+    let phaseIndex = 0;
+    let candidates = store.chunkCandidateDocuments(uniqueTerms, mode === "all-terms", field, phases[0]!.phase,
+      types, root, subtree, statuses, sort, trace, pathOrder);
+    expectedRank = phases[0]!.rank || undefined;
+    nextDocument = () => {
+      while (true) {
+        const next = candidates.next();
+        if (!next.done) return next.value;
+        phaseIndex++;
+        if (phaseIndex >= phases.length) return undefined;
+        const phase = phases[phaseIndex]!;
+        candidates = store.chunkCandidateDocuments(uniqueTerms, mode === "all-terms", field, phase.phase,
+          types, root, subtree, statuses, sort, trace, pathOrder);
+        expectedRank = phase.rank || undefined;
       }
-      for (const id of common ?? []) candidates.add(id);
-    }
-    if (field !== "filename") {
-      const possible = (term: string) => new Set([...(field === "content" ? [] : filenameCandidates.get(term) ?? []),
-        ...(headingRows.get(term)?.keys() ?? []), ...(contentChunks.get(term)?.keys() ?? [])]);
-      if (mode === "phrase") {
-        for (const id of headingRows.get(query)?.keys() ?? []) candidates.add(id);
-        for (const id of contentChunks.get(query)?.keys() ?? []) candidates.add(id);
-      } else {
-        let common: Set<number> | undefined;
-        for (const term of uniqueTerms) {
-          const ids = possible(term);
-          common = common ? new Set([...common].filter(id => ids.has(id))) : ids;
-        }
-        for (const id of common ?? []) candidates.add(id);
-      }
-    }
-    load([...candidates], true);
-    const order = [...candidates].filter(id => documents.has(id)).map(id => {
-      const document = documents.get(id)!;
-      return { id, rank: filenameRank(document) || (field !== "filename" && headingAll.has(id) ? 2 : 1),
-        modifiedAtMs: document.modified_at_ms, path: document.path };
-    }).sort(compareOrder(sort)).map(item => item.id);
-    let position = 0;
-    nextId = () => order[position++];
+    };
   }
   trace.setCount("documentsConsidered", 0);
 
@@ -721,22 +699,20 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     get done() { return done; },
     fill(count: number) {
       while (!done && results.length < count) {
-        const id = nextId();
-        if (id === undefined) { done = true; break; }
-        if (restrict && !loaded.has(id)) load([id], false);
-        const document = documents.get(id);
-        if (!document) continue;
+        const document = nextDocument();
+        if (!document) { done = true; break; }
         trace.increment("documentsConsidered");
         trace.increment("documentsExactVerified");
         const ranked = verify(() => rankOne(document));
-        if (!ranked) continue;
+        if (!ranked || (expectedRank !== undefined && ranked.rank !== expectedRank)) continue;
+        const id = Number(document.id);
         const display = ranked.ordinal === null ? undefined : store.blockDisplay(id, ranked.ordinal);
         if (ranked.sourceKind === "filename") trace.increment("filenameOnlyFallbacks");
         trace.increment("documentsMatched");
         results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
           modifiedAtMs: document.modified_at_ms, heading: display?.heading ?? null, location: display?.location ?? null, snippet: "",
           rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: ranked.ordinal === null, status: document.status,
-          snippetTruncated: false }, documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
+          snippetTruncated: false }, documentId: id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
       }
       trace.setTotalRelation(done ? "eq" : "gte");
     },

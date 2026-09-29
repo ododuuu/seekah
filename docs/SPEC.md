@@ -1967,6 +1967,35 @@ docsearch doctor
 - 規則檔內容錯誤時：runRoot 內 try loadSync 失敗則 state.exclusion 設 builtinOnly（事件過濾仍用），但 inner 不傳 exclusion，讓 apply 內每檔 load 拋錯、更新失敗、不寫入；與未傳 exclusion 行為一致。
 - package 版本 0.41.1。
 
+## 62. 搜尋候選延遲載入與有界 top-K
+
+依 D094。這是純搜尋效能改動；chunk store 的搜尋結果語意維持 §52 與既有實作。
+
+### 62.1 候選查詢
+
+- chunk store 搜尋不得先為每個 term 把所有 chunk posting row 物化成 JavaScript `Map<documentId, number[]>`，也不得先載入所有可能文件再於 JavaScript 全量排序。
+- 候選由 SQLite 唯讀查詢產生：每個 term 的檔名、heading、chunk posting 先在 SQL 內依欄位組合成候選集合；`all-terms` 對每個 term 的欄位聯集取交集。查詢同時套用 type、root、subtree 與 status 範圍。
+- `sort=filename` 的候選由 SQL 依 `path ASC, modified_at_ms DESC` 取出；`sort=modified` 依 `modified_at_ms DESC, path ASC` 取出。讀取使用可續的 SQLite iterator，不把候選 posting 或文件列一次載入 JavaScript。
+- 上述 `path` 順序必須維持既有 JavaScript UTF-16 code-unit 順序；索引含 supplementary code point 時，SQL 使用等價的 UTF-16 big-endian sort key，沒有時走原生文字排序快路徑。
+- 路徑排序模式持久化在 `metadata.path_order`（值為 `native` 或 `utf16`）：新索引初始為 `native`；`upsert` 或 `touchMetadata` 遇到 supplementary code point 路徑時在同一寫入交易設為 `utf16`，文件刪除後不改回 `native`。既有索引缺旗標時，唯讀連線保守使用 `utf16` 且不得掃描 `documents`；可寫入連線只在首次開啟時偵測並寫入旗標。
+- `within` 搜尋保留上一層結果提供的 document ID 順序，不套用全域 SQL 排序。
+
+### 62.2 延遲驗證與 bounded top-K
+
+- `sort=relevance` 分開走訪檔名完全符合、檔名包含、heading 與 content rank；檔名／heading 只在候選文件需要時讀取索引資料，content 依 SQL 順序以可續 cursor 驗證。
+- stream 只驗證足以產生要求頁面或 `totalTarget()` 的結果；快速模式仍在 500 份命中後回報 `gte`，精確模式仍排空候選 iterator 並回報 `eq`。所有後續分頁仍可續取正確順序。
+- 候選 SQL 只能是既有 exact verification 的 superset；FTS false positive、跨 chunk／跨段落命中、檔名／heading 優先級、代表 block 與 all-terms coverage 仍由既有正規化與 chunk 驗證決定。
+
+### 62.3 相容與驗收
+
+- 文件集合、順序、rank、代表 block、heading、location、passage、snippet、reason、filename-only、片段截短狀態，以及快速／精確 total 與 `totalRelation`，必須與改動前逐筆相同。
+- 不新增 schema、索引格式或外部服務；未完成 chunk migration 的舊搜尋路徑不變。
+- 新增 `test/m51.test.ts`：以常見詞、稀有詞、`all-terms`、檔名命中、子資料夾範圍及第 1／2 頁資料集，對照舊路徑的完整結果、片段、passage 與快速／精確總數。
+- 新增 `test/m54.test.ts` 以偵測方法呼叫計數驗證唯讀開啟缺少 `path_order` 時不掃描 `documents`，以及寫入端（`upsert`／`touchMetadata`）設定與刪除後保留旗標。
+- 量測須包含 30 萬份以上文件資料庫的「開啟唯讀連線＋第 1 頁」wall time，保留改動前後數字。
+- 量測同一資料與操作的常見單字元、稀有詞、多詞第 1 頁 wall time 與記憶體，並保留改動前後數字。
+- package 版本待合併時決定。
+
 ## 64. 背景校正批次寫入進度
 
 依 D096。本節實作背景校正（runBackgroundReconcileBatch）的 reconcile checkpoint 批次化：將原本每處理一個目錄項目即呼叫一次 saveReconcileStep（導致單獨 BEGIN IMMEDIATE／COMMIT）改為在單一目錄或時間窗內累積 bounded batch 後，一次交易寫入多筆 reconcile_seen 與更新 reconcile_state。
