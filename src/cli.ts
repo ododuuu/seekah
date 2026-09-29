@@ -4,7 +4,7 @@ import { interactiveContext, ContextError } from "./context.js";
 import { runWatch, WatchError, resolveWatchDebounce, resolveWatchRescan } from "./watch.js";
 import { runAutoupdateCommand } from "./autoupdate.js";
 import { actOnDocument, DocumentActionError } from "./open-document.js";
-import { defaultDatabasePath, describeDatabaseLocation, formatMib, IndexStore, inspectDatabaseFile, type ExtensionStats, type StorageFootprint } from "./store.js";
+import { collectIndexStorage, defaultDatabasePath, describeDatabaseLocation, formatMib, IndexStore, inspectDatabaseFile, type ExtensionStats, type StorageFootprint } from "./store.js";
 import { parseTypes, type SearchResult } from "./search.js";
 import { formatTotal, runSearchSession, SearchSession, SearchIndexChangedError } from "./search-session.js";
 import { resolveUserRootPath } from "./root-plan.js";
@@ -15,7 +15,7 @@ import { IgnoreConfigurationError } from "./ignore.js";
 import { reprocessReasonLabels, reprocessReasons, type Diagnostic, type SyncSummary } from "./model.js";
 import { supportedExtensions } from "./model.js";
 import { ClipboardError } from "./clipboard.js";
-import { existsSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createProgressReporter, OperationCancelledError } from "./progress.js";
 import { createInterface } from "node:readline/promises";
 import { runTui, TuiInputDecoder, type TuiEvent, type TuiStopReason } from "./tui.js";
@@ -23,6 +23,9 @@ import { StringDecoder } from "node:string_decoder";
 import { buildIndexProfile, profilePaths, reserveNewProfile, writeIndexProfile } from "./profile.js";
 import type { SyncReport } from "./sync.js";
 import { productVersion } from "./version.js";
+function formatStorageSize(footprint: StorageFootprint): string {
+  return footprint.totalBytes === null ? "未知" : formatMib(footprint.totalBytes);
+}
 
 function formatCountMap(counts: Record<string, number>): string {
   const entries = Object.entries(counts).filter(([, count]) => count > 0).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
@@ -219,14 +222,16 @@ export async function main(args: readonly string[]): Promise<number> {
     const { autoupdateStatus } = await import("./autoupdate.js");
     const running = await autoupdateStatus(databasePath).then(result => result.code === 0, () => false);
     if (running) { console.error("背景自動更新執行中；請先執行 autoupdate stop，壓縮完成後再 autoupdate start。"); return 3; }
-    const before = statSync(databasePath).size;
+    const before = collectIndexStorage(databasePath);
     const store = new IndexStore(databasePath);
     const release = acquireWriteLock(databasePath);
     try {
-      console.log(`壓縮資料庫中（可回收約 ${formatMib(before * store.freePageRatio())}）…`);
+      const reclaimable = before.totalBytes === null ? "未知" : formatMib(before.totalBytes * store.freePageRatio());
+      console.log(`壓縮資料庫中（可回收約 ${reclaimable}）…`);
       store.compact();
     } finally { release(); store.close(); }
-    console.log(`壓縮完成：${formatMib(before)} → ${formatMib(statSync(databasePath).size)}。`);
+    const after = collectIndexStorage(databasePath);
+    console.log(`壓縮完成：${formatStorageSize(before)} → ${formatStorageSize(after)}。`);
     return 0;
   }
   if (!["index", "search", "status", "rebuild", "open", "reveal", "roots", "context", "watch", "tui"].includes(command ?? "")) {

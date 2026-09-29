@@ -9,7 +9,7 @@ import { parseDocument, MAX_FILE_BYTES } from "../src/parser.js";
 import { decodeSharedText, TextDecodeError } from "../src/parsers/text-decode.js";
 import { createProgressReporter, formatPercent, OperationCancelledError, throwIfAborted } from "../src/progress.js";
 import { search } from "../src/search.js";
-import { collectIndexStorage, IndexStore } from "../src/store.js";
+import { collectIndexStorage, formatMib, IndexStore } from "../src/store.js";
 import { TEXT_PARSE_VERSION } from "../src/model.js";
 import { scan } from "../src/scanner.js";
 import { isWindowsVolumeSystemPath, isWindowsVolumeSystemRoot } from "../src/builtin-paths.js";
@@ -305,6 +305,52 @@ test("M27 storage footprint treats missing as absent and permission errors as un
   assert.equal(denied.totalBytes, null);
   assert.equal(denied.files.find(item => item.label === "主庫 -wal")?.unknown, true);
   assert.equal(denied.files.find(item => item.label === "主庫")?.bytes, 2048);
+});
+test("M27 compact 顯示主庫與 WAL 的合計大小", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m27-compact-"));
+  const root = path.join(temp, "docs");
+  const dataDir = path.join(temp, "data");
+  const env = { ...process.env, LOCALDOCSEARCH_DATA_DIR: dataDir };
+  let reader: DatabaseSync | undefined;
+  let raw: DatabaseSync | undefined;
+  try {
+    await mkdir(root, { recursive: true });
+    await writeFile(path.join(root, "note.txt"), "compact test");
+    const indexed = spawnSync(process.execPath, [cli, "index", root], { encoding: "utf8", env });
+    assert.equal(indexed.status, 0, indexed.stderr);
+    const database = path.join(dataDir, "LocalDocSearch", "index.db");
+    reader = new DatabaseSync(database);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) FROM documents").get();
+    raw = new DatabaseSync(database);
+    raw.exec("PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE");
+    const insert = raw.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)");
+    for (let index = 0; index < 2_000; index++) insert.run(`compact-${index}`, "x".repeat(4_096));
+    raw.exec("COMMIT");
+    raw.close();
+    raw = undefined;
+    const before = collectIndexStorage(database);
+    const mainBytes = before.files.find(file => file.suffix === "")?.bytes ?? 0;
+    assert.ok(before.totalBytes !== null && before.totalBytes > mainBytes);
+    reader.exec("ROLLBACK");
+    reader.close();
+    reader = undefined;
+    const beforeCompact = collectIndexStorage(database);
+    assert.ok(beforeCompact.totalBytes !== null && beforeCompact.totalBytes > mainBytes);
+    const compact = spawnSync(process.execPath, [cli, "compact"], { encoding: "utf8", env });
+    assert.equal(compact.status, 0, compact.stderr);
+    const after = collectIndexStorage(database);
+    assert.ok(after.totalBytes !== null);
+    const sizes = /壓縮完成：([\d.]+) MiB → ([\d.]+) MiB。/u.exec(compact.stdout);
+    assert.ok(sizes, compact.stdout);
+    assert.ok(Number(sizes[1]) > mainBytes / (1024 * 1024) + 1, "compact 前大小必須包含 WAL／附屬檔");
+    assert.equal(sizes[2], formatMib(after.totalBytes).replace(" MiB", ""));
+  } finally {
+    try { raw?.close(); } catch { /* 測試失敗清理 */ }
+    try { reader?.exec("ROLLBACK"); } catch { /* 測試失敗清理 */ }
+    try { reader?.close(); } catch { /* 測試失敗清理 */ }
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test("M27 schema adds parse_version on existing documents table", async () => {
