@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.41.0（第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.41.1（第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-29
-- 狀態：package 為 0.41.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
+- 狀態：package 為 0.41.1。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1952,3 +1952,17 @@ docsearch doctor
 - 以舊版 `failed_scopes_json` 陣列建立工作狀態庫後，現行程式可直接讀取並保持未完成，不需重建。
 - `autoupdate status` 的根目錄列須同時顯示「讀取失敗」與「延後核對」文字及數量。
 - package 版本 0.41.0（與 §58、§59 同批發布）。
+
+## 61. 局部更新重用根目錄排除規則
+
+- `LocalUpdateOptions` 新增可選欄位 `exclusion?: RootExclusion`。
+- `LiveUpdateEngine` 的局部更新批次（applyLocalBatch / applyOne）直接傳入目前 `state.exclusion`，一批檔案只載入規則一次（含 loadIgnoreRules 與 ignoreBases 查詢）。
+- 沒傳入 exclusion 時（CLI 直接呼叫、watch 入口或其他呼叫者），維持原有每檔 `await RootExclusion.load` 的行為，產品排除語意完全不變。
+- 快取生命週期保證（SPEC §53.2 規則檔變更重建 watcher 的延伸）：
+  - 規則檔（.localdocsearchignore）或根目錄本身變更：handleEvent 偵測 isIgnoreFile / root 時執行 `state.exclusion = this.loadExclusion(root)` 再 attach 與 markReconcile。
+  - ignore scope 合併（mergeChildRoots 改變 ignoreBases）：reconcile 完成後，下次 runRoot 會重載 exclusion 再建立 inner 傳入批次。
+  - root 變更/新增：newState 即載入新 exclusion。
+- 重用只影響效能，`excludes` 結果與直接 load 必須逐位元相同（含內建、scope 疊加、上層目錄）。
+- 新增 m50 測試驗證重用計數、規則變更後立即生效、不傳入時行為等價。
+- 規則檔內容錯誤時：runRoot 內 try loadSync 失敗則 state.exclusion 設 builtinOnly（事件過濾仍用），但 inner 不傳 exclusion，讓 apply 內每檔 load 拋錯、更新失敗、不寫入；與未傳 exclusion 行為一致。
+- package 版本 0.41.1。

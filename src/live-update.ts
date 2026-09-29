@@ -424,12 +424,21 @@ export class LiveUpdateEngine {
       this.armRescan(state);
       return;
     }
+    let exclusionForBatch: RootExclusion | undefined;
+    try {
+      exclusionForBatch = RootExclusion.loadSync(state.root, this.store);
+      state.exclusion = exclusionForBatch;
+    } catch {
+      state.exclusion = this.loadExclusion(state.root);
+      exclusionForBatch = undefined;
+    }
     const inner: LocalUpdateOptions = {
       lockHeld: true,
       stableMs: this.debounceMs,
       ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
       ...(this.options.now ? { now: this.options.now } : {}),
       signal: this.abort.signal,
+      ...(exclusionForBatch ? { exclusion: exclusionForBatch } : {}),
     };
     const syncOptions: SyncOptions = {
       requireRegistered: true,

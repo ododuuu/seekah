@@ -45,6 +45,8 @@ export interface LocalUpdateOptions {
   stableMs?: number;
   /** 檔案仍在變動或暫時無法讀取時，不原地退避，立即回傳 `deferred`（SPEC §54.3）。 */
   deferUnstable?: boolean;
+  /** 可選重用 RootExclusion（由 LiveUpdateEngine 傳 state.exclusion）；未提供時維持每檔 load 的原有行為（SPEC §61）。 */
+  exclusion?: RootExclusion;
 }
 
 function emptyResult(kind: LocalUpdateKind, filePath: string, root: string): LocalUpdateResult {
@@ -87,15 +89,6 @@ export async function withWriterBackoff<T>(
       await sleep(delay);
     }
   }
-}
-
-async function loadRootIgnore(root: string, store: IndexStore): Promise<{ match(filePath: string, isDirectory: boolean): boolean }> {
-  const exclusion = await RootExclusion.load(root, store);
-  return {
-    match(filePath, isDirectory) {
-      return shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, isDirectory);
-    },
-  };
 }
 
 export async function rootIsOnline(root: string, options: LocalUpdateOptions = {}): Promise<boolean> {
@@ -179,7 +172,12 @@ async function applyFileUpdateLocked(
     result.kind = "skipped";
     return result;
   }
-  const ignore = await loadRootIgnore(root, store);
+  const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
+  const ignore = {
+    match(filePath: string, isDirectory: boolean) {
+      return shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, isDirectory);
+    },
+  };
   const lstatFn = options.lstat ?? lstat;
   const parse = options.parse ?? parseDocument;
   const sleep = options.sleep ?? sleepMs;

@@ -1,5 +1,20 @@
 # 設計決策紀錄
 
+## D092：局部更新重用 RootExclusion 避免每檔重讀規則（perf P0-4）
+
+- 日期：2026-09-29。依 P0-4 分析與 SPEC §61 實作純效能改動。
+- 問題：local-update.ts applyFileUpdateLocked 每檔呼叫 loadRootIgnore → RootExclusion.load（讀 ignore + store.ignoreBases）；live 已有 state.exclusion 卻未傳入。
+- 決定：
+  - `LocalUpdateOptions` 加入可選 `exclusion?: RootExclusion`。
+  - LiveUpdateEngine 建立 inner 時傳入 `state.exclusion`（批次內 reuse）。
+  - 未傳時 fallback 每次 load，維持 CLI/watch/其他呼叫者原有行為。
+  - 快取失效由既有 handleEvent（規則檔/root） + runRoot 前重載（scope merge 後） + newState 保證；exclusion 為 immutable 實例，換新即生效。
+  - 結果完全等價，不改排除語意。
+- 驗證：m50（spy 計數 + 規則變更生效 + 等價行為）；npm test/build。
+- 相容：不改 schema、status、API 契約、排除結果。
+- 規則檔 parse 錯誤時：runRoot try loadSync 失敗，state.exclusion 仍用 builtinOnly（事件層不變），但 inner 不傳 exclusion，讓 apply 每檔 load 拋錯、更新失敗不寫入；與未傳 exclusion 一致。m50 d 驗證。
+- 版本：0.41.1。
+
 ## D093：平行分支開發與審查合併流程
 
 - 日期：2026-09-29。使用者要求多個 AI 工程師像團隊一樣同時實作不同任務，完成後提交分支，由審查者合併並處理衝突。AGENTS.md 原規定「每次只實作 STATUS 指定的進行中里程碑」。
