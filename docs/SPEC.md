@@ -1837,7 +1837,6 @@ docsearch doctor
 ### 59.1 重試條件與範圍
 
 - 僅在 `IndexStore.upgrade()` 內執行的格式升級路徑（`migratePayloads`、`migrateChunkStore`、舊 content_storage 升級、完成時的 metadata 寫入）中的 `BEGIN IMMEDIATE` 及隨後的寫入／COMMIT 區塊，遇到 SQLite errcode 5 (SQLITE_BUSY) 或 6 (SQLITE_LOCKED) 時重試。
-- 開啟資料庫（ctor 非唯讀連線的初始 PRAGMA 與 initializeSchema）若在遷移脈絡下遇到相同錯誤，亦納入同一重試策略。
 - 其他路徑（唯讀、search、upsert/remove/sync 非遷移 tx、acquireWriteLock 本身）不重試；仍立即失敗或回 IndexBusyError。
 
 ### 59.2 重試策略
@@ -1861,5 +1860,6 @@ docsearch doctor
 - 不無限等待或 blocking sleep。
 - 不改變 lockHeld、upgrade 契約或 schema。
 - 不影響搜尋或讀取命令的回應時間。
+- 開啟資料庫的初始化不重試。
 
-- package 版本 0.40.0（待合併時決定最終版號）。
+版本：待合併時決定。
