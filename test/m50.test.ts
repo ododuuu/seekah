@@ -86,10 +86,11 @@ async function startEngine(store: IndexStore, extra: Partial<LiveUpdateOptions> 
 }
 
 function fireDebounce(timers: FakeTimer[]): void {
-  const debounce = [...timers].reverse().find(item => item.ms <= DEBOUNCE);
-  assert.ok(debounce);
-  timers.splice(timers.indexOf(debounce), 1);
-  debounce.fn();
+  const idx = timers.findIndex(item => item.ms <= DEBOUNCE);
+  if (idx >= 0) {
+    const debounce = timers.splice(idx, 1)[0]!;
+    debounce.fn();
+  }
 }
 
 async function fixture(prefix: string, ignoreContent: string) {
@@ -187,6 +188,33 @@ test("m50 c) 未傳入 exclusion 時行為與原本相同", async () => {
     assert.equal(search(store, "skipped-content").length, 0);
   } finally {
     RootExclusion.load = origLoad;
+    store.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("m50 d) 規則檔內容錯誤時引擎批次更新行為與未傳 exclusion 一致（不會索引應排除檔）", async () => {
+  const { temp, root, store } = await fixture("m50-ruleerr-", "");  // good for initial sync
+  const passed: boolean[] = [];
+  const session = await startEngine(store, {
+    applyFileUpdate: (async (filePath: string, r: string, s: any, o: any = {}) => {
+      passed.push(!!o.exclusion);
+      return applyFileUpdate(filePath, r, s, { ...o, exclusion: undefined });
+    }) as any,
+  });
+  try {
+    await writeFile(path.join(root, ".localdocsearchignore"), "!\n");  // bad on disk
+    const bad = path.join(root, "bad.txt");
+    await writeFile(bad, "should-be-excluded-by-user-rule-but-parse-fails");
+    session.emitters.get(root)?.emit("change", "change", "bad.txt");
+    fireDebounce(session.timers);
+    await waitUntil(() => true, 300);
+    assert.ok(passed.length === 0 || passed.every(p => !p), "規則錯誤時引擎批次不應傳 exclusion");
+    assert.equal(search(store, "should-be-excluded-by-user-rule-but-parse-fails").length, 0);
+    assert.equal(store.getDocument(bad), undefined);
+  } finally {
+    session.stop.resolve();
+    await session.running.catch(() => {});
     store.close();
     await rm(temp, { recursive: true, force: true });
   }

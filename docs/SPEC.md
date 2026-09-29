@@ -1841,4 +1841,5 @@ docsearch doctor
   - root 變更/新增：newState 即載入新 exclusion。
 - 重用只影響效能，`excludes` 結果與直接 load 必須逐位元相同（含內建、scope 疊加、上層目錄）。
 - 新增 m50 測試驗證重用計數、規則變更後立即生效、不傳入時行為等價。
+- 規則檔內容錯誤時：runRoot 內 try loadSync 失敗則 state.exclusion 設 builtinOnly（事件過濾仍用），但 inner 不傳 exclusion，讓 apply 內每檔 load 拋錯、更新失敗、不寫入；與未傳 exclusion 行為一致。
 - 版本：待合併時決定。

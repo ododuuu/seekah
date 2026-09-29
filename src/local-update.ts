@@ -91,9 +91,6 @@ export async function withWriterBackoff<T>(
   }
 }
 
-
-
-
 export async function rootIsOnline(root: string, options: LocalUpdateOptions = {}): Promise<boolean> {
   try {
     const info = await (options.stat ?? stat)(root);

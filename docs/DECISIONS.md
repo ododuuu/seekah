@@ -12,6 +12,7 @@
   - 結果完全等價，不改排除語意。
 - 驗證：m50（spy 計數 + 規則變更生效 + 等價行為）；npm test/build。
 - 相容：不改 schema、status、API 契約、排除結果。
+- 規則檔 parse 錯誤時：runRoot try loadSync 失敗，state.exclusion 仍用 builtinOnly（事件層不變），但 inner 不傳 exclusion，讓 apply 每檔 load 拋錯、更新失敗不寫入；與未傳 exclusion 一致。m50 d 驗證。
 - 版本：待合併時決定。
 
 
