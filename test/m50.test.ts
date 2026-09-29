@@ -13,7 +13,7 @@ import { RootExclusion } from "../src/root-exclusion.js";
 import { LiveWorkQueue } from "../src/live-queue.js";
 import { DEBOUNCE_MAX_WAIT_FACTOR, LiveUpdateEngine, type LiveUpdateOptions } from "../src/live-update.js";
 
-const DEBOUNCE = 100;
+const DEBOUNCE = 200;
 
 type FakeTimer = { id: number; ms: number; fn: () => void };
 type FakeWatcher = EventEmitter & { close(): void; recursive: boolean };
@@ -195,27 +195,43 @@ test("m50 c) 未傳入 exclusion 時行為與原本相同", async () => {
 
 test("m50 d) 規則檔內容錯誤時引擎批次更新行為與未傳 exclusion 一致（不會索引應排除檔）", async () => {
   const { temp, root, store } = await fixture("m50-ruleerr-", "");  // good for initial sync
-  const passed: boolean[] = [];
+  let called = 0;
+  let received: RootExclusion | undefined = undefined;
+  const q = new LiveWorkQueue(store.databasePath, { now: () => Date.now() });
   const session = await startEngine(store, {
-    applyFileUpdate: (async (filePath: string, r: string, s: any, o: any = {}) => {
-      passed.push(!!o.exclusion);
-      return applyFileUpdate(filePath, r, s, { ...o, exclusion: undefined });
-    }) as any,
+    workQueue: q,
+    applyFileUpdate: (async (filePath: string, r: string, s: IndexStore, o: LocalUpdateOptions = {}) => {
+      called++;
+      received = o.exclusion;
+      return applyFileUpdate(filePath, r, s, o);  // 傳入引擎決定的 o（含或不含 exclusion），不強制改寫
+    }),
   });
   try {
-    await writeFile(path.join(root, ".localdocsearchignore"), "!\n");  // bad on disk
+    // 清除 writer lock 檔
+    const wlock = `${store.databasePath}.writer.sqlite`;
+    try { rmSync(wlock); } catch {}
+    await writeFile(path.join(root, ".localdocsearchignore"), "!\n");  // 明確觸發 parse '!' 錯誤
     const bad = path.join(root, "bad.txt");
     await writeFile(bad, "should-be-excluded-by-user-rule-but-parse-fails");
-    session.emitters.get(root)?.emit("change", "change", "bad.txt");
+    // 直接用 queue accept 強制 queued 項
+    q.acceptPath(root, "bad.txt", "event");
+    // 強制 launch runRoot 以保證 applyLocalBatch 執行（test 內部 cast，理由：繞過 timer 時機，驗證引擎傳的 exclusion）
+    const eng = session.engine as unknown as { enqueueReady(r: string): void };
+    eng.enqueueReady(root);
     fireDebounce(session.timers);
-    await waitUntil(() => true, 300);
-    assert.ok(passed.length === 0 || passed.every(p => !p), "規則錯誤時引擎批次不應傳 exclusion");
+    for (let i = 0; i < 2; i++) {
+      fireDebounce(session.timers);
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    await waitUntil(() => called > 0, 1000);
+    assert.ok(called >= 1, "applyFileUpdate 應至少被呼叫一次");
+    assert.strictEqual(received, undefined, "規則載入失敗時應傳 exclusion=undefined，讓 apply 內部 RootExclusion.load 也拋錯、檔不寫入索引");
     assert.equal(search(store, "should-be-excluded-by-user-rule-but-parse-fails").length, 0);
     assert.equal(store.getDocument(bad), undefined);
   } finally {
     session.stop.resolve();
     await session.running.catch(() => {});
     store.close();
-    await rm(temp, { recursive: true, force: true });
+    await rm(temp, { recursive: true, force: true }).catch(() => {});
   }
 });
