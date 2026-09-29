@@ -7,10 +7,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { LiveWorkQueue } from "../src/live-queue.js";
-import { LiveUpdateEngine } from "../src/live-update.js";
+import { LOCAL_PREPARED_GROUP_MAX_MS, LiveUpdateEngine } from "../src/live-update.js";
 import { WRITER_BACKOFF_MS, withWriterBackoff } from "../src/local-update.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { parseDocument } from "../src/parser.js";
 import { sync } from "../src/sync.js";
 import { acquireWriteLock, IndexBusyError } from "../src/write-lock.js";
 
@@ -70,7 +71,9 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
 
     const originalUpsert = store.upsert.bind(store);
     let upsertCalls = 0;
+    const attemptedPaths: string[] = [];
     const injectedUpsert = (...args: Parameters<IndexStore["upsert"]>): void => {
+      attemptedPaths.push(args[0].path);
       upsertCalls++;
       if (blockSecond && upsertCalls >= 2) {
         mainHolder ??= new DatabaseSync(database);
@@ -80,6 +83,7 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
       return originalUpsert(...args);
     };
     Reflect.set(store, "upsert", injectedUpsert);
+    let bPrepared = false;
 
     const engine = new LiveUpdateEngine(store, [root], {
       mode: "foreground",
@@ -87,6 +91,12 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
       reconcileMs: 0,
       syncNow: false,
       watch: fakeWatch(),
+      parse: async filePath => {
+        const parsed = await parseDocument(filePath);
+        if (path.basename(filePath) === "b.txt") bPrepared = true;
+        return parsed;
+      },
+      now: () => bPrepared ? LOCAL_PREPARED_GROUP_MAX_MS : 0,
       workQueue: queue,
       sleep: async ms => {
         if (ms >= WRITER_BACKOFF_MS[0]!) throw new Error("m57 detected unbounded prepared busy retry");
@@ -114,6 +124,11 @@ test("m57: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
     const failed = () => logs.some(line => line.includes("LIVE_UPDATE_FAILED") || line.includes("監看同步失敗"));
     await waitUntil(() => busySeen || failed());
     assert.equal(failed(), false);
+    assert.deepEqual([...new Set(attemptedPaths.map(filePath => path.relative(root, filePath)))].sort(), ["a.txt", "b.txt"]);
+    assert.equal(search(store, "m57-a").length, 1, "第一輪成功的 a.txt 應已 ack");
+    assert.equal(search(store, "m57-b").length, 0);
+    assert.equal(search(store, "m57-c").length, 0);
+    assert.deepEqual(queue.listPaths(root).map(item => item.relPath).sort(), ["b.txt", "c.txt"]);
     await waitUntil(() => timers.some(timer => timer.ms === WRITER_BACKOFF_MS[0]));
 
     const probeRelease = acquireWriteLock(database);

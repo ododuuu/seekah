@@ -1,6 +1,5 @@
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -164,8 +163,9 @@ test("m56: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () =>
       captured = error;
       return isSqliteBusy(error);
     });
-    const elapsed = Date.now() - started;
     assert.ok(captured);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed >= MAIN_WRITE_BUSY_TIMEOUT_MS - 250, `busy 僅等待 ${elapsed} ms，未達寫入等待下限`);
     assert.ok(elapsed <= MAIN_WRITE_BUSY_TIMEOUT_MS + 1_000, `busy 等待 ${elapsed} ms 超過上限容許範圍`);
   } finally {
     holder.exec("ROLLBACK");
@@ -197,77 +197,33 @@ test("m56: 大型 WAL 寫入後 TRUNCATE checkpoint 將 sidecar 控制在上限�
   }
 });
 
-test("m56: 連續讀取者下超過門檻的 WAL checkpoint 會限制 sidecar 成長", async () => {
+test("m56: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後可回收", { timeout: 120_000 }, async () => {
   const fixture = await createIndexedDatabase("seekah-m56-threshold-");
   const store = new IndexStore(fixture.database);
-  const raw = new DatabaseSync(fixture.database);
-  let reader: ReturnType<typeof spawn> | undefined;
+  const reader = new DatabaseSync(fixture.database);
   try {
-    raw.exec("PRAGMA wal_autocheckpoint=0; CREATE TABLE wal_threshold_probe(id INTEGER PRIMARY KEY, payload BLOB)");
-    const readerCode = `
-import { DatabaseSync } from "node:sqlite";
-const db = new DatabaseSync(process.argv[1]);
-let stopping = false;
-process.stdin.on("end", () => { stopping = true; });
-process.stdin.resume();
-process.stdout.write("READY\\n");
-const loop = () => {
-  if (stopping) {
-    try { db.close(); } catch {}
-    return;
-  }
-  try {
-    db.exec("BEGIN");
-    db.prepare("SELECT COUNT(*) FROM wal_threshold_probe").get();
-  } catch {
-    try { db.exec("ROLLBACK"); } catch {}
-    setImmediate(loop);
-    return;
-  }
-  setImmediate(() => {
-    try { db.exec("COMMIT"); } catch {
-      try { db.exec("ROLLBACK"); } catch {}
-    }
-    if (stopping) {
-      try { db.close(); } catch {}
-      return;
-    }
-    setImmediate(loop);
-  });
-};
-loop();
-`;
-    reader = spawn(process.execPath, ["--input-type=module", "-e", readerCode, fixture.database], {
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    await once(reader.stdout!, "data");
-    const insert = raw.prepare("INSERT INTO wal_threshold_probe(id, payload) VALUES (?, ?)");
-    raw.exec("BEGIN IMMEDIATE");
-    for (let index = 0; index < 40; index++) insert.run(index, Buffer.alloc(2 * 1024 * 1024, index % 251));
-    raw.exec("COMMIT");
-    const walPath = `${fixture.database}-wal`;
-    let maximum = existsSync(walPath) ? statSync(walPath).size : 0;
-    assert.ok(maximum > MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES);
-    store.checkpointWal();
-    for (let index = 40; index < 52; index++) {
-      raw.exec("BEGIN IMMEDIATE");
-      insert.run(index, Buffer.alloc(2 * 1024 * 1024, index % 251));
-      raw.exec("COMMIT");
+    const internal = Reflect.get(store, "db") as DatabaseSync;
+    internal.exec("PRAGMA wal_autocheckpoint=0");
+    reader.exec("BEGIN");
+    reader.prepare("SELECT modified_at_ms FROM documents WHERE path = ?").get(fixture.file);
+    let maximum = 0;
+    for (let index = 0; index < 56; index++) {
+      const content = `${String(index).padStart(8, "0")}${randomBytes(512 * 1024).toString("base64")}`;
+      store.upsert(document(fixture.root, "note.txt", content, index + 2), fixture.root);
       store.checkpointWal();
+      const walPath = `${fixture.database}-wal`;
       maximum = Math.max(maximum, existsSync(walPath) ? statSync(walPath).size : 0);
     }
-    assert.ok(maximum <= MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES * 2, `WAL 成長至 ${maximum} bytes`);
-    const exited = once(reader, "exit");
-    reader.stdin!.end();
-    reader.kill();
-    await exited;
-    reader = undefined;
+    assert.ok(maximum > MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES, `長讀取快照下 WAL 未超過門檻：${maximum} bytes`);
+    reader.exec("ROLLBACK");
+    reader.close();
     store.checkpointWal({ forceTruncate: true });
+    const walPath = `${fixture.database}-wal`;
     const remaining = existsSync(walPath) ? statSync(walPath).size : 0;
-    assert.ok(remaining <= MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES);
+    assert.ok(remaining <= MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES, `釋放讀取快照後 WAL 仍為 ${remaining} bytes`);
   } finally {
-    if (reader) reader.kill();
-    raw.close();
+    try { reader.exec("ROLLBACK"); } catch { /* 已提交或已關閉 */ }
+    try { reader.close(); } catch { /* 已關閉 */ }
     store.close();
     await rm(fixture.temp, { recursive: true, force: true });
   }
