@@ -14,7 +14,7 @@
 - 所有文件處理都必須留在本機，不得將文件內容上傳至外部服務。
 - 不得自行加入 OCR、embedding、LAN 暴露或未規格化的新格式。MCP、TUI、本機 GUI 與可選 AI API 已依後續 SPEC 交付；新增行為必須先寫入 SPEC／DECISIONS。
 - 不得自行改變產品行為；預定行為寫入 `docs/SPEC.md`，設計決策寫入 `docs/DECISIONS.md`。
-- 每次只實作 `docs/STATUS.md` 指定的進行中里程碑。
+- 每次只實作 `docs/STATUS.md` 指定的進行中里程碑；使用者核准平行開發時，依 D093：每項工作一條分支與一個 git worktree，事先分配 SPEC 章節與決策編號，只改自己的範圍並在分支提交；`package.json` 版本、`docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md` 由審查合併者統一更新。
 - 每項行為變更都必須新增或更新自動測試。
 - 所有專案說明文件、規格、狀態與決策紀錄都使用繁體中文；程式識別字、命令與通用技術名稱可保留英文。
 - 每次工作結束時更新 `docs/STATUS.md`，並將重要決策加入 `docs/DECISIONS.md`。

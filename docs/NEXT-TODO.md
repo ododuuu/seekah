@@ -22,11 +22,11 @@
 - [ ] 以檔名命中為代表的結果，內文也有命中時顯示內文片段（目前只顯示「檔名符合」）。
 - [ ] 逐檔處理的穩定等待佔每輪約四分之一：移入大量檔案時整體處理完比整棵同步慢約 1.8 倍，可研究讓等待與處理重疊。
 - [ ] 0.39.2 真實環境：重啟 `autoupdate` 後，Codex／Claude 大量寫入期間新建檔案可在數十秒內搜尋。
-- [ ] 「失敗scope」拆成「讀取失敗」與「延後核對」：現在兩者同名，使用者看到可讀資料夾被列為失敗。
+- [x] 0.41.0 已依 D091 將「失敗scope」拆成「讀取失敗」與「延後核對」（SPEC §60）。
 - [ ] 0.39.1 真實環境：以新版重新啟動 `autoupdate`，確認 `C:\Users\mains` 為 split、`AppData` 無 watcher、CPU 回落、背景校正「剩餘範圍」會前進到完成。
 - [ ] 0.39.0 公司 Windows 驗收：舊 index 遷移時間與壓縮後大小、常見詞第一頁延遲、精確總數、Workbench 202→自動重送與總筆數設定。
 - [x] 0.38.1 已依 D082 修正大量刪除效能（SPEC §51）。
-- [ ] 另案：遷移遇到 SQLITE_BUSY 直接失敗（`database is locked`），應可重試或等待。
+- [x] 0.41.0 已依 D090 讓遷移交易遇到 SQLITE_BUSY 時有限重試（SPEC §59）；開啟資料庫的初始化仍不重試。
 - [ ] 0.38.0 公司 Windows 驗收：舊 index 遷移時間、索引大小、`SPEC.md`／`測試`／常見詞延遲、Workbench 202→自動重送。
 - [ ] 仍待處理（原 ADR 前補證清單）：公司 Windows 實機；all-terms／`field`／`sort`／type／root／subtree 等價；top-K／total count 語意（`e` 156,218 筆約 3.3 s）；C2 大小縮減（optimize、columnsize、token 設計）；巨大 block 的 offset snippet；建置串流 tokenizer（峰值 RSS 約 2 GiB）；大型 xlsx 的每文件 upsert 延遲。
 - [ ] 所有使用中的 index 都遷移後，移除遷移期舊搜尋路徑（Bloom／文件級 postings）程式碼。
