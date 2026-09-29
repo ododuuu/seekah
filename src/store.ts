@@ -152,6 +152,8 @@ const UNIGRAM_TABLE = "search_unigrams";
 const TRIGRAM_TABLE = "search_trigrams";
 /** 主索引連線的 busy 等待上限；協調資料庫仍由 write-lock.ts 維持零等待。 */
 export const MAIN_READ_BUSY_TIMEOUT_MS = 200;
+/** writable constructor／schema 初始化的同步等待上限。 */
+export const MAIN_INITIALIZE_BUSY_TIMEOUT_MS = 200;
 export const MAIN_WRITE_BUSY_TIMEOUT_MS = 1_500;
 /** WAL 自動 checkpoint 目標約 2 MiB；實際值依 page size 換算。 */
 export const MAIN_WAL_AUTOCHECKPOINT_BYTES = 2 * 1024 * 1024;
@@ -479,8 +481,8 @@ export function collectIndexStorage(
 
 
 // Node.js 22.16.0 起支援建構時設定 timeout，但目前鎖定的 @types/node
-// 尚未宣告此欄位。開庫即安裝主索引的 bounded busy handler；協調資料庫
-// 仍在 write-lock.ts 使用 timeout=0，避免第一個 BEGIN IMMEDIATE 等待。
+// 尚未宣告此欄位。constructor/schema 先使用短 bounded handler，初始化完成後
+// writable 主庫才切換成寫入階段上限；協調資料庫仍在 write-lock.ts 使用 timeout=0。
 function databaseOptions(timeoutMs: number, options: { readOnly?: boolean } = {}): ConstructorParameters<typeof DatabaseSync>[1] {
   return { ...options, timeout: timeoutMs } as ConstructorParameters<typeof DatabaseSync>[1];
 }
@@ -548,8 +550,8 @@ export class IndexStore {
     const fresh = !existsSync(databasePath);
     const release = acquireWriteLock(databasePath);
     try {
-      this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_WRITE_BUSY_TIMEOUT_MS));
-      this.db.exec(`PRAGMA busy_timeout = ${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
+      this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_INITIALIZE_BUSY_TIMEOUT_MS));
+      this.db.exec(`PRAGMA busy_timeout = ${MAIN_INITIALIZE_BUSY_TIMEOUT_MS}`);
       this.configureWal();
       this.registerSearchFunctions();
       this.db.exec(`PRAGMA cache_size = ${PAGE_CACHE_KIB}`);
@@ -564,6 +566,8 @@ export class IndexStore {
         this.purgeCompletedMigrationMarkers();
       }
       this.pathOrder = this.loadPathOrder();
+      // Constructor/schema work uses the short bound; normal transactions use the write bound.
+      this.db.exec(`PRAGMA busy_timeout = ${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
   }

@@ -2119,7 +2119,7 @@ docsearch doctor
 
 ### 66.2 主庫 busy 等待上限
 
-- 主索引 writable connection 的開庫 timeout 為 `MAIN_WRITE_BUSY_TIMEOUT_MS = 1500` ms，readonly connection 為 `MAIN_READ_BUSY_TIMEOUT_MS = 200` ms；建構時設定後，再以對應 `PRAGMA busy_timeout` 明確固定，避免只依賴開庫後設定。
+- writable `IndexStore` constructor／schema initialization 的 timeout 為 `MAIN_INITIALIZE_BUSY_TIMEOUT_MS = 200` ms；初始化完成後，writable connection 才切換為 `MAIN_WRITE_BUSY_TIMEOUT_MS = 1500` ms，readonly connection 為 `MAIN_READ_BUSY_TIMEOUT_MS = 200` ms。三者都以 constructor option 與對應 `PRAGMA busy_timeout` 固定，避免只依賴開庫後設定。
 - `write-lock.ts` 的 coordination database、`live-lease`、`live-queue` 與 work state connection 維持 `timeout=0`／`PRAGMA busy_timeout=0`；coordination lock 競爭仍立即轉為 `INDEX_BUSY`。
 - 一般主庫 busy 只等待上述上限，之後回傳 SQLite busy 給既有 CLI／Workbench／LiveUpdate root catch。§59 的 migration transaction retries 與 §65 的 background safety retry 保留，但不得形成無限重試。
 

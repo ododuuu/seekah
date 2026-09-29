@@ -11,6 +11,7 @@ import type { DocumentRecord } from "../src/model.js";
 import { isSqliteBusy } from "../src/write-lock.js";
 import {
   IndexStore,
+  MAIN_INITIALIZE_BUSY_TIMEOUT_MS,
   MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES,
   MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES,
   MAIN_WRITE_BUSY_TIMEOUT_MS,
@@ -70,6 +71,27 @@ test("m56: WAL 讓 reader 保留舊快照且 Seekah writer 可提交新版本", 
     try { reader.exec("ROLLBACK"); } catch { /* 已提交 */ }
     reader.close();
     store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("m56: writable constructor uses the short initialization busy bound", async () => {
+  const fixture = await createIndexedDatabase("seekah-m56-init-bound-");
+  setRollbackJournal(fixture.database);
+  const blocker = new DatabaseSync(fixture.database);
+  blocker.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
+  let contended: IndexStore | undefined;
+  const warnings: string[] = [];
+  try {
+    const started = Date.now();
+    contended = new IndexStore(fixture.database, { onWarning: message => warnings.push(message) });
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed <= MAIN_INITIALIZE_BUSY_TIMEOUT_MS + 400, `constructor 等待 ${elapsed} ms 超過短初始化上限`);
+    assert.ok(warnings.some(message => message.includes("WAL")));
+  } finally {
+    contended?.close();
+    blocker.exec("ROLLBACK");
+    blocker.close();
     await rm(fixture.temp, { recursive: true, force: true });
   }
 });
