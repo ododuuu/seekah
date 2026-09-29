@@ -769,8 +769,8 @@ export class LiveUpdateEngine {
       try { second = await fs.promises.lstat(candidate.item.filePath); } catch { second = undefined; }
       if (!second) {
         await flushPrepared();
+        if (result.busy) { result.interrupted = true; break; }
         if (this.stopping) { result.interrupted = true; break; }
-        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions));
         continue;
       }
       if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
@@ -782,6 +782,7 @@ export class LiveUpdateEngine {
         preparedCharacters + estimatedCharacters > LOCAL_PREPARED_MAX_TEXT_CHARS
       )) {
         await flushPrepared();
+        if (result.busy) { result.interrupted = true; break; }
         if (this.stopping) { result.interrupted = true; break; }
       }
 
@@ -808,6 +809,7 @@ export class LiveUpdateEngine {
       // 來源 size 先作準備前的保守預留；壓縮格式若解析後膨脹，這份文件單獨成組。
       if (preparedGroup.length > 0 && preparedCharacters + textChars > LOCAL_PREPARED_MAX_TEXT_CHARS) {
         await flushPrepared();
+        if (result.busy) { result.interrupted = true; break; }
         if (this.stopping) { result.interrupted = true; break; }
         groupStartedAt = this.now();
       }
@@ -817,7 +819,10 @@ export class LiveUpdateEngine {
         preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
         preparedCharacters >= LOCAL_PREPARED_MAX_TEXT_CHARS ||
         this.now() - groupStartedAt >= LOCAL_PREPARED_GROUP_MAX_MS
-      ) await flushPrepared();
+      ) {
+        await flushPrepared();
+        if (result.busy) { result.interrupted = true; break; }
+      }
     }
     if (!this.stopping) await flushPrepared();
     else discardPrepared();
