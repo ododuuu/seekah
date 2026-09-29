@@ -36,6 +36,11 @@ function setRollbackJournal(database: string): void {
     db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE");
   } finally { db.close(); }
 }
+function sqliteError(message: string, code: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, "code", { value: code });
+  return error;
+}
 
 async function createIndexedDatabase(prefix: string): Promise<{ temp: string; root: string; database: string; file: string }> {
   const temp = await mkdtemp(path.join(os.tmpdir(), prefix));
@@ -170,6 +175,49 @@ test("m58: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () =>
   } finally {
     holder.exec("ROLLBACK");
     holder.close();
+    store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+test("m58: checkpoint 只吞 busy 並以 onWarning 回報其他錯誤一次", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-checkpoint-error-");
+  const warnings: string[] = [];
+  const store = new IndexStore(fixture.database, { onWarning: message => warnings.push(message) });
+  const db = Reflect.get(store, "db") as DatabaseSync;
+  try {
+    const originalPrepare = db.prepare.bind(db);
+    let failure = sqliteError("injected checkpoint failure", "SQLITE_IOERR");
+    Reflect.set(db, "prepare", (sql: string) => {
+      if (sql.startsWith("PRAGMA wal_checkpoint")) throw failure;
+      return originalPrepare(sql);
+    });
+    store.checkpointWal({ forceTruncate: true });
+    store.checkpointWal({ forceTruncate: true });
+    assert.equal(warnings.filter(message => message.includes("checkpoint")).length, 1);
+    failure = sqliteError("injected checkpoint busy", "SQLITE_BUSY");
+    store.checkpointWal({ forceTruncate: true });
+    assert.equal(warnings.filter(message => message.includes("checkpoint")).length, 1);
+  } finally {
+    store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("m58: checkpoint 還原 busy_timeout 失敗會以 onWarning 回報一次", async () => {
+  const fixture = await createIndexedDatabase("seekah-m58-checkpoint-restore-");
+  const warnings: string[] = [];
+  const store = new IndexStore(fixture.database, { onWarning: message => warnings.push(message) });
+  const db = Reflect.get(store, "db") as DatabaseSync;
+  try {
+    const originalExec = db.exec.bind(db);
+    Reflect.set(db, "exec", (sql: string) => {
+      if (sql.startsWith("PRAGMA busy_timeout=1500")) throw sqliteError("injected timeout restore failure", "SQLITE_IOERR");
+      return originalExec(sql);
+    });
+    store.checkpointWal();
+    store.checkpointWal();
+    assert.equal(warnings.filter(message => message.includes("busy_timeout")).length, 1);
+  } finally {
     store.close();
     await rm(fixture.temp, { recursive: true, force: true });
   }

@@ -12,7 +12,7 @@
 - 決定：
   - writable `IndexStore` 在 coordination writer lock 內嘗試 `PRAGMA journal_mode=WAL`；fresh database 直接建 WAL，既有 rollback database 在下一次 writable open 轉換。轉換因 busy 或 SQLite 回傳非 WAL 時記錄診斷、保留原模式、不中止 writable open，下一次再試；readonly 永不改 mode。
   - 主索引 centralized constants：constructor／schema 初始化 busy 上限 200 ms、readonly busy 上限 200 ms、初始化完成後 writable 寫入上限 1500 ms；constructor option 與後續 PRAGMA 依階段設定。`write-lock.ts`、live lease、live queue 與 work state 維持零等待。
-  - WAL writable connection 以 page size 換算約 2 MiB `wal_autocheckpoint`，設定 4 MiB `journal_size_limit`；每批提交先做 non-blocking `PASSIVE`，`-wal` 超過 64 MiB 才在 coordination writer lock 內各做一次 `RESTART`／`TRUNCATE`。full sync／rebuild、migration、compact／VACUUM 可額外要求一次 truncate；checkpoint 失敗不重試卡住。
+  - WAL writable connection 以 page size 換算約 2 MiB `wal_autocheckpoint`，設定 4 MiB `journal_size_limit`；每批提交先做 non-blocking `PASSIVE`，`-wal` 超過 64 MiB 才在 coordination writer lock 內各做一次 `RESTART`／`TRUNCATE`。`SQLITE_BUSY`／`SQLITE_LOCKED` checkpoint 失敗維持 non-fatal；其他 checkpoint 錯誤與 `busy_timeout` 還原失敗各透過 `onWarning` 回報一次，不重試卡住寫入。
   - CLI 將 `SQLITE_READONLY_ROLLBACK` 776、`SQLITE_READONLY_CANTINIT` 1288、`SQLITE_CANTOPEN_DIRTYWAL` 1294 視為 `INDEX_RECOVERY_REQUIRED`；既有 hot journal 回復與 sidecar status 列舉保留。
 - 理由：
   - WAL 直接解決本機搜尋 reader snapshot 阻塞索引 writer 的主要互斥；但 `DatabaseSync` busy handler 是同步阻塞。constructor 初始化的每一條受影響 statement 最多阻塞 200 ms，正常寫入 statement 最多阻塞 1500 ms，多條 statement 可能累加；這是有上限的同步停頓，不是無限等待。coordination lock 仍保留跨程序 `INDEX_BUSY` 的即時語意。

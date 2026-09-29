@@ -500,7 +500,7 @@ const SUPPLEMENTARY_PATH = /[\u{10000}-\u{10ffff}]/u;
 
 export interface IndexStoreOptions {
   readOnly?: boolean;
-  /** 只在 WAL 切換因忙碌而延後時呼叫；預設寫到 stderr。 */
+  /** WAL 切換、checkpoint 或 busy_timeout 還原需要診斷時呼叫；預設寫到 stderr。 */
   onWarning?: (message: string) => void;
 }
 
@@ -509,6 +509,7 @@ export class IndexStore {
   private readonly readOnly: boolean;
   private readonly onWarning: (message: string) => void;
   private walSwitchDeferred = false;
+  private readonly walWarningKeys = new Set<string>();
   private walEnabled = false;
   readonly databasePath: string;
   private pathOrder: ChunkPathOrder = "native";
@@ -601,6 +602,17 @@ export class IndexStore {
       this.onWarning("主索引 WAL 已啟用，但 checkpoint 大小設定因 SQLite 忙碌延後；下次 writable open 重試。");
     }
   }
+  private warnWalOnce(key: string, message: string): void {
+    if (this.walWarningKeys.has(key)) return;
+    this.walWarningKeys.add(key);
+    this.onWarning(message);
+  }
+
+  private describeWalError(error: unknown): string {
+    if (error instanceof Error && error.message) return error.message;
+    return String(error);
+  }
+
   private registerSearchFunctions(): void {
     this.db.function("seekah_utf16_sort_key", { deterministic: true }, value =>
       typeof value === "string" ? utf16SortKey(value) : new Uint8Array());
@@ -2509,10 +2521,16 @@ export class IndexStore {
       // backoff.  It is best effort; the next batch gets another attempt.
       this.db.exec("PRAGMA busy_timeout=0");
       this.db.prepare(`PRAGMA wal_checkpoint(${mode})`).get();
-    } catch {
-      // Readers can legitimately defer RESTART/TRUNCATE.
+    } catch (error) {
+      if (!isSqliteBusy(error)) {
+        this.warnWalOnce("checkpoint", `主索引 WAL checkpoint（${mode}）失敗：${this.describeWalError(error)}`);
+      }
     } finally {
-      try { this.db.exec(`PRAGMA busy_timeout=${MAIN_WRITE_BUSY_TIMEOUT_MS}`); } catch { /* closing */ }
+      try {
+        this.db.exec(`PRAGMA busy_timeout=${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
+      } catch (error) {
+        this.warnWalOnce("restore-busy-timeout", `主索引 WAL busy_timeout 還原失敗：${this.describeWalError(error)}`);
+      }
     }
   }
 

@@ -2126,7 +2126,7 @@ docsearch doctor
 ### 66.3 WAL 大小與 checkpoint
 
 - writable WAL connection 必須依主庫 `page_size` 設定約 2 MiB 的 `wal_autocheckpoint`，並設定 `journal_size_limit = 4 MiB`。實際 checkpoint page 數為 `floor(2 MiB / page_size)`，至少一頁。
-- 每個寫入批次提交後先嘗試 `PRAGMA wal_checkpoint(PASSIVE)`；只有 `-wal` 超過 `MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES = 64 MiB` 時，才在 coordination writer lock 內各嘗試一次 `RESTART`／`TRUNCATE`。checkpoint 使用零等待、不得卡住寫入、不得重試迴圈；忙碌或失敗一律 non-fatal，下一批再嘗試。full rebuild／完整 sync、migration、`compact`／`VACUUM` 完成後可額外要求一次 `TRUNCATE`。
+- 每個寫入批次提交後先嘗試 `PRAGMA wal_checkpoint(PASSIVE)`；只有 `-wal` 超過 `MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES = 64 MiB` 時，才在 coordination writer lock 內各嘗試一次 `RESTART`／`TRUNCATE`。checkpoint 使用零等待、不得卡住寫入、不得重試迴圈；`SQLITE_BUSY`／`SQLITE_LOCKED` non-fatal 且不警告，其他 checkpoint 錯誤及還原 `busy_timeout` 失敗各以 `onWarning` 回報一次，下一批再嘗試。full rebuild／完整 sync、migration、`compact`／`VACUUM` 完成後可額外要求一次 `TRUNCATE`。
 - 產品程式不得為搜尋新增長時間顯式 read transaction；真實搜尋維持既有 statement 讀取邊界。外部或測試讀取者若長時間保留 snapshot，仍可能延後 checkpoint；`journal_size_limit` 是回收目標，不是讀者持鎖時的硬上限。
 - checkpoint 不改變搜尋內容、文件 ID、generation、transaction 原子性或已提交資料；WAL／SHM 是主索引儲存足跡的一部分。
 
@@ -2148,5 +2148,5 @@ docsearch doctor
 ### 66.6 明確不做
 
 - 不加入 OCR、embedding、LAN 暴露、新文件格式、外部文件服務或文件內容外傳；所有 WAL／checkpoint／回復都在本機。
-- 不以關閉 durability、刪除 WAL／journal、跳過 transaction 或吞掉一般 SQLite 錯誤解決容量／鎖競爭；不改搜尋排序、索引正文、schema 契約或既有資料遷移語意。
+- 不以關閉 durability、刪除 WAL／journal、跳過 transaction 或靜默吞掉一般 SQLite 錯誤解決容量／鎖競爭；checkpoint 的非 busy 錯誤必須留下 `onWarning` 診斷；不改搜尋排序、索引正文、schema 契約或既有資料遷移語意。
 - 不把長時間 readonly transaction 加入產品搜尋；外部／測試讀取者若持續保留 snapshot，checkpoint 只能 best effort，不能以無限等待或無限重試換取 truncate。
