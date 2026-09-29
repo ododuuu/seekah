@@ -1,5 +1,24 @@
 # 設計決策紀錄
 
+
+## D090：遷移時對 SQLITE_BUSY 做有限重試（而非提高 busy_timeout 或全域等待）
+
+- 日期：2026-09-29。任務來源 docs/NEXT-TODO 第 29 行及 D082 末「不在本版處理：遷移遇到 SQLITE_BUSY 時直接失敗（`database is locked`）的問題，另案處理」。
+- 事實：src/store.ts ctor 與 migrate*（migrateChunkStore、migratePayloads）內的 BEGIN IMMEDIATE 在 timeout=0 + PRAGMA busy=0 下，遇到主庫鎖定即直接 throw raw sqlite 錯誤或讓上層看到 database is locked；acquireWriteLock 僅保護 coordination 的 .writer.sqlite ，main db 的 batch tx 在持有 coordination 時仍可能因第二連線、WAL checkpoint 或 timing 拿到 BUSY。sync/upgrade 路徑目前無重試。
+- 決定：
+  - 只針對遷移格式升級的 tx 區塊加入有限重試（退避上限總等待 ~8s，5 次）；重試用 async sleep + yieldToEvents，失敗後仍 rollback 並轉拋（cli 會顯示 INDEX_BUSY）。
+  - 開庫初始 exec 也在 write 情境下包 retry（但不改 ro）。
+  - 維持 write-lock / ctor / coordination 的 0 等待不變。
+  - 新增 test/m48.test.ts 用第二個 DatabaseSync 連線持有 main db 寫鎖來模擬 busy，驗證重試後成功。
+- 取捨與否決：
+  - 選有限重試而非 busy_timeout=5000：避免 Windows 繼承非零值導致 BEGIN 前卡住；也避免長時間 block 單執行緒；重試明確可控且有上限。
+  - 只限遷移（而非所有寫入）：日常 upsert 已由 caller withWriterBackoff 或 lock 保護；擴張會讓並行 bug 更難發現。D082 已承諾另案。
+  - 不用無限 retry 或 promise 無限等：符合「不阻塞」原則，與 local update 退避一致。
+  - 相容：不動 schema、lockHeld、IndexBusyError 契約；現有 5/6 碼處理繼續有效。
+- 實作風險：重試只包 migration tx，test 必須 bypass acquire 直接持 main lock 才能觸發；若 SQLite 在同程序多 conn 行為不同，需實測。
+- 版本：待合併時決定。
+
+
 ## D088：0.40.0 工作台搜尋結果改為搜尋引擎式列表，移除明細頁
 
 - 日期：2026-09-29。使用者認為明細頁的預覽「很醜」，要求改成類似 Google 搜尋；使用者同意「照建議」並確認先只改工作台畫面。行為見 SPEC §57。
