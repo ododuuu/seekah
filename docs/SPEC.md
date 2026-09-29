@@ -2,7 +2,7 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.42.0（第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.42.0（第 67 節工作台與索引 worker 的 SQLITE_BUSY 呈現；第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-29
 - 狀態：package 為 0.42.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
@@ -2104,5 +2104,27 @@ docsearch doctor
 - 不把一般 SQLite 寫入全面改成無限重試；只沿用既有背景更新 backoff，其他非 busy 錯誤維持原本失敗分類。
 - 不改 schema、generation、搜尋結果、索引內容、排除規則或本機處理邊界；不加入網路或外部服務。
 - `test/m55.test.ts` 以第二條主庫連線持有讀鎖觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放讀鎖後下一輪完成，且新增內容可搜尋。
+- package 版本維持 0.42.0。
+
+
+## 67. 工作台與索引 worker 的 SQLITE_BUSY 呈現
+
+依 D099。即使背景寫入已改走 INDEX_BUSY 重試或主庫改為 WAL，工作台 HTTP API 與索引 worker 在等待逾時、checkpoint 邊界或仍持有互斥鎖時，仍可能收到 SQLite errcode 5／6。這些錯誤必須以固定 `INDEX_BUSY` 訊息回給使用者，不得把原文 `database is locked` 放進 `error` 欄或索引進度。
+
+### 67.1 工作台 HTTP
+
+- `POST /api/settings` 讀取與寫入索引設定、`POST /api/index-roots/trash`、`DELETE /api/trash` 以共用 `withIndexStore` 開啟主庫：沿用既有 `openStore` 的五次有上限重試與 `isSqliteBusy`／`IndexBusyError` 判斷，不另複製第三份 busy 檢查。
+- 重試耗盡後回 HTTP 409，`error` 為「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」。
+- 共用 API catch 對任何仍冒出的 `isSqliteBusy`／`IndexBusyError` 同樣轉成上述 409 與固定訊息，作為最後防線；非 busy 錯誤維持原狀態碼與原文。
+- `/api/search` 經 `openStore` 最終仍 busy 時走同一 409 契約。
+
+### 67.2 索引 worker
+
+- `src/index-worker.ts` 失敗時若為 `IndexBusyError` 或 `isSqliteBusy`，`post({ type: "error", message, code: "INDEX_BUSY" })` 使用同一固定訊息。工作台既有 `code === "INDEX_BUSY"` 分支繼續顯示該訊息。
+
+### 67.3 明確不做與驗收
+
+- 不改 `busy_timeout`、journal mode、`src/store.ts`、`src/live-update.ts`、`src/local-update.ts`、`src/write-lock.ts`。
+- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，對工作台呼叫 `POST /api/settings`、兩個 trash 端點與 `/api/search`，回應含 `INDEX_BUSY`、不含 `database is locked`、狀態 409；放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。
 - package 版本維持 0.42.0。
 

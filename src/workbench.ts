@@ -154,22 +154,36 @@ function modelRoute(input: ContextRequest, keys: ProviderKeys) {
   });
 }
 
+const INDEX_BUSY_CLIENT_MESSAGE = "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。";
 
-async function openStore<T>(databasePath: string, operation: (store: IndexStore) => T | Promise<T>): Promise<T> {
-  if (!existsSync(databasePath)) throw new Error("索引尚未建立；仍可只使用拖曳文件。");
+async function withIndexStore<T>(
+  databasePath: string,
+  options: { readOnly?: boolean },
+  operation: (store: IndexStore) => T | Promise<T>,
+): Promise<T> {
   for (let attempt = 0; attempt < 5; attempt++) {
     let store: IndexStore | undefined;
     try {
-      store = new IndexStore(databasePath, { readOnly: true });
+      store = new IndexStore(databasePath, options.readOnly ? { readOnly: true } : undefined);
       return await operation(store);
     } catch (error) {
-      if (!isSqliteBusy(error) || attempt === 4) throw error;
-      await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+      if (!(error instanceof IndexBusyError || isSqliteBusy(error)) || attempt === 4) {
+        throw error instanceof IndexBusyError || isSqliteBusy(error)
+          ? Object.assign(new Error(INDEX_BUSY_CLIENT_MESSAGE), { statusCode: 409 })
+          : error;
+      }
+      await new Promise<void>(resolve => { setTimeout(resolve, 100 * (attempt + 1)); });
     } finally {
       store?.close();
     }
   }
-  throw new Error("索引目前無法唯讀讀取，請稍後重試。");
+  throw Object.assign(new Error(INDEX_BUSY_CLIENT_MESSAGE), { statusCode: 409 });
+}
+
+
+async function openStore<T>(databasePath: string, operation: (store: IndexStore) => T | Promise<T>): Promise<T> {
+  if (!existsSync(databasePath)) throw new Error("索引尚未建立；仍可只使用拖曳文件。");
+  return withIndexStore(databasePath, { readOnly: true }, operation);
 }
 
 async function readWorkbenchIndexStatus(databasePath: string) {
@@ -652,17 +666,13 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       if (request.method === "POST" && url.pathname === "/api/index-roots/trash") {
         if (indexingBusy) throw Object.assign(new Error("索引進行中，請完成後再刪除根目錄。"), { statusCode: 409 });
         const roots = rootList(await readJson(request));
-        const store = new IndexStore(options.databasePath);
-        try { json(response, 200, { removed: store.moveRootsToTrash(roots) }); }
-        finally { store.close(); }
+        json(response, 200, { removed: await withIndexStore(options.databasePath, {}, store => store.moveRootsToTrash(roots)) });
         return;
       }
       if (request.method === "DELETE" && url.pathname === "/api/trash") {
         if (indexingBusy) throw Object.assign(new Error("索引進行中，請完成後再清理垃圾桶。"), { statusCode: 409 });
         const roots = rootList(await readJson(request));
-        const store = new IndexStore(options.databasePath);
-        try { json(response, 200, { removed: store.purgeTrashRoots(roots) }); }
-        finally { store.close(); }
+        json(response, 200, { removed: await withIndexStore(options.databasePath, {}, store => store.purgeTrashRoots(roots)) });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/settings") {
@@ -675,9 +685,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
         let currentAutoupdateSettings = defaultAutoupdateSettings;
         if (existsSync(options.databasePath)) {
-          const readStore = new IndexStore(options.databasePath, { readOnly: true });
-          try { currentAutoupdateSettings = readStore.autoupdateSettings(); }
-          finally { readStore.close(); }
+          currentAutoupdateSettings = await withIndexStore(options.databasePath, { readOnly: true }, store => store.autoupdateSettings());
         }
         const autoupdateSettings = resolveWorkbenchAutoupdateSettings(body, currentAutoupdateSettings);
         if (hasAutoupdateParameterUpdate && !existsSync(options.databasePath)) {
@@ -698,14 +706,14 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         let deleteConfirmation = true;
         let totalMode: "fast" | "exact" = "fast";
         if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || existsSync(options.databasePath)) {
-          const store = new IndexStore(options.databasePath);
-          try {
+          const saved = await withIndexStore(options.databasePath, {}, store => {
             if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
             if (body.totalMode === "fast" || body.totalMode === "exact") store.setSearchTotalMode(body.totalMode);
             if (hasAutoupdateParameterUpdate) store.setAutoupdateSettings(autoupdateSettings);
-            deleteConfirmation = store.deleteConfirmationEnabled();
-            totalMode = store.searchTotalMode();
-          } finally { store.close(); }
+            return { deleteConfirmation: store.deleteConfirmationEnabled(), totalMode: store.searchTotalMode() };
+          });
+          deleteConfirmation = saved.deleteConfirmation;
+          totalMode = saved.totalMode;
         }
         let settingsMessage = "";
         if (body.autoupdateEnabled === true) {
@@ -914,6 +922,10 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       json(response, 404, { error: "找不到本機 API。" });
     } catch (error) {
+      if (error instanceof IndexBusyError || isSqliteBusy(error)) {
+        json(response, 409, { error: INDEX_BUSY_CLIENT_MESSAGE });
+        return;
+      }
       const status = error instanceof ProviderError ? 502 : error instanceof Error && "statusCode" in error ? Number((error as Error & { statusCode: number }).statusCode) : 400;
       const message = error instanceof ProviderError || error instanceof Error ? error.message : "無法完成要求。";
       const errorBody: Record<string, unknown> = { error: message.slice(0, 700) };

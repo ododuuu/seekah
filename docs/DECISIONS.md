@@ -1,5 +1,22 @@
 # 設計決策紀錄
 
+
+## D099：工作台與索引 worker 不以 SQLite 原文呈現 BUSY
+
+- 日期：2026-09-29。
+- 事實：
+  - 盤點 `report-busy-audit.md`：`src/workbench.ts` 的 `/api/settings` 讀（當時約 685）與寫（約 708）、`POST /api/index-roots/trash`（約 662）、`DELETE /api/trash`（約 670）直接 `new IndexStore`，busy 時 `error.message` 經共用 catch（約 925）回前端；`src/index-worker.ts` 約 84–85 行把 `error.message` 當進度失敗訊息。使用者會看到原文 `database is locked`。
+  - `openStore` 已對唯讀搜尋做五次有上限重試並用 `isSqliteBusy`；寫入設定與垃圾桶沒有同一包裝。`write-lock.ts` 已匯出 `isSqliteBusy`（D097），不應再複製第三份判斷。
+- 決定：
+  - 新增 `withIndexStore`，重用 `openStore` 的重試節奏；settings 讀寫與 trash 端點改走它。最終仍 busy 時 HTTP 409 與固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」
+  - API catch 將 `isSqliteBusy`／`IndexBusyError` 一律轉成同一 409 訊息。
+  - 索引 worker 對 busy 使用 `code: "INDEX_BUSY"` 與同一固定訊息，接上工作台既有分支。
+- 理由：WAL 或背景重試之後仍可能 BUSY；工作台是使用者看得見的最後一層，必須把 SQLite 原文擋在 API 邊界。
+- 不做什麼：
+  - 不改 `busy_timeout`、不動 `src/store.ts`／`src/live-update.ts`／`src/local-update.ts`／`src/write-lock.ts`。
+  - 不把非 busy 錯誤改成 INDEX_BUSY，不改 schema 或搜尋語意。
+- 版本：0.42.0。
+
 ## D097：背景自動更新遇主庫 SQLITE_BUSY 走 INDEX_BUSY 重試
 
 - 日期：2026-09-29。
