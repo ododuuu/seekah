@@ -163,7 +163,7 @@ test("0.36 profile is anonymous, refuses overwrite, and is excluded from the ind
     assert.match(message, /可能混用了 CMD 與 PowerShell/);
     return true;
   });
-  if (process.getuid?.() !== 0) {
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
     const denied = path.join(temp, "denied");
     await mkdir(denied);
     await chmod(denied, 0);

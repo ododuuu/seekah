@@ -63,8 +63,8 @@ test("M26 path coverage uses components, not string prefixes", () => {
   assert.equal(coversPath("\\\\filesrv\\docs", "\\\\filesrv\\docs\\備份", "win32"), true);
   assert.equal(coversPath("\\\\filesrv\\docs", "\\\\filesrv\\other\\備份", "win32"), false);
   assert.equal(strictlyCovers(parseFsPath("D:\\", "win32"), parseFsPath("D:\\備份", "win32")), true);
-  assert.equal(coversPath("/tmp/備份", "/tmp/備份2"), false);
-  assert.equal(coversPath("/tmp/備份", "/tmp/備份/a.txt"), true);
+  assert.equal(coversPath("/tmp/備份", "/tmp/備份2", "posix"), false);
+  assert.equal(coversPath("/tmp/備份", "/tmp/備份/a.txt", "posix"), true);
 });
 
 test("M26 root operation plan covers merge, subtree, alias and similar prefixes", () => {
