@@ -1,5 +1,20 @@
 # 設計決策紀錄
 
+## D091：背景校正拆分讀取失敗與延後核對
+
+- 日期：2026-09-29。NEXT-TODO 指出背景校正把讀取錯誤與本輪尚未處理完的 scope 都放在 `failedScopes`，使可讀資料夾也被使用者看到「失敗」。行為見 SPEC §60。
+- 根因：`reconcile.ts` 的目錄列舉／檔案更新錯誤，以及 scope 收尾時被待辦事件阻擋，原本都寫入同一個 `failed_scopes_json` 陣列；status 只能顯示一個無法解釋的失敗數。
+- 決定：
+  - `ReconcileState` 改為分開保存 `readFailures` 與 `deferredChecks`。權限、IO、列舉、刪除安全核對與更新流程錯誤歸入前者；檔案不穩定、待辦事件或未完成 scope 歸入後者。
+  - scope 只有在兩類集合都沒有且沒有待辦時才可執行 `removeMissing`；`deferredChecks` 仍使 `complete = false`，不把「延後」當成成功。
+  - `failed_scopes_json` 欄位與工作狀態庫 schema version 不變。新值以 `{"readFailures":[...],"deferredChecks":[...]}` 保存；舊版 JSON 陣列保守解讀為 `readFailures`，讓既有佇列可直接開啟並維持未完成語意。
+  - `autoupdate status` 改顯示「讀取失敗」與「延後核對」兩個數字，不再顯示合併的「失敗scope」。
+- 否決：
+  - 不把延後核對計入讀取失敗，避免可讀資料夾被標示為讀取錯誤。
+  - 不以資料庫 rebuild、刪檔或 schema version bump 處理既有工作狀態。
+- 取捨：為保留既有 schema 與資料庫直接可讀，不升版或重建工作狀態庫；因此新物件格式寫入後不支援舊版 daemon 降級接續同一輪校正，避免舊版把失敗記錄當成空集合而誤刪索引文件。
+- 版本：0.41.0（與 D089、D090 同批發布）。
+
 ## D090：遷移時對 SQLITE_BUSY 做有限重試（而非提高 busy_timeout 或全域等待）
 
 - 日期：2026-09-29。任務來源 docs/NEXT-TODO 第 29 行及 D082 末「不在本版處理：遷移遇到 SQLITE_BUSY 時直接失敗（`database is locked`）的問題，另案處理」。

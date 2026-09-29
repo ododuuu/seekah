@@ -64,7 +64,7 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
   if (!status.roots.length) lines.push("  （無）");
   for (const root of status.roots) {
     const reconcile = root.reconcile
-      ? ` 校正=${root.reconcile.phase}#${root.reconcile.generation} 已檢查=${root.reconcile.checked} 剩餘範圍=${root.reconcile.frontierCount} 失敗scope=${root.reconcile.failedScopes}`
+      ? ` 校正=${root.reconcile.phase}#${root.reconcile.generation} 已檢查=${root.reconcile.checked} 剩餘範圍=${root.reconcile.frontierCount} 讀取失敗=${root.reconcile.readFailures} 延後核對=${root.reconcile.deferredChecks}`
       : "";
     lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
   }

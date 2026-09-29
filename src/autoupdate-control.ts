@@ -48,7 +48,8 @@ export interface LiveReconcileStatus {
   reason: string;
   checked: number;
   frontierCount: number;
-  failedScopes: number;
+  readFailures: number;
+  deferredChecks: number;
   startedAt: string;
   updatedAt: string;
 }

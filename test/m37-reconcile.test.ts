@@ -136,7 +136,7 @@ test("0.37.0 events arriving during reconciliation prevent unsafe deletion", asy
   await closeFixture({ temp: fixture.temp, store: fixture.store, queue });
 });
 
-test("0.37.0 failed scopes retain indexed files and are visible in state", async () => {
+test("0.37.0 read failures retain indexed files and are visible in state", async () => {
   const fixture = await setup({ "broken.txt": "before", "removed.txt": "removed" });
   const queue = new LiveWorkQueue(fixture.database);
   await rm(path.join(fixture.root, "removed.txt"));
@@ -147,7 +147,7 @@ test("0.37.0 failed scopes retain indexed files and are visible in state", async
   });
   assert.equal(result.done, true);
   assert.equal(result.complete, false);
-  assert.equal(result.failedScopes.some(item => item.endsWith("broken.txt")), true);
+  assert.equal(result.readFailures.some(item => item.endsWith("broken.txt")), true);
   const retained = await search(fixture.store, "removed");
   assert.equal(retained.some(item => item.path.endsWith("removed.txt")), true);
   assert.equal(queue.reconcileStatus(fixture.root)?.phase, "failed");

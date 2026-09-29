@@ -38,7 +38,8 @@ export interface ReconcileState {
   reason: string;
   phase: ReconcilePhase;
   frontier: string[];
-  failedScopes: string[];
+  readFailures: string[];
+  deferredChecks: string[];
   checked: number;
   startedAtMs: number;
   updatedAtMs: number;
@@ -56,6 +57,35 @@ function parseJsonArray<T>(value: string, fallback: T[]): T[] {
   }
 }
 
+function parseFailureScopes(value: string, root: string): { readFailures: string[]; deferredChecks: string[] } {
+  const unknown = { readFailures: [], deferredChecks: [root] };
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      if (parsed.some(item => typeof item !== "string")) return unknown;
+      // 舊版只有一個 failed scope 陣列；保守視為讀取失敗，維持未完成語意。
+      return { readFailures: parsed, deferredChecks: [] };
+    }
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      if (!Array.isArray(record.readFailures) || !Array.isArray(record.deferredChecks)) return unknown;
+      if (record.readFailures.some(item => typeof item !== "string")
+        || record.deferredChecks.some(item => typeof item !== "string")) return unknown;
+      return {
+        readFailures: record.readFailures,
+        deferredChecks: record.deferredChecks,
+      };
+    }
+  } catch {
+    // 格式損壞時保守標為延後核對，不能把未確認狀態當成完成。
+  }
+  return unknown;
+}
+
+function failureScopesJson(state: Pick<ReconcileState, "readFailures" | "deferredChecks">): string {
+  return JSON.stringify({ readFailures: state.readFailures, deferredChecks: state.deferredChecks });
+}
+
 function reconcileStateFromRow(row: {
   root: string;
   generation: number;
@@ -68,33 +98,20 @@ function reconcileStateFromRow(row: {
   updated_at_ms: number;
   scope_acks_json: string;
 }): ReconcileState {
+  const failures = parseFailureScopes(row.failed_scopes_json, row.root);
   return {
     root: row.root,
     generation: Number(row.generation),
     reason: row.reason,
     phase: row.phase,
     frontier: parseJsonArray<string>(row.frontier_json, []),
-    failedScopes: parseJsonArray<string>(row.failed_scopes_json, []),
+    readFailures: failures.readFailures,
+    deferredChecks: failures.deferredChecks,
     checked: Number(row.checked),
     startedAtMs: Number(row.started_at_ms),
     updatedAtMs: Number(row.updated_at_ms),
     scopeAcks: parseJsonArray<ReconcileScopeAck>(row.scope_acks_json, []),
   };
-}
-
-function reconcileStateParams(state: ReconcileState): unknown[] {
-  return [
-    state.generation,
-    state.reason,
-    state.phase,
-    JSON.stringify(state.frontier),
-    JSON.stringify(state.failedScopes),
-    state.checked,
-    state.startedAtMs,
-    state.updatedAtMs,
-    JSON.stringify(state.scopeAcks),
-    state.root,
-  ];
 }
 
 export interface LiveWorkQueueOptions {
@@ -269,7 +286,7 @@ export class LiveWorkQueue {
         .filter(item => item.kind !== "path")
         .map(item => ({ relPath: item.relPath, generation: item.generation }));
       state = {
-        root, generation, reason, phase: "active", frontier: [root], failedScopes: [],
+        root, generation, reason, phase: "active", frontier: [root], readFailures: [], deferredChecks: [],
         checked: 0, startedAtMs: now, updatedAtMs: now, scopeAcks,
       };
       this.db.prepare(`
@@ -293,7 +310,7 @@ export class LiveWorkQueue {
         state.reason,
         state.phase,
         JSON.stringify(state.frontier),
-        JSON.stringify(state.failedScopes),
+        failureScopesJson(state),
         state.checked,
         state.startedAtMs,
         state.updatedAtMs,
@@ -317,7 +334,7 @@ export class LiveWorkQueue {
         state.reason,
         state.phase,
         JSON.stringify(state.frontier),
-        JSON.stringify(state.failedScopes),
+        failureScopesJson(state),
         state.checked,
         state.startedAtMs,
         state.updatedAtMs,
@@ -345,7 +362,7 @@ export class LiveWorkQueue {
         state.reason,
         state.phase,
         JSON.stringify(state.frontier),
-        JSON.stringify(state.failedScopes),
+        failureScopesJson(state),
         state.checked,
         state.startedAtMs,
         state.updatedAtMs,
@@ -372,13 +389,20 @@ export class LiveWorkQueue {
     `).all(root, generation) as { path: string }[]).map(row => row.path);
   }
 
-  finishReconcile(root: string, generation: number, complete: boolean, failedScopes: readonly string[]): void {
+  finishReconcile(
+    root: string,
+    generation: number,
+    complete: boolean,
+    readFailures: readonly string[],
+    deferredChecks: readonly string[],
+  ): void {
     this.runWrite("ack", () => {
       const state = this.getReconcile(root);
       if (!state || state.generation !== generation) throw new QueuePersistError("校正世代不存在。");
       state.phase = complete ? "complete" : "failed";
       state.frontier = [];
-      state.failedScopes = [...new Set(failedScopes)];
+      state.readFailures = [...new Set(readFailures)];
+      state.deferredChecks = [...new Set(deferredChecks)];
       state.updatedAtMs = this.nowFn();
       this.db.prepare(`
         UPDATE reconcile_state SET
@@ -388,7 +412,7 @@ export class LiveWorkQueue {
       `).run(
         state.phase,
         JSON.stringify(state.frontier),
-        JSON.stringify(state.failedScopes),
+        failureScopesJson(state),
         state.checked,
         state.updatedAtMs,
         JSON.stringify(state.scopeAcks),
