@@ -326,6 +326,7 @@ test("M27 compact 顯示主庫與 WAL 的合計大小", async () => {
     raw.exec("PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE");
     const insert = raw.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)");
     for (let index = 0; index < 2_000; index++) insert.run(`compact-${index}`, "x".repeat(4_096));
+    raw.exec("DELETE FROM metadata WHERE key LIKE 'compact-%'");
     raw.exec("COMMIT");
     raw.close();
     raw = undefined;
@@ -337,11 +338,20 @@ test("M27 compact 顯示主庫與 WAL 的合計大小", async () => {
     reader = undefined;
     const beforeCompact = collectIndexStorage(database);
     assert.ok(beforeCompact.totalBytes !== null && beforeCompact.totalBytes > mainBytes);
+    const compactMainBytes = beforeCompact.files.find(file => file.suffix === "")?.bytes ?? 0;
+    const ratioStore = new IndexStore(database, { readOnly: true });
+    let freePageRatio: number;
+    try { freePageRatio = ratioStore.freePageRatio(); }
+    finally { ratioStore.close(); }
+    assert.ok(freePageRatio > 0, "compact fixture 必須保留主庫 free pages");
     const compact = spawnSync(process.execPath, [cli, "compact"], { encoding: "utf8", env });
     assert.equal(compact.status, 0, compact.stderr);
     const after = collectIndexStorage(database);
     assert.ok(after.totalBytes !== null);
     const sizes = /壓縮完成：([\d.]+) MiB → ([\d.]+) MiB。/u.exec(compact.stdout);
+    const reclaimable = /壓縮資料庫中（可回收約 ([\d.]+ MiB)）…/u.exec(compact.stdout);
+    assert.ok(reclaimable, compact.stdout);
+    assert.equal(reclaimable[1], formatMib(compactMainBytes * freePageRatio));
     assert.ok(sizes, compact.stdout);
     assert.ok(Number(sizes[1]) > mainBytes / (1024 * 1024) + 1, "compact 前大小必須包含 WAL／附屬檔");
     assert.equal(sizes[2], formatMib(after.totalBytes).replace(" MiB", ""));

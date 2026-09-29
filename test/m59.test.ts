@@ -8,12 +8,12 @@ import path from "node:path";
 import test from "node:test";
 import { LiveWorkQueue } from "../src/live-queue.js";
 import { LOCAL_PREPARED_GROUP_MAX_MS, LiveUpdateEngine } from "../src/live-update.js";
-import { WRITER_BACKOFF_MS, withWriterBackoff } from "../src/local-update.js";
+import { WRITER_BACKOFF_MS, applyFileDelete, withWriterBackoff } from "../src/local-update.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
 import { parseDocument } from "../src/parser.js";
 import { sync } from "../src/sync.js";
-import { acquireWriteLock, IndexBusyError } from "../src/write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "../src/write-lock.js";
 
 type FakeTimer = { id: number; ms: number; fn: () => void };
 
@@ -158,6 +158,140 @@ test("m59: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
     store.close();
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test("m59: prepared 檔案在第二次 lstat 前消失會移除索引並 ack generation", { timeout: 10_000 }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m59-prepared-delete-"));
+  const root = path.join(temp, "root");
+  const database = path.join(temp, "index.db");
+  const file = path.join(root, "gone.txt");
+  await mkdir(root, { recursive: true });
+  await writeFile(file, "m59-delete-needle", "utf8");
+  const store = new IndexStore(database);
+  const queue = new LiveWorkQueue(database, { now: (() => { let value = 0; return () => ++value; })() });
+  const stop = deferred();
+  const logs: string[] = [];
+  let removed = false;
+  let deleteApplied = false;
+  let running: Promise<number> | undefined;
+  const timers: FakeTimer[] = [];
+  let timerId = 0;
+  try {
+    await sync(root, store);
+    const queued = queue.acceptPath(root, "gone.txt", "event");
+    const engine = new LiveUpdateEngine(store, [root], {
+      mode: "foreground",
+      debounceMs: 200,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      workQueue: queue,
+      sleep: async () => {
+        if (!removed) {
+          removed = true;
+          await rm(file, { force: true });
+        }
+      },
+      applyFileDelete: async (filePath, rootPath, indexStore, options) => {
+        deleteApplied = true;
+        return applyFileDelete(filePath, rootPath, indexStore, options);
+      },
+      setTimer: (fn, ms) => {
+        const timer = { id: ++timerId, ms, fn };
+        timers.push(timer);
+        return timer.id as unknown as NodeJS.Timeout;
+      },
+      clearTimer: id => {
+        const index = timers.findIndex(item => item.id === (id as unknown as number));
+        if (index >= 0) timers.splice(index, 1);
+      },
+    }, {
+      write: line => logs.push(line),
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await waitUntil(() => logs.some(line => line.startsWith("監看中：")));
+    await waitUntil(() => removed
+      && deleteApplied
+      && !fs.existsSync(file)
+      && store.getDocument(file) === undefined
+      && queue.listPaths(root).length === 0);
+    assert.ok(queued.generation > 0);
+    assert.equal(search(store, "m59-delete-needle").length, 0);
+    assert.equal(queue.maxGeneration(root), 0);
+    stop.resolve();
+    assert.equal(await running, 0);
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
+    store.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("m59: prepared 群組在 stopping 時丟棄且不 ack", { timeout: 10_000 }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m59-prepared-stop-"));
+  const root = path.join(temp, "root");
+  const database = path.join(temp, "index.db");
+  const file = path.join(root, "stop.txt");
+  await mkdir(root, { recursive: true });
+  await writeFile(file, "m59-stop-needle", "utf8");
+  const store = new IndexStore(database);
+  const queue = new LiveWorkQueue(database, { now: (() => { let value = 0; return () => ++value; })() });
+  const stop = deferred();
+  let prepared = false;
+  let requested = false;
+  let engine!: LiveUpdateEngine;
+  let running: Promise<number> | undefined;
+  try {
+    await sync(root, store);
+    await writeFile(file, "m59-stop-needle-updated", "utf8");
+    const queued = queue.acceptPath(root, "stop.txt", "event");
+    engine = new LiveUpdateEngine(store, [root], {
+      mode: "foreground",
+      debounceMs: 200,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      workQueue: queue,
+      parse: async filePath => {
+        const parsed = await parseDocument(filePath);
+        prepared = true;
+        return parsed;
+      },
+      now: () => {
+        if (prepared && !requested) {
+          requested = true;
+          engine.requestStop();
+          return LOCAL_PREPARED_GROUP_MAX_MS;
+        }
+        return 0;
+      },
+    }, {
+      write: () => {},
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await waitUntil(() => requested && queue.listPaths(root).length === 1);
+    assert.equal(queue.listPaths(root)[0]?.generation, queued.generation);
+    assert.equal(search(store, "m59-stop-needle").length, 1);
+    assert.equal(await running, 0);
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
+    store.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("m59: isSqliteBusy 接受精確 SQLite lock 訊息且拒絕相似訊息", () => {
+  assert.equal(isSqliteBusy({ message: "database is locked" }), true);
+  assert.equal(isSqliteBusy({ message: "database table is locked" }), true);
+  assert.equal(isSqliteBusy({ errstr: "database is locked" }), true);
+  assert.equal(isSqliteBusy({ message: "database is locked; retry" }), false);
+  assert.equal(isSqliteBusy({ message: "database table is locked by another connection" }), false);
 });
 
 test("m59: withWriterBackoff 用盡有限次數後回傳 INDEX_BUSY", async () => {

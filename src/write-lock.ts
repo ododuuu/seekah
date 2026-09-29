@@ -10,8 +10,14 @@ export class IndexBusyError extends Error {
   }
 }
 
+function isSqliteBusyMessage(value: unknown): boolean {
+  return value === "database is locked" || value === "database table is locked";
+}
+
 export function isSqliteBusy(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
+  if (isSqliteBusyMessage(Reflect.get(error, "errstr"))
+    || isSqliteBusyMessage(Reflect.get(error, "message"))) return true;
   const errcode = Reflect.get(error, "errcode");
   if (typeof errcode === "number" && ((errcode & 0xff) === 5 || (errcode & 0xff) === 6)) return true;
   const code = Reflect.get(error, "code");

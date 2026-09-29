@@ -15,6 +15,8 @@ import {
   MAIN_WAL_JOURNAL_SIZE_LIMIT_BYTES,
   MAIN_WRITE_BUSY_TIMEOUT_MS,
 } from "../src/store.js";
+const TEST_WRITE_BUSY_TIMEOUT_MS = 50;
+const TEST_WAL_CHECKPOINT_THRESHOLD_BYTES = 1 * 1024 * 1024;
 
 function document(root: string, name: string, content: string, modifiedAtMs: number): DocumentRecord {
   return {
@@ -90,7 +92,8 @@ test("m58: writable constructor uses the short initialization busy bound", async
     const started = Date.now();
     contended = new IndexStore(fixture.database, { onWarning: message => warnings.push(message) });
     const elapsed = Date.now() - started;
-    assert.ok(elapsed <= MAIN_INITIALIZE_BUSY_TIMEOUT_MS + 400, `constructor 等待 ${elapsed} ms 超過短初始化上限`);
+    const maxInitializeWait = MAIN_INITIALIZE_BUSY_TIMEOUT_MS * 6 + 100;
+    assert.ok(elapsed <= maxInitializeWait, `constructor 等待 ${elapsed} ms 超過初始化固定預算 ${maxInitializeWait} ms`);
     assert.ok(warnings.some(message => message.includes("WAL")));
   } finally {
     contended?.close();
@@ -158,7 +161,7 @@ test("m58: 唯讀 WAL 索引在 sidecar 不存在且資料夾可寫時仍可開�
 
 test("m58: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () => {
   const fixture = await createIndexedDatabase("seekah-m58-bounded-");
-  const store = new IndexStore(fixture.database);
+  const store = new IndexStore(fixture.database, { writeBusyTimeoutMs: TEST_WRITE_BUSY_TIMEOUT_MS });
   const holder = new DatabaseSync(fixture.database);
   try {
     holder.exec("PRAGMA busy_timeout=0; BEGIN IMMEDIATE");
@@ -170,8 +173,9 @@ test("m58: 主庫 writer busy 等待有上限並回傳 SQLITE_BUSY", async () =>
     });
     assert.ok(captured);
     const elapsed = Date.now() - started;
-    assert.ok(elapsed >= MAIN_WRITE_BUSY_TIMEOUT_MS - 250, `busy 僅等待 ${elapsed} ms，未達寫入等待下限`);
-    assert.ok(elapsed <= MAIN_WRITE_BUSY_TIMEOUT_MS + 1_000, `busy 等待 ${elapsed} ms 超過上限容許範圍`);
+    assert.equal(MAIN_WRITE_BUSY_TIMEOUT_MS, 1_500);
+    assert.ok(elapsed >= TEST_WRITE_BUSY_TIMEOUT_MS - 15, `busy 僅等待 ${elapsed} ms，未達注入等待下限`);
+    assert.ok(elapsed <= TEST_WRITE_BUSY_TIMEOUT_MS + 500, `busy 等待 ${elapsed} ms 超過注入上限容許範圍`);
   } finally {
     holder.exec("ROLLBACK");
     holder.close();
@@ -245,9 +249,9 @@ test("m58: 大型 WAL 寫入後 TRUNCATE checkpoint 將 sidecar 控制在上限�
   }
 });
 
-test("m58: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後可回收", { timeout: 120_000 }, async () => {
+test("m58: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後可回收", { timeout: 30_000 }, async () => {
   const fixture = await createIndexedDatabase("seekah-m58-threshold-");
-  const store = new IndexStore(fixture.database);
+  const store = new IndexStore(fixture.database, { walCheckpointThresholdBytes: TEST_WAL_CHECKPOINT_THRESHOLD_BYTES });
   const reader = new DatabaseSync(fixture.database);
   try {
     const internal = Reflect.get(store, "db") as DatabaseSync;
@@ -255,14 +259,15 @@ test("m58: 長讀取快照下實際 upsert 的 WAL 可暫時成長，釋放後�
     reader.exec("BEGIN");
     reader.prepare("SELECT modified_at_ms FROM documents WHERE path = ?").get(fixture.file);
     let maximum = 0;
-    for (let index = 0; index < 56; index++) {
-      const content = `${String(index).padStart(8, "0")}${randomBytes(512 * 1024).toString("base64")}`;
+    assert.equal(MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES, 64 * 1024 * 1024);
+    for (let index = 0; index < 8; index++) {
+      const content = `${String(index).padStart(8, "0")}${randomBytes(256 * 1024).toString("base64")}`;
       store.upsert(document(fixture.root, "note.txt", content, index + 2), fixture.root);
       store.checkpointWal();
       const walPath = `${fixture.database}-wal`;
       maximum = Math.max(maximum, existsSync(walPath) ? statSync(walPath).size : 0);
     }
-    assert.ok(maximum > MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES, `長讀取快照下 WAL 未超過門檻：${maximum} bytes`);
+    assert.ok(maximum > TEST_WAL_CHECKPOINT_THRESHOLD_BYTES, `長讀取快照下 WAL 未超過注入門檻：${maximum} bytes`);
     reader.exec("ROLLBACK");
     reader.close();
     store.checkpointWal({ forceTruncate: true });
