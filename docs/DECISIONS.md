@@ -28,7 +28,7 @@
   - 選 200/1000ms 而非 500/250：checkpoint 更細粒度，crash 重做量小；process batch 仍保 lock 釋放。
   - 不改 JSON 序列化頻率以外：仍每 flush 一次 stringify，但次數大幅降。
 - 相容：行為完全等價（索引內容、搜尋結果、status complete、失敗分類、刪除判斷皆不變）；只改善效能。
-- 版本：待合併時決定。
+- 版本：0.42.0。
 
 ## D095：局部更新在 writer lock 外準備、有限群組鎖內提交
 
@@ -48,11 +48,11 @@
   - 不重新把整輪最多 500 份解析結果放在記憶體，也不讓一份一份取鎖的低吞吐取代群組提交。
   - 不為了群組化取消 metadata recheck；每份文件仍在同一群組鎖內獨立核對，變動文件不得污染未變動文件。
 - 相容：不改索引 schema、工作佇列 schema、搜尋結果、排序、片段、排除結果或背景校正契約；非 live 的 CLI／watch 單檔 `applyFileUpdate` 仍沿用既有 lock/backoff 行為。
-- 版本：待合併時決定。
+- 版本：0.42.0。
 
 ## D094：chunk candidate 延遲化與 SQL 排序／bounded top-K
 
-- 日期：2026-09-29。依 P0-1 效能審查與 SPEC §62；版本待合併時決定。
+- 日期：2026-09-29。依 P0-1 效能審查與 SPEC §62；版本 0.42.0。
 - 問題：chunk store 搜尋目前對每個 term 呼叫 `chunkCandidates()`，以 `.all()` 取得所有 posting row，建立完整 `Map<documentId, number[]>`；之後再一次載入候選文件並在 JavaScript 全量排序。常見詞的準備工作造成不必要的 row materialization、Map、文件 metadata 與 GC 峰值。
 - 決定：
   - 新增只讀 candidate iterator，將 term 的 filename／heading／chunk posting 聯集與 `all-terms` 交集推入 SQLite，並在 SQL 套用 type、root、subtree、status 範圍。
