@@ -2,9 +2,9 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.40.0（第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
-- 日期：2026-09-28
-- 狀態：package 為 0.40.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
+- 規格基線：0.41.0（第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 日期：2026-09-29
+- 狀態：package 為 0.41.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
 ## 版本與里程碑命名
 
@@ -1196,6 +1196,7 @@ docsearch doctor
   2. **工作台加入根目錄**（§46.11／D068／D072）：已有索引時，索引狀態頁用按鈕開啟本機資料夾選擇器，選取後背景登錄該根。
 - 使用者可見的產品故事：已經建過索引的人，日常檔案變更走 `autoupdate start`，不必每次對 30 萬檔做完整 `index`；要多找一個資料夾時，在工作台先按「選擇資料夾」、確認選取結果後再按「確認並建立索引」，不必改開 CLI。第一次建立索引、立即完整校正、CLI `roots` 仍可用。
 - 本版不做：USN／raw volume、Windows Service、提權、OCR、embedding、LAN、新解析格式、更改 `TEXT_PARSE_VERSION` 或 parser selection、加入新根時一次選取多條路徑、整碟建議、GUI 內 autoupdate 開關或假 daemon／queue 狀態、聊天 Provider／API Key 面。
+- （0.41.0 更新：GUI autoupdate 開關已於 0.37.0 批次交付；0.41.0 起由 §58 擴充健康摘要與可調參數；GUI 只顯示 daemon 控制通道實際回傳的資料，不捏造狀態。）
 - 安全與資料沿用既有契約：LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、writer lock、payload／Bloom schema、loopback token／Host／Origin／nonce CSP、20 份／256 KiB context、臨時文件不入永久索引。不得要求 rebuild 或刪 WAL／journal。
 - 實作順序見 `docs/handoff/0.37.0.md`。各階段單獨提交與回歸；CURRENT 未切換前不得開工。完成後才將 package／lockfile 升為 0.37.0，交付 `docs/0.37.0-VALIDATION.md`、更新使用手冊，封裝 `Seekah-0.37.0.zip`（歷史包名仍可並列）。公司 Windows 未回報不得宣稱已通過。
 
@@ -1214,6 +1215,7 @@ docsearch doctor
 - `autoupdate status` 應讓使用者分辨「daemon 健康／最近局部事件／上次完整校正／下一次完整校正／目前降級原因」，並顯示最近完整校正是否因 scan failure 不完整。搜尋可沿用現有不完整提示。
 - 0.37.0 先驗收既有 `autoupdate`，重用 `LiveUpdateEngine`／局部更新服務；持久事件佇列、scope 管理與分批校正依 §46.6～§46.10 擴充。公司驗收未取得時可先完成本機實作與故障注入，但不得宣稱 Windows 行為已通過。
 - GUI 狀態頁、搜尋範圍與頂列不得捏造 daemon、queue 或「正在監看」狀態。背景更新健康度只經 CLI `autoupdate status` 表達；§46.11 只負責加入根目錄。
+- （0.41.0 更新：GUI 設定頁依 §58.2 顯示 daemon 控制通道實際回傳的健康摘要；CLI `autoupdate status` 仍是完整入口。）
 
 ### 46.3 普通使用者權限與離線期間
 
@@ -1324,6 +1326,7 @@ docsearch doctor
 - 刪除前預設顯示確認對話框；對話框提供選取項目、不可還原警告與「下次不再提醒」。此偏好持久保存於索引 metadata，設定頁可重新開啟提醒。多選刪除必須一次性交易，任一根無效時全部拒絕。
 - 垃圾桶只保存根目錄路徑、刪除時間與文件數；還原會重新驗證來源並重新索引，成功後移除垃圾桶項目。來源不存在或不可讀時保留垃圾桶項目。
 - 本版不做：一次選取多條新路徑、UNC／LAN 建議清單、在 GUI 顯示或操作 autoupdate。
+- （0.41.0 更新：GUI autoupdate 開關已於 0.37.0 批次交付；0.41.0 起由 §58 擴充健康摘要與可調參數；GUI 只顯示 daemon 控制通道實際回傳的資料，不捏造狀態。）
 
 #### 46.11.6 刪除、確認與垃圾桶
 
@@ -1829,3 +1832,58 @@ docsearch doctor
 - 點標題與列上 Enter 送出該結果的 `open`；「顯示所在位置」送出 `reveal`；「加入上下文」切換選取且計數正確。
 - 實際瀏覽器截圖檢查結果列（1440×900、1180×800）。
 - package 版本 0.40.0。
+
+## 58. 0.41.0：工作台背景自動更新管理
+
+依 D089。0.37.0 已交付 GUI 背景自動更新勾選框（`settings-autoupdate` 與後端 `autoupdateEnabled`）；0.41.0 擴充登入啟動、健康摘要與可調參數，完整管理搬進工作台設定頁。保留「不得捏造狀態」原則：GUI 只顯示 daemon 控制通道實際回傳的資料。CLI 契約與行為完全不變。
+
+### 58.1 登入時自動啟動（GUI 開關）
+
+- 設定對話框在「背景自動更新」下方新增勾選框 `settings-autoupdate-startup`，文字：「登入 Windows 時自動啟動背景自動更新」。
+- 後端重用 `autoupdateStartupEnable`／`autoupdateStartupDisable`／`autoupdateStartupStatus`，語意與 CLI 相同：enable 只註冊下次登入，不立即啟動 daemon；disable 只移除登錄，不停止執行中的 daemon。
+- `GET /api/index-status` 回傳新增 `autoupdateStartup: { supported: boolean, enabled: boolean, message: string }`。
+- `POST /api/settings` 接受 `autoupdateStartup: boolean`（型別錯誤回 400 訊息「登入啟動設定無效。」），回傳同樣附上 `autoupdateStartup`。
+- 非 Windows：勾選框 disabled，旁邊說明「僅 Windows 支援」。捷徑衝突（外部同名項目）等錯誤要原樣顯示在 `settings-status`，勾選框回復實際狀態。
+
+### 58.2 健康狀態摘要
+
+- `readAutoupdateStatus` 的回傳新增 `live`：daemon 控制通道回傳的 `LiveStatus` 物件（僅在 code 0 時提供；未執行或無回應時不提供，不得捏造）。保留既有 `enabled`／`available`／`message` 欄位相容。
+- 設定對話框在背景自動更新區塊下顯示摘要（只在 `live` 存在時）：
+  - 狀態：`phase`（idle／updating／reconciling／starting／stopping 轉成中文），`ready`
+  - 待處理：`pendingCount`、`queuePendingCount`，`queueDegraded` 為真時顯示「已降級」
+  - 累計：`eventCount`、`localUpdateCount`、`excludedEventCount`（缺值顯示「—」）
+  - 上次局部更新時間 `lastLocalUpdate.at`、上次完整校正 `lastReconcile.at` 與是否完整、下次完整校正 `nextReconcileAt`
+  - 最近錯誤 `recentErrors`（最多 3 筆）
+  - 目前使用的參數 `settings.debounceMs`／`settings.reconcileMs`
+- 開啟設定對話框時讀取一次；另提供「重新整理」按鈕（id `settings-autoupdate-refresh`）。不做自動輪詢。
+- 無回應（`available: false`）時顯示後端 message，不顯示摘要。
+- 所有文字用 `textContent`，不得拼 HTML。
+
+### 58.3 可調參數
+
+- 設定對話框提供兩個數字欄位：
+  - 變更等待（debounce）：秒，允許 0.2～60（對應 `resolveWatchDebounce` 的 200～60000 ms），id `settings-autoupdate-debounce`
+  - 完整校正間隔：小時，允許 0.25～24（對應 `resolveAutoupdateReconcile` 的 15 分鐘～24 小時），id `settings-autoupdate-reconcile`
+  - 預設 1.5 秒／6 小時。勾選框文字的「每 6 小時」改為依目前設定動態顯示。
+- 設定持久化到索引庫的 settings（仿 `searchTotalMode`／`setSearchTotalMode` 的做法），驗證沿用 `resolveWatchDebounce`／`resolveAutoupdateReconcile`，不合法回 400。
+- `POST /api/settings` 接受 `autoupdateDebounceMs`、`autoupdateReconcileMs`（整數毫秒）。
+- GUI 啟動 daemon 時使用已儲存的參數（取代目前寫死的 1500／21_600_000）。
+- daemon 執行中且參數改變：儲存後由後端「停止再啟動」套用（沿用 `autoupdateStop` + `autoupdateStart`，不另開 IPC），回應中說明已重新啟動；前景 watch 執行中則拒絕並回傳既有錯誤訊息。
+- 登入啟動捷徑：GUI 註冊時把 `--debounce`／`--reconcile` 帶入捷徑參數（擴充 `shortcutArguments`，無參數時維持原本輸出，CLI 行為不變）。已註冊且為本產品擁有時，參數變更要重新寫入捷徑。
+- CLI `autoupdate start` 的預設與旗標行為完全不變。
+
+### 58.4 不做
+
+- GUI 內自動輪詢、Windows Service、提權、HKLM、新的 IPC 通道、改動 daemon 內部引擎、改動 CLI 預設值。
+
+### 58.5 測試要求
+
+- 新增 `test/m47.test.ts`，至少涵蓋：
+  1. `/api/settings` 參數驗證（型別、範圍）與持久化，重啟 workbench 後讀回。
+  2. 參數改變時執行中的 daemon 被重啟且新 `LiveStatus.settings` 反映新值。
+  3. `/api/index-status` 在 daemon 執行時含 `live`，停止後不含。
+  4. `autoupdateStartup`：非 Windows 回 `supported: false`；以可注入的 startup 選項模擬 Windows 驗證 enable／disable 與捷徑參數含 `--debounce`／`--reconcile`。
+  5. 前端元素 id 存在（仿 `test/m37.test.ts:62` 的元素清單檢查）。
+- `npm test` 全跑。已知 win32 既有失敗：M26 path coverage、M36 profile chmod 兩項，不必修；其他不得新增失敗。`npm run build` 須通過。
+
+- package 版本 0.41.0。

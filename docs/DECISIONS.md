@@ -1,5 +1,16 @@
 # 設計決策紀錄
 
+## D089：0.41.0 將 autoupdate 管理搬進 GUI 並擴充登入啟動、健康摘要與可調參數
+
+- 日期：2026-09-29。原 0.37.0 規劃時因時程排除 GUI autoupdate 開關（§46.0、46.11.5、46.11.6 明列「不做」），本次使用者要求補齊四項（B 登入啟動、C 健康摘要、D 可調參數）並搬進設定頁，SPEC 新增 §58。
+- 事實：0.37.0 已實作 GUI 勾選框與後端 autoupdateEnabled，但 SPEC 仍寫「GUI 不做」「健康度只經 CLI」「不在 GUI 顯示或操作」。參數原寫死，無 GUI 調整入口；登入啟動僅 CLI。
+- 決定：
+  - 為何把 autoupdate 管理搬進 GUI（原排除僅因當時時程）：0.37 時 GUI 尚在初版，daemon 控制已存在但為避免延誤主線（日常更新＋加入根）而排除；現 GUI 穩定，健康狀態與參數調整對使用者日常操作更直接，CLI 仍保留完整入口。
+  - 為何參數持久化在索引庫：仿 `searchTotalMode`／`setSearchTotalMode` 做法，存於 store 的 settings 區，與總筆數模式同屬使用者偏好；重啟 workbench 後讀回，daemon 啟動時套用；不放 CLI 旗標預設或個別檔，以免與索引資料分離。
+  - 為何參數變更採停止再啟動：daemon 執行中改變 debounce／reconcile 須立即生效，但不另開 IPC 通道或動 daemon 內部；沿用既有 `autoupdateStop` + `autoupdateStart` 確保新參數載入，簡潔可靠；前景 watch 執行中則拒絕以保護使用者預期。
+  - 為何不做自動輪詢：設定對話框開啟時讀取一次即足，另提供「重新整理」按鈕（`settings-autoupdate-refresh`）；自動輪詢會增加不必要負載與複雜度（daemon 狀態變化不頻繁），與「不做 GUI 內自動輪詢」原則一致。
+- 相容：CLI `autoupdate` 契約、預設值、捷徑無參數時行為完全不變；非 Windows supported=false；持久化驗證沿用既有 resolve 函式；登入啟動捷徑擴充後仍與既有相容。
+
 ## D088：0.40.0 工作台搜尋結果改為搜尋引擎式列表，移除明細頁
 
 - 日期：2026-09-29。使用者認為明細頁的預覽「很醜」，要求改成類似 Google 搜尋；使用者同意「照建議」並確認先只改工作台畫面。行為見 SPEC §57。

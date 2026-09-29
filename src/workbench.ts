@@ -24,7 +24,10 @@ import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { IndexBusyError } from "./write-lock.js";
-import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop } from "./autoupdate.js";
+import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
+import { resolveWatchDebounce } from "./live-update.js";
+import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus, type StartupCommandOptions } from "./autoupdate-startup.js";
+import type { AutoupdateSettings } from "./autoupdate-control.js";
 import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
 
 const HOST = "127.0.0.1";
@@ -50,6 +53,7 @@ export interface WorkbenchOptions {
   tempParent?: string;
   indexHold?: () => Promise<void>;
   selectFolder?: () => Promise<string | null>;
+  startupOptions?: Omit<StartupCommandOptions, "databasePath">;
 }
 
 export interface WorkbenchHandle {
@@ -177,7 +181,11 @@ async function openStore<T>(databasePath: string, operation: (store: IndexStore)
 
 async function readWorkbenchIndexStatus(databasePath: string) {
   const readAt = new Date().toISOString();
-  if (!existsSync(databasePath)) return { state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const };
+  const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
+  if (!existsSync(databasePath)) return {
+    state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true,
+    totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings,
+  };
   try {
     return await openStore(databasePath, store => {
       const status = indexStatus(store);
@@ -188,17 +196,70 @@ async function readWorkbenchIndexStatus(databasePath: string) {
         trash: store.trashRoots(),
         deleteConfirmation: store.deleteConfirmationEnabled(),
         totalMode: store.searchTotalMode(),
+        autoupdateSettings: store.autoupdateSettings(),
       };
     });
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
-    return { state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。", trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const };
+    return {
+      state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。",
+      trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
+      autoupdateSettings: defaultAutoupdateSettings,
+    };
   }
 }
+
+function workbenchStartupOptions(databasePath: string, options: Pick<WorkbenchOptions, "startupOptions">): StartupCommandOptions {
+  return {
+    ...(options.startupOptions ?? {}),
+    databasePath,
+    cliPath: options.startupOptions?.cliPath ?? fileURLToPath(new URL("./cli.js", import.meta.url)),
+  };
+}
+
+function readAutoupdateStartupStatus(databasePath: string, options: Pick<WorkbenchOptions, "startupOptions">): {
+  supported: boolean;
+  enabled: boolean;
+  message: string;
+} {
+  const startupOptions = workbenchStartupOptions(databasePath, options);
+  const supported = (startupOptions.platform ?? process.platform) === "win32";
+  try {
+    const result = autoupdateStartupStatus(startupOptions);
+    const enabled = supported && result.code === 0 && /^登入啟動：已啟用/u.test(result.text);
+    return { supported, enabled, message: result.text };
+  } catch (error) {
+    return { supported, enabled: false, message: error instanceof Error ? error.message : "無法讀取登入啟動設定。" };
+  }
+}
+
+function resolveWorkbenchAutoupdateSettings(body: Record<string, unknown>, current: AutoupdateSettings): AutoupdateSettings {
+  let debounceMs = current.debounceMs;
+  let reconcileMs = current.reconcileMs;
+  if (body.autoupdateDebounceMs !== undefined) {
+    if (typeof body.autoupdateDebounceMs !== "number" || !Number.isSafeInteger(body.autoupdateDebounceMs)) {
+      throw new Error("背景自動更新變更等待設定無效。");
+    }
+    debounceMs = resolveWatchDebounce(body.autoupdateDebounceMs);
+  }
+  if (body.autoupdateReconcileMs !== undefined) {
+    if (typeof body.autoupdateReconcileMs !== "number" || !Number.isSafeInteger(body.autoupdateReconcileMs)) {
+      throw new Error("背景自動更新完整校正設定無效。");
+    }
+    reconcileMs = resolveAutoupdateReconcile(body.autoupdateReconcileMs);
+  }
+  return { debounceMs, reconcileMs };
+}
+
 async function readAutoupdateStatus(databasePath: string) {
   try {
     const result = await autoupdateStatus(databasePath);
-    return { enabled: result.code === 0, available: result.code === 0, message: result.text };
+    return {
+      enabled: result.code === 0,
+      available: result.code === 0,
+      message: result.text,
+      ...(result.code === 0 && result.live ? { live: result.live } : {}),
+    };
   } catch (error) {
     if (error instanceof AutoupdateError && error.code === "AUTOUPDATE_NOT_RUNNING") {
       return { enabled: false, available: true, message: "背景自動更新未執行。" };
@@ -569,7 +630,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       if (request.method === "GET" && url.pathname === "/api/index-status") {
         json(response, 200, { ...await readWorkbenchIndexStatus(options.databasePath), indexing,
-          autoupdate: await readAutoupdateStatus(options.databasePath) }); return;
+          autoupdate: await readAutoupdateStatus(options.databasePath),
+          autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options) }); return;
       }
       if (request.method === "POST" && url.pathname === "/api/index") {
         const body = await readJson(request);
@@ -614,7 +676,32 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         const body = await readJson(request);
         if (body.deleteConfirmation !== undefined && typeof body.deleteConfirmation !== "boolean") throw new Error("刪除提醒設定無效。");
         if (body.autoupdateEnabled !== undefined && typeof body.autoupdateEnabled !== "boolean") throw new Error("背景自動更新設定無效。");
+        if (body.autoupdateStartup !== undefined && typeof body.autoupdateStartup !== "boolean") throw new Error("登入啟動設定無效。");
         if (body.totalMode !== undefined && body.totalMode !== "fast" && body.totalMode !== "exact") throw new Error("總筆數設定無效。");
+        const hasAutoupdateParameterUpdate = body.autoupdateDebounceMs !== undefined || body.autoupdateReconcileMs !== undefined;
+        const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
+        let currentAutoupdateSettings = defaultAutoupdateSettings;
+        if (existsSync(options.databasePath)) {
+          const readStore = new IndexStore(options.databasePath, { readOnly: true });
+          try { currentAutoupdateSettings = readStore.autoupdateSettings(); }
+          finally { readStore.close(); }
+        }
+        const autoupdateSettings = resolveWorkbenchAutoupdateSettings(body, currentAutoupdateSettings);
+        if (hasAutoupdateParameterUpdate && !existsSync(options.databasePath)) {
+          throw new Error("索引尚未建立；無法保存背景自動更新參數。");
+        }
+        const liveBefore = hasAutoupdateParameterUpdate
+          ? (await readAutoupdateStatus(options.databasePath)).live
+          : undefined;
+        const startupBefore = hasAutoupdateParameterUpdate
+          ? readAutoupdateStartupStatus(options.databasePath, options)
+          : undefined;
+        const autoupdateParametersChanged = Boolean(liveBefore && hasAutoupdateParameterUpdate
+          && (liveBefore.settings.debounceMs !== autoupdateSettings.debounceMs
+            || liveBefore.settings.reconcileMs !== autoupdateSettings.reconcileMs));
+        if (autoupdateParametersChanged && liveBefore?.mode === "foreground") {
+          throw new AutoupdateError("AUTOUPDATE_FOREGROUND_ACTIVE", "前景監看請在原終端按 Ctrl+C 結束，不能從另一個程序遠端停止。");
+        }
         let deleteConfirmation = true;
         let totalMode: "fast" | "exact" = "fast";
         if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || existsSync(options.databasePath)) {
@@ -622,20 +709,53 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           try {
             if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
             if (body.totalMode === "fast" || body.totalMode === "exact") store.setSearchTotalMode(body.totalMode);
+            if (hasAutoupdateParameterUpdate) store.setAutoupdateSettings(autoupdateSettings);
             deleteConfirmation = store.deleteConfirmationEnabled();
             totalMode = store.searchTotalMode();
           } finally { store.close(); }
         }
+        let settingsMessage = "";
         if (body.autoupdateEnabled === true) {
-          await autoupdateStart({ debounceMs: 1500, reconcileMs: 21_600_000 }, options.databasePath,
-            { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
+          if (autoupdateParametersChanged) {
+            await autoupdateStop(options.databasePath);
+            await autoupdateStart(autoupdateSettings, options.databasePath,
+              { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
+            settingsMessage = "背景自動更新已依新設定重新啟動。";
+          } else {
+            await autoupdateStart(autoupdateSettings, options.databasePath,
+              { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
+          }
         } else if (body.autoupdateEnabled === false) {
           try { await autoupdateStop(options.databasePath); }
           catch (error) {
             if (!(error instanceof AutoupdateError && error.code === "AUTOUPDATE_NOT_RUNNING")) throw error;
           }
+        } else if (autoupdateParametersChanged) {
+          await autoupdateStop(options.databasePath);
+          await autoupdateStart(autoupdateSettings, options.databasePath,
+            { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
+          settingsMessage = "背景自動更新已依新設定重新啟動。";
         }
-        json(response, 200, { deleteConfirmation, totalMode, autoupdate: await readAutoupdateStatus(options.databasePath) });
+        if (body.autoupdateStartup !== undefined) {
+          const startupOptions = workbenchStartupOptions(options.databasePath, options);
+          if (body.autoupdateStartup === true) {
+            await autoupdateStartupEnable({ ...startupOptions, autoupdateSettings });
+          } else {
+            autoupdateStartupDisable(startupOptions);
+          }
+        } else if (startupBefore?.enabled) {
+          // Owned startup entries follow the saved GUI parameters without changing
+          // the CLI's legacy no-flag shortcut output.
+          await autoupdateStartupEnable({ ...workbenchStartupOptions(options.databasePath, options), autoupdateSettings });
+        }
+        json(response, 200, {
+          deleteConfirmation,
+          totalMode,
+          autoupdateSettings,
+          autoupdate: await readAutoupdateStatus(options.databasePath),
+          autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options),
+          ...(settingsMessage ? { message: settingsMessage } : {}),
+        });
         return;
       }
       if (request.method === "POST" && url.pathname === "/api/select-folder") {

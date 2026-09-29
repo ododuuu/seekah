@@ -89,13 +89,13 @@ function staleError(state: AutoupdateStateFile): AutoupdateError {
   return new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
 }
 
-export async function autoupdateStatus(databasePath = defaultDatabasePath()): Promise<{ code: number; text: string }> {
+export async function autoupdateStatus(databasePath = defaultDatabasePath()): Promise<{ code: number; text: string; live?: LiveStatus }> {
   const state = readStateFile(databasePath);
   if (!state) throw new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
   try {
     const live = await queryLive(databasePath);
     if (!live) throw new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
-    return { code: 0, text: formatLiveStatus(live.status) };
+    return { code: 0, text: formatLiveStatus(live.status), live: live.status };
   } catch (error) {
     if (error instanceof AutoupdateError && (error.code === "AUTOUPDATE_NOT_RUNNING" || error.code === "AUTOUPDATE_UNRESPONSIVE")) {
       if (isPidAlive(state.pid)) {

@@ -826,6 +826,24 @@ export class IndexStore {
       .run(mode);
   }
 
+  /** Workbench background autoupdate settings; defaults match the CLI defaults. */
+  autoupdateSettings(): { debounceMs: number; reconcileMs: number } {
+    const debounceMs = Number(this.metadata("autoupdate_debounce_ms"));
+    const reconcileMs = Number(this.metadata("autoupdate_reconcile_ms"));
+    return {
+      debounceMs: Number.isSafeInteger(debounceMs) && debounceMs >= 200 && debounceMs <= 60_000 ? debounceMs : 1_500,
+      reconcileMs: Number.isSafeInteger(reconcileMs) && reconcileMs >= 900_000 && reconcileMs <= 86_400_000 ? reconcileMs : 21_600_000,
+    };
+  }
+
+  setAutoupdateSettings(settings: { debounceMs: number; reconcileMs: number }): void {
+    if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('autoupdate_debounce_ms', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(String(settings.debounceMs));
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('autoupdate_reconcile_ms', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(String(settings.reconcileMs));
+  }
+
   moveRootsToTrash(roots: readonly string[]): TrashedRoot[] {
     const release = acquireWriteLock(this.databasePath);
     try {

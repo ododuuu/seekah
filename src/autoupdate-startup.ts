@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync,
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { AutoupdateError } from "./autoupdate-control.js";
+import { AutoupdateError, type AutoupdateSettings } from "./autoupdate-control.js";
 import { dataDirectory, defaultDatabasePath } from "./store.js";
 
 const execFile = promisify(nodeExecFile);
@@ -34,6 +34,8 @@ export interface StartupCommandOptions {
   databasePath?: string;
   nodePath?: string;
   cliPath?: string;
+  /** Workbench may include saved parameters; CLI calls omit this to preserve legacy arguments. */
+  autoupdateSettings?: AutoupdateSettings;
   runPowerShell?: (executable: string, args: readonly string[], env: NodeJS.ProcessEnv) => Promise<void>;
 }
 
@@ -77,8 +79,11 @@ function quoteWindowsArgument(value: string): string {
   return result + "\\".repeat(slashes * 2) + '"';
 }
 
-function shortcutArguments(cliPath: string, dataDir: string): string {
-  return [quoteWindowsArgument(cliPath), "autoupdate", "start", "--data-dir", quoteWindowsArgument(dataDir)].join(" ");
+function shortcutArguments(cliPath: string, dataDir: string, settings?: AutoupdateSettings): string {
+  return [
+    quoteWindowsArgument(cliPath), "autoupdate", "start", "--data-dir", quoteWindowsArgument(dataDir),
+    ...(settings ? ["--debounce", String(settings.debounceMs), "--reconcile", String(settings.reconcileMs)] : []),
+  ].join(" ");
 }
 
 function markerFromFile(paths: StartupShortcutPaths): StartupOwnerMarker | undefined {
@@ -113,6 +118,7 @@ function ensureNoConflict(paths: StartupShortcutPaths): StartupOwnerMarker | und
 }
 
 async function createShortcut(paths: StartupShortcutPaths, nodePath: string, cliPath: string, dataDir: string,
+  settings: AutoupdateSettings | undefined,
   env: NodeJS.ProcessEnv, runPowerShell: StartupCommandOptions["runPowerShell"]): Promise<void> {
   const executable = powershellPath(env);
   const script = [
@@ -129,7 +135,7 @@ async function createShortcut(paths: StartupShortcutPaths, nodePath: string, cli
     ...env,
     SEEKAH_STARTUP_SHORTCUT: paths.shortcutPath,
     SEEKAH_STARTUP_NODE: nodePath,
-    SEEKAH_STARTUP_ARGUMENTS: shortcutArguments(cliPath, dataDir),
+    SEEKAH_STARTUP_ARGUMENTS: shortcutArguments(cliPath, dataDir, settings),
     SEEKAH_STARTUP_WORKING_DIRECTORY: path.dirname(cliPath),
   };
   const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
@@ -158,7 +164,8 @@ export async function autoupdateStartupEnable(options: StartupCommandOptions = {
   const owner = ensureNoConflict(resolved.paths);
   try {
     mkdirSync(resolved.paths.directory, { recursive: true });
-    await createShortcut(resolved.paths, resolved.nodePath, resolved.cliPath, resolved.dataDir, resolved.env, options.runPowerShell);
+    await createShortcut(resolved.paths, resolved.nodePath, resolved.cliPath, resolved.dataDir,
+      options.autoupdateSettings, resolved.env, options.runPowerShell);
     writeOwnerMarker(resolved.paths, {
       schemaVersion: STARTUP_MARKER_SCHEMA,
       product: "seekah",
