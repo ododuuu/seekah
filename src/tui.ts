@@ -5,9 +5,14 @@ import { prepareSelectedContext, terminalText, type SelectedContextReference } f
 import type { SearchMode, SearchResult, SearchResultPage } from "./search.js";
 import { formatTotal, SearchIndexChangedError, SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
+import { describeIndexClientError } from "./index-errors.js";
 import { productVersion } from "./version.js";
 
 export type TuiStopReason = "eof" | "sigint" | "sigterm";
+
+export function tuiUserErrorMessage(error: unknown): string {
+  return describeIndexClientError(error) ?? (error instanceof Error ? error.message : String(error));
+}
 export type TuiEvent =
   | { type: "text"; text: string }
   | { type: "up" | "down" | "space" | "enter" | "page-up" | "page-down" | "escape" | "left" | "tab" | "shift-tab" | "backspace" | "resize" }
@@ -1003,7 +1008,7 @@ export async function runTui(
           session = null; page = null; pendingContext = null; workflow.length = 0;
           state = { ...initialTuiState(), input: "" };
           message = `SEARCH_INDEX_CHANGED：${error.message} 請重新搜尋。`;
-        } else message = error instanceof Error ? error.message : String(error);
+        } else message = tuiUserErrorMessage(error);
       }
     }
   } finally {

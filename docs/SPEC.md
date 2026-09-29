@@ -2,7 +2,7 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.42.0（第 66 節主索引 WAL 與有上限的鎖等待；第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.42.0（第 67 節工作台、索引 worker 與 MCP／TUI／autoupdate 入口的 SQLITE_BUSY 與復原錯誤呈現；第 66 節主索引 WAL 與有上限的鎖等待；第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-29
 - 狀態：package 為 0.42.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
@@ -2150,3 +2150,41 @@ docsearch doctor
 - 不加入 OCR、embedding、LAN 暴露、新文件格式、外部文件服務或文件內容外傳；所有 WAL／checkpoint／回復都在本機。
 - 不以關閉 durability、刪除 WAL／journal、跳過 transaction 或靜默吞掉一般 SQLite 錯誤解決容量／鎖競爭；checkpoint 的非 busy 錯誤必須留下 `onWarning` 診斷；不改搜尋排序、索引正文、schema 契約或既有資料遷移語意。
 - 不把長時間 readonly transaction 加入產品搜尋；外部／測試讀取者若持續保留 snapshot，checkpoint 只能 best effort，不能以無限等待或無限重試換取 truncate。
+
+## 67. 工作台與索引 worker 的 SQLITE_BUSY 呈現
+
+依 D099。即使背景寫入已改走 INDEX_BUSY 重試或主庫改為 WAL，工作台 HTTP API 與索引 worker 在等待逾時、checkpoint 邊界或仍持有互斥鎖時，仍可能收到 SQLite errcode 5／6。這些錯誤必須以固定 `INDEX_BUSY` 訊息回給使用者，不得把原文 `database is locked` 放進 `error` 欄或索引進度。
+
+### 67.1 工作台 HTTP
+
+- `POST /api/settings` 讀取與寫入索引設定、`POST /api/index-roots/trash`、`DELETE /api/trash` 以共用 `withIndexStore` 開啟主庫：沿用既有 `openStore` 的五次有上限重試與 `isSqliteBusy`／`IndexBusyError` 判斷，不另複製第三份 busy 檢查。
+- 重試耗盡後回 HTTP 409，`error` 為「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」。
+- 共用 API catch 對任何仍冒出的 `isSqliteBusy`／`IndexBusyError` 同樣轉成上述 409 與固定訊息，作為最後防線；非 busy 錯誤維持原狀態碼與原文。
+- `/api/search` 經 `openStore` 最終仍 busy 時走同一 409 契約。
+
+### 67.4 需要 SQLite 回復的錯誤
+
+- `errcode` 為 776（`SQLITE_READONLY_ROLLBACK`）、1288（`SQLITE_READONLY_CANTINIT`）或 1294（`SQLITE_CANTOPEN_DIRTYWAL`）時，比對**完整** extended code，不得 `& 0xff`。
+- 工作台 `withIndexStore` 對此類錯誤不重試；HTTP 503，`error` 為「INDEX_RECOVERY_REQUIRED：索引有未完成交易，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。」（與 CLI 現有原文一致）。
+- `GET /api/index-status` 的 `unavailable` 在此情況使用同一段固定 `message` 與 `errorCode: INDEX_RECOVERY_REQUIRED`。
+- 索引 worker 使用 `code: "INDEX_RECOVERY_REQUIRED"` 與同一固定訊息。原文 SQLite 診斷不得出現在 `error` 欄或索引進度。
+
+### 67.2 索引 worker
+
+- `src/index-worker.ts` 失敗時若為 `IndexBusyError` 或 `isSqliteBusy`，`post({ type: "error", message, code: "INDEX_BUSY" })` 使用同一固定訊息。工作台既有 `code === "INDEX_BUSY"` 分支繼續顯示該訊息。
+
+### 67.3 明確不做與驗收
+
+- 不改 `busy_timeout`、journal mode、`src/store.ts`、`src/live-update.ts`、`src/local-update.ts`、`src/write-lock.ts`。
+- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，`POST /api/settings` 與兩個 trash 端點回 409、含固定 `INDEX_BUSY`、不含 `database is locked`。`/api/search` 不得含原文 `database is locked`；狀態為 200，或 409 且訊息為同一固定 `INDEX_BUSY`（WAL 下讀不擋寫時可為 200）。放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。注入 776／1288／1294 時回 503 與固定 `INDEX_RECOVERY_REQUIRED` 訊息、不含原文；busy 路徑仍為 409。
+- package 版本維持 0.42.0。
+
+### 67.5 MCP、TUI 與 autoupdate 入口
+
+- MCP `errorResult` 對 `IndexBusyError`／`isSqliteBusy` 回固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」；對 776／1288／1294 回與 CLI 同一段 `INDEX_RECOVERY_REQUIRED`。其他錯誤維持 `MCP_INTERNAL`。判斷重用 `src/index-errors.ts`，不另複製 busy 檢查。
+- TUI 互動 catch 對 busy／recovery 顯示同一固定中文；其餘錯誤維持原訊息。
+- `autoupdate` CLI 未分類分支、daemon catch、`AUTOUPDATE_START_FAILED` 先經同一分類再寫 stderr／`autoupdate.log`，不得寫入 SQLite 原文。`formatLiveStatus` 將 `recentErrors` 內含 `database is locked` 的舊項目換成固定 INDEX_BUSY 句（治標；根治需改 `live-update.ts` 的 `rememberError`）。
+- 固定 INDEX_BUSY 訊息集中於 `index-errors.ts` 的 `INDEX_BUSY_CLIENT_MESSAGE`；工作台 HTTP 與索引 worker 改用它。
+- `test/m60.test.ts` 以注入錯誤模擬 MCP 工具路徑、TUI 與 autoupdate 分類。
+- package 版本維持 0.42.0。
+

@@ -12,6 +12,7 @@ import {
 } from "./autoupdate-control.js";
 import { createAutoupdateLog, formatAutoupdateLogLine } from "./autoupdate-log.js";
 import { LiveUpdateEngine, resolveAutoupdateReconcile, resolveWatchDebounce, WatchError } from "./live-update.js";
+import { describeIndexClientError, sanitizeRecentError } from "./index-errors.js";
 
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus } from "./autoupdate-startup.js";
 export { AutoupdateError, resolveAutoupdateReconcile };
@@ -39,6 +40,20 @@ function resolveCliPath(explicit?: string): string {
   return fileURLToPath(import.meta.url);
 }
 
+export function autoupdateFailureOutput(error: unknown): { code: string; message: string } {
+  const classified = describeIndexClientError(error);
+  if (classified) {
+    return {
+      code: classified.startsWith("INDEX_BUSY") ? "INDEX_BUSY" : "INDEX_RECOVERY_REQUIRED",
+      message: classified,
+    };
+  }
+  if (error instanceof AutoupdateError || error instanceof LiveBusyError) {
+    return { code: error.code, message: error.message };
+  }
+  return { code: "AUTOUPDATE_START_FAILED", message: error instanceof Error ? error.message : "daemon failed" };
+}
+
 export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: boolean }): string {
   const lines = [
     extra?.unresponsive ? "自動更新：無回應（stale）" : `自動更新：${status.mode === "foreground" ? "前景監看" : "背景執行中"}`,
@@ -57,7 +72,7 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     `最後局部更新：${status.lastLocalUpdate ? `${status.lastLocalUpdate.at} ${status.lastLocalUpdate.path}` : "無"}`,
     `最後完整校正：${status.lastReconcile ? `${status.lastReconcile.at} ${status.lastReconcile.root} 完整=${status.lastReconcile.complete ? "是" : "否"}` : "無"}`,
     `下次完整校正：${status.nextReconcileAt ?? "尚未排程"}`,
-    `最近錯誤：${status.recentErrors.length ? status.recentErrors.join("；") : "無"}`,
+    `最近錯誤：${status.recentErrors.length ? status.recentErrors.map(sanitizeRecentError).join("；") : "無"}`,
   ];
   if (status.logError) lines.push(`日誌：${status.logError}`);
   lines.push("根目錄：");
@@ -229,7 +244,8 @@ export async function autoupdateStart(
     return { code: 0, text: `已啟動背景自動更新\n${formatLiveStatus(status)}` };
   } catch (error) {
     if (error instanceof AutoupdateError) throw error;
-    throw new AutoupdateError("AUTOUPDATE_START_FAILED", error instanceof Error ? error.message : "無法啟動背景程序。", 4);
+    const failure = autoupdateFailureOutput(error);
+    throw new AutoupdateError("AUTOUPDATE_START_FAILED", failure.message, 4);
   }
 }
 
@@ -301,10 +317,11 @@ export async function runAutoupdateDaemon(
     log.write(formatAutoupdateLogLine({ phase: "stop", code: "OK", count: code }));
     return code;
   } catch (error) {
+    const failure = autoupdateFailureOutput(error);
     log.write(formatAutoupdateLogLine({
       phase: "error",
-      code: error instanceof AutoupdateError || error instanceof LiveBusyError ? error.code : "AUTOUPDATE_START_FAILED",
-      message: error instanceof Error ? error.message : "daemon failed",
+      code: failure.code,
+      message: failure.message,
     }));
     return 4;
   } finally {
@@ -348,7 +365,7 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         if (!value || value.startsWith("--")) throw new Error("內部 database path 缺少值。");
         databasePathOption = path.resolve(value);
       } else if (option.startsWith("--") || !option.trim()) {
-        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\\n        docsearch autoupdate status [--data-dir <資料目錄>]\\n        docsearch autoupdate stop [--data-dir <資料目錄>]\\n        docsearch autoupdate startup enable|disable|status");
+        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
       } else positional.push(option);
     }
     if (daemon) {
@@ -366,7 +383,7 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         throw new Error("用法：docsearch autoupdate startup enable|disable|status");
       }
     } else if (positional.length !== 1 || !action || !["start", "status", "stop"].includes(action)) {
-      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\\n        docsearch autoupdate status [--data-dir <資料目錄>]\\n        docsearch autoupdate stop [--data-dir <資料目錄>]\\n        docsearch autoupdate startup enable|disable|status");
+      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
     }
     if ((action === "status" || action === "stop" || action === "startup") && (debounce !== undefined || reconcile !== undefined)) {
       throw new Error(`autoupdate ${action} 不接受 --debounce／--reconcile。`);
@@ -407,7 +424,8 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
       console.error(`${error.code}：${error.message}`);
       return 2;
     }
-    console.error((error as Error).message);
-    return 2;
+    const failure = autoupdateFailureOutput(error);
+    console.error(failure.message);
+    return failure.code === "INDEX_BUSY" || failure.code === "INDEX_RECOVERY_REQUIRED" ? 3 : 2;
   }
 }

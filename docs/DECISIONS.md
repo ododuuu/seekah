@@ -1,5 +1,23 @@
 # 設計決策紀錄
 
+## D099：工作台與索引 worker 不以 SQLite 原文呈現 BUSY
+
+- 日期：2026-09-29。
+- 事實：
+  - 盤點 `report-busy-audit.md`：`src/workbench.ts` 的 `/api/settings` 讀（當時約 685）與寫（約 708）、`POST /api/index-roots/trash`（約 662）、`DELETE /api/trash`（約 670）直接 `new IndexStore`，busy 時 `error.message` 經共用 catch（約 925）回前端；`src/index-worker.ts` 約 84–85 行把 `error.message` 當進度失敗訊息。使用者會看到原文 `database is locked`。
+  - `openStore` 已對唯讀搜尋做五次有上限重試並用 `isSqliteBusy`；寫入設定與垃圾桶沒有同一包裝。`write-lock.ts` 已匯出 `isSqliteBusy`（D097），不應再複製第三份判斷。
+- 決定：
+  - 新增 `withIndexStore`，重用 `openStore` 的重試節奏；settings 讀寫與 trash 端點改走它。最終仍 busy 時 HTTP 409 與固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」
+  - API catch 將 `isSqliteBusy`／`IndexBusyError` 一律轉成同一 409 訊息。
+  - 索引 worker 對 busy 使用 `code: "INDEX_BUSY"` 與同一固定訊息，接上工作台既有分支。
+  - 補註（同編號）：SQLite 回復類 `errcode` 776／1288／1294 不重試、不走 409。工作台 HTTP 503 與 CLI 同一段 `INDEX_RECOVERY_REQUIRED` 固定訊息（含勿刪 journal／WAL）；worker 使用 `code: INDEX_RECOVERY_REQUIRED`。判斷用完整 extended code，不得 `& 0xff`。共用分類放在 `src/index-errors.ts`，不改 CLI／store／write-lock／live-update／local-update。
+  - 補註（同編號）：MCP `errorResult`、TUI catch、autoupdate CLI／daemon／`AUTOUPDATE_START_FAILED` 與 `formatLiveStatus` 的 `recentErrors` 消毒，一律走 `classifyIndexClientError`／`INDEX_BUSY_CLIENT_MESSAGE`／`INDEX_RECOVERY_REQUIRED_MESSAGE`。工作台與 worker 刪除重複的 INDEX_BUSY 字串常數。`recentErrors` 消毒是治標；根治需改 `live-update.ts`。
+- 理由：WAL 或背景重試之後仍可能 BUSY；工作台是使用者看得見的最後一層，必須把 SQLite 原文擋在 API 邊界。回復類錯誤不是暫時忙碌，重試無效且可能誤導使用者刪 sidecar。
+- 不做什麼：
+  - 不改 `busy_timeout`、不動 `src/store.ts`／`src/live-update.ts`／`src/local-update.ts`／`src/write-lock.ts`／`src/cli.ts`。
+  - 不把非 busy 錯誤改成 INDEX_BUSY，不把 recovery 誤判成 busy，不改 schema 或搜尋語意。
+- 版本：0.42.0。
+
 ## D098：主索引改用 WAL 並將 busy 等待設為有上限
 
 - 日期：2026-09-29。
