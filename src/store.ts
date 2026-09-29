@@ -502,12 +502,18 @@ export interface IndexStoreOptions {
   readOnly?: boolean;
   /** WAL 切換、checkpoint 或 busy_timeout 還原需要診斷時呼叫；預設寫到 stderr。 */
   onWarning?: (message: string) => void;
+  /** @internal 僅供測試縮短正常 writable statement 的 busy 等待；不屬於 CLI／環境變數契約。 */
+  writeBusyTimeoutMs?: number;
+  /** @internal 僅供測試降低 WAL checkpoint threshold；不屬於 CLI／環境變數契約。 */
+  walCheckpointThresholdBytes?: number;
 }
 
 export class IndexStore {
   private readonly db: DatabaseSync;
   private readonly readOnly: boolean;
   private readonly onWarning: (message: string) => void;
+  private readonly writeBusyTimeoutMs: number;
+  private readonly walCheckpointThresholdBytes: number;
   private walSwitchDeferred = false;
   private readonly walWarningKeys = new Set<string>();
   private walEnabled = false;
@@ -534,6 +540,8 @@ export class IndexStore {
     this.databasePath = databasePath;
     this.readOnly = options.readOnly ?? false;
     this.onWarning = options.onWarning ?? (message => console.error(message));
+    this.writeBusyTimeoutMs = options.writeBusyTimeoutMs ?? MAIN_WRITE_BUSY_TIMEOUT_MS;
+    this.walCheckpointThresholdBytes = options.walCheckpointThresholdBytes ?? MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES;
     if (this.readOnly) {
       this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_READ_BUSY_TIMEOUT_MS, { readOnly: true }));
       this.db.exec("PRAGMA query_only = ON");
@@ -568,7 +576,7 @@ export class IndexStore {
       }
       this.pathOrder = this.loadPathOrder();
       // Constructor/schema work uses the short bound; normal transactions use the write bound.
-      this.db.exec(`PRAGMA busy_timeout = ${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
+      this.db.exec(`PRAGMA busy_timeout = ${this.writeBusyTimeoutMs}`);
     } finally { release(); }
     this.shortTermsReady = this.metadata("payload_bloom_version") === "2";
   }
@@ -2505,9 +2513,9 @@ export class IndexStore {
   checkpointWal(options: { forceTruncate?: boolean } = {}): void {
     if (this.readOnly || !this.walEnabled) return;
     this.runWalCheckpoint("PASSIVE");
-    if (!options.forceTruncate && this.walSizeBytes() <= MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES) return;
+    if (!options.forceTruncate && this.walSizeBytes() <= this.walCheckpointThresholdBytes) return;
     this.runWalCheckpoint("RESTART");
-    if (options.forceTruncate || this.walSizeBytes() > MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES) this.runWalCheckpoint("TRUNCATE");
+    if (options.forceTruncate || this.walSizeBytes() > this.walCheckpointThresholdBytes) this.runWalCheckpoint("TRUNCATE");
   }
 
   private walSizeBytes(): number {
@@ -2527,7 +2535,7 @@ export class IndexStore {
       }
     } finally {
       try {
-        this.db.exec(`PRAGMA busy_timeout=${MAIN_WRITE_BUSY_TIMEOUT_MS}`);
+        this.db.exec(`PRAGMA busy_timeout=${this.writeBusyTimeoutMs}`);
       } catch (error) {
         this.warnWalOnce("restore-busy-timeout", `主索引 WAL busy_timeout 還原失敗：${this.describeWalError(error)}`);
       }
