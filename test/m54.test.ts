@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { DocumentRecord } from "../src/model.js";
 import { IndexStore } from "../src/store.js";
-
-const LARGE_DOCUMENT_COUNT = 320_000;
-const MAX_READ_ONLY_OPEN_MS = 400;
 
 function scalar(database: string, sql: string, ...parameters: (string | number)[]): unknown {
   const db = new DatabaseSync(database, { readOnly: true });
@@ -23,35 +20,40 @@ function document(root: string, filename: string): DocumentRecord {
     blocks: [{ ordinal: 0, heading: null, content: "needle", locationKind: "line", locationValue: "第 1 行" }],
   };
 }
+function spyPathDetection(): { readonly calls: number; restore: () => void } {
+  type PathDetectionProbe = { detectPathOrder(this: IndexStore): string };
+  const prototype = IndexStore.prototype as unknown as PathDetectionProbe;
+  const original = prototype.detectPathOrder;
+  let calls = 0;
+  prototype.detectPathOrder = function(this: IndexStore): string {
+    calls++;
+    return original.call(this);
+  };
+  return {
+    get calls() { return calls; },
+    restore: () => { prototype.detectPathOrder = original; },
+  };
+}
 
-async function createLargeDatabase(database: string, keepFlag: boolean): Promise<void> {
+async function createMissingPathOrderDatabase(database: string, root: string): Promise<void> {
   const store = new IndexStore(database);
-  store.close();
+  try { store.upsert(document(root, "plain.txt")); }
+  finally { store.close(); }
   const db = new DatabaseSync(database);
-  try {
-    db.exec("BEGIN");
-    const insert = db.prepare(`INSERT INTO documents
-      (path, filename, extension, size_bytes, modified_at_ms, indexed_at_ms, status, error_code, error_message, parse_version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-    for (let index = 0; index < LARGE_DOCUMENT_COUNT; index++) {
-      const filename = `doc-${String(index).padStart(6, "0")}.txt`;
-      insert.run(path.join(path.dirname(database), filename), filename, ".txt", 1, 1, 1, "indexed", null, null, null);
-    }
-    if (keepFlag) db.exec("INSERT OR REPLACE INTO metadata(key, value) VALUES ('path_order', 'native')");
-    else db.exec("DELETE FROM metadata WHERE key = 'path_order'");
-    db.exec("COMMIT");
-  } finally { db.close(); }
+  try { db.exec("DELETE FROM metadata WHERE key = 'path_order'"); }
+  finally { db.close(); }
 }
 
 test("path_order persists utf16 on supplementary upsert and never downgrades after deletion", async () => {
-  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m52-path-order-"));
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m54-path-order-"));
   const database = path.join(temp, "index.db");
   const filename = "order-😀.txt";
   try {
     const store = new IndexStore(database);
-    assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), "native");
-    store.upsert(document(temp, filename));
-    store.close();
+    try {
+      assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), "native");
+      store.upsert(document(temp, filename));
+    } finally { store.close(); }
     assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), "utf16");
     const reopened = new IndexStore(database);
     try { assert.equal(reopened.removeDocument(path.join(temp, filename)), true); }
@@ -60,8 +62,19 @@ test("path_order persists utf16 on supplementary upsert and never downgrades aft
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
+test("touchMetadata upgrades path_order for supplementary paths", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m54-path-order-metadata-"));
+  const database = path.join(temp, "index.db");
+  try {
+    const store = new IndexStore(database);
+    try { store.touchMetadata(document(temp, "metadata-😀.txt")); }
+    finally { store.close(); }
+    assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), "utf16");
+  } finally { await rm(temp, { recursive: true, force: true }); }
+});
+
 test("writable opening backfills path_order once for an older index", async () => {
-  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m52-path-order-legacy-"));
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m54-path-order-legacy-"));
   const database = path.join(temp, "index.db");
   try {
     const initial = new IndexStore(database);
@@ -76,16 +89,17 @@ test("writable opening backfills path_order once for an older index", async () =
   } finally { await rm(temp, { recursive: true, force: true }); }
 });
 
-test("read-only opening without path_order does not scan a 320k-document table", async () => {
-  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m52-path-order-open-"));
+test("read-only opening without path_order does not invoke path detection", async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m54-path-order-open-"));
   const database = path.join(temp, "index.db");
   try {
-    await createLargeDatabase(database, false);
-    const started = performance.now();
-    const store = new IndexStore(database, { readOnly: true });
-    const elapsed = performance.now() - started;
-    store.close();
-    assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), undefined);
-    assert.ok(elapsed < MAX_READ_ONLY_OPEN_MS, `read-only open took ${elapsed.toFixed(1)} ms`);
+    await createMissingPathOrderDatabase(database, temp);
+    const probe = spyPathDetection();
+    try {
+      const store = new IndexStore(database, { readOnly: true });
+      store.close();
+      assert.equal(probe.calls, 0);
+      assert.equal(scalar(database, "SELECT value FROM metadata WHERE key = 'path_order'"), undefined);
+    } finally { probe.restore(); }
   } finally { await rm(temp, { recursive: true, force: true }); }
 });

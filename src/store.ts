@@ -1339,6 +1339,7 @@ export class IndexStore {
 
 
   touchMetadata(document: DocumentRecord, root?: string): void {
+    const upgradePathOrder = this.pathOrder === "native" && SUPPLEMENTARY_PATH.test(document.path);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const parseVersion = textParseExtensions.has(document.extension) ? TEXT_PARSE_VERSION : null;
@@ -1361,7 +1362,12 @@ export class IndexStore {
         filenameFts.insertUni.run(row.id, tokens.unigrams);
         if (tokens.bigrams) filenameFts.insertBi.run(row.id, tokens.bigrams);
       }
+      if (upgradePathOrder) {
+        this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)")
+          .run(PATH_ORDER_METADATA_KEY, "utf16");
+      }
       this.db.exec("COMMIT");
+      if (upgradePathOrder) this.pathOrder = "utf16";
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
