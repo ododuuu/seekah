@@ -1,6 +1,7 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
+import { isSqliteBusy } from "./write-lock.js";
 
 export class LiveBusyError extends Error {
   readonly code = "LIVE_INSTANCE_ACTIVE";
@@ -31,8 +32,7 @@ export function acquireLiveLease(databasePath: string): () => void {
     lock.exec("BEGIN IMMEDIATE");
   } catch (error) {
     lock.close();
-    const code = (error as { errcode?: number }).errcode;
-    if (code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6)) throw new LiveBusyError();
+    if (isSqliteBusy(error)) throw new LiveBusyError();
     throw error;
   }
   let released = false;

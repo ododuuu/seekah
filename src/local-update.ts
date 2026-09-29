@@ -8,7 +8,7 @@ import { parseDocument } from "./parser.js";
 import { throwIfAborted } from "./progress.js";
 import { samePath } from "./root-plan.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
-import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
 
 export const WRITER_BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000] as const;
@@ -85,7 +85,7 @@ export async function withWriterBackoff<T>(
       try { return await fn(); }
       finally { release(); }
     } catch (error) {
-      if (!(error instanceof IndexBusyError)) throw error;
+      if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
       const delay = WRITER_BACKOFF_MS[Math.min(attempt, WRITER_BACKOFF_MS.length - 1)]!;
       await sleep(delay);
     }

@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
 import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
 import {
-  applyPathChange, applyFileDelete, applyFileUpdate, commitPreparedFileUpdatesLocked, identityKey,
+  applyPathChange, applyFileDelete, applyFileUpdate, commitPreparedFileUpdateLocked, commitPreparedFileUpdatesLocked, identityKey,
   isIgnoreFile, prepareFileUpdate, sleepMs, UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, withWriterBackoff,
   type LocalUpdateOptions, type LocalUpdateResult, type PreparedFileUpdate,
 } from "./local-update.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
-import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
+import { OperationCancelledError, throwIfAborted, type ProgressUpdate } from "./progress.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
 import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, RootWatchState } from "./autoupdate-control.js";
 import { DEFAULT_QUEUE_LIMIT, LiveWorkQueue, QueuePersistError, type LiveWorkQueueOptions } from "./live-queue.js";
@@ -562,7 +562,7 @@ export class LiveUpdateEngine {
     } catch (error) {
       if (error instanceof OperationCancelledError) {
         state.dirty = true;
-      } else if (error instanceof IndexBusyError) {
+      } else if (error instanceof IndexBusyError || isSqliteBusy(error)) {
         this.log(`INDEX_BUSY：${state.root}：稍後重試同步。`);
         writerBusy = true;
         state.dirty = true;
@@ -861,16 +861,27 @@ export class LiveUpdateEngine {
     prepared: readonly PreparedLocalItem[],
     options: LocalUpdateOptions,
   ): Promise<LocalUpdateResult[]> {
-    const release = acquireWriteLock(this.store.databasePath);
-    try {
-      return await commitPreparedFileUpdatesLocked(
-        prepared.map(item => item.prepared),
-        this.store,
-        { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
-      );
-    } finally {
-      release();
-    }
+    return withWriterBackoff(this.store.databasePath, options, async () => {
+      const sleep = options.sleep ?? sleepMs;
+      const results: LocalUpdateResult[] = [];
+      for (const item of prepared) {
+        for (let attempt = 0; ; attempt++) {
+          throwIfAborted(options.signal);
+          try {
+            results.push(await commitPreparedFileUpdateLocked(
+              item.prepared,
+              this.store,
+              { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
+            ));
+            break;
+          } catch (error) {
+            if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
+            await sleep(WRITER_BACKOFF_MS[Math.min(attempt, WRITER_BACKOFF_MS.length - 1)]!);
+          }
+        }
+      }
+      return results;
+    });
   }
 
   private async applyOne(

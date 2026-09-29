@@ -1,4 +1,4 @@
-import { acquireWriteLock } from "./write-lock.js";
+import { acquireWriteLock, isSqliteBusy } from "./write-lock.js";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -833,12 +833,7 @@ export class IndexStore {
           throw e;
         }
       } catch (error) {
-        let code: number | undefined;
-        if (error && typeof error === "object" && "errcode" in error) {
-          const c = Reflect.get(error as object, "errcode");
-          if (typeof c === "number") code = c;
-        }
-        if (code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6)) {
+        if (isSqliteBusy(error)) {
           lastErr = error;
           continue;
         }

@@ -23,7 +23,7 @@ import { sync } from "./sync.js";
 import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
-import { IndexBusyError } from "./write-lock.js";
+import { isSqliteBusy, IndexBusyError } from "./write-lock.js";
 import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
 import { resolveWatchDebounce } from "./live-update.js";
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus, type StartupCommandOptions } from "./autoupdate-startup.js";
@@ -154,13 +154,6 @@ function modelRoute(input: ContextRequest, keys: ProviderKeys) {
   });
 }
 
-function sqliteBusy(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = "code" in error ? String((error as { code?: unknown }).code) : "";
-  const errcode = "errcode" in error && typeof (error as { errcode?: unknown }).errcode === "number"
-    ? Number((error as { errcode: number }).errcode) : undefined;
-  return /BUSY|LOCKED/u.test(code) || (errcode !== undefined && ((errcode & 0xff) === 5 || (errcode & 0xff) === 6));
-}
 
 async function openStore<T>(databasePath: string, operation: (store: IndexStore) => T | Promise<T>): Promise<T> {
   if (!existsSync(databasePath)) throw new Error("索引尚未建立；仍可只使用拖曳文件。");
@@ -170,7 +163,7 @@ async function openStore<T>(databasePath: string, operation: (store: IndexStore)
       store = new IndexStore(databasePath, { readOnly: true });
       return await operation(store);
     } catch (error) {
-      if (!sqliteBusy(error) || attempt === 4) throw error;
+      if (!isSqliteBusy(error) || attempt === 4) throw error;
       await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
     } finally {
       store?.close();

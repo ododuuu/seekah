@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { acquireWriteLock, IndexBusyError } from "./write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
 import { interactiveContext, ContextError } from "./context.js";
 import { runWatch, WatchError, resolveWatchDebounce, resolveWatchRescan } from "./watch.js";
 import { runAutoupdateCommand } from "./autoupdate.js";
@@ -763,7 +763,7 @@ export async function main(args: readonly string[]): Promise<number> {
     }
     const sqliteCode = sqliteExtendedCode(error);
     if (sqliteCode === 776) { console.error("INDEX_RECOVERY_REQUIRED：索引有未完成交易，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。"); return 3; }
-    if (sqliteCode !== undefined && ((sqliteCode & 0xff) === 5 || (sqliteCode & 0xff) === 6)) { console.error("INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"); return 3; }
+    if (isSqliteBusy(error)) { console.error("INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"); return 3; }
     if (error instanceof SearchIndexChangedError) { console.error(`SEARCH_INDEX_CHANGED：${error.message}`); return 3; }
     if (error instanceof IndexBusyError || error instanceof ContextError || error instanceof WatchError || error instanceof ClipboardError) { console.error(`${error.code}：${error.message}`); return 3; }
     if (error instanceof DocumentActionError) { console.error(`${error.code}：${error.message}`); return 3; }

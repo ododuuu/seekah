@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { acquireWriteLock } from "./write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
 import { loadIgnoreRules, type IgnoreRules } from "./ignore.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { applyFileUpdate, type LocalUpdateResult } from "./local-update.js";
@@ -196,6 +196,10 @@ export async function runBackgroundReconcileBatch(
             result = await applyUpdate(fullPath, root, store, updateOptions);
           } catch (error) {
             if (error instanceof OperationCancelledError) throw error;
+            if (error instanceof IndexBusyError || isSqliteBusy(error)) {
+              flush();
+              throw error;
+            }
             uniquePush(state.readFailures, fullPath);
             result = { kind: "unstable", path: fullPath, root, updated: 0, added: 0, removed: 0, unchanged: 0,
               parserCalls: 0, complete: false, deferred: false, diagnostics: [], notices: [] };

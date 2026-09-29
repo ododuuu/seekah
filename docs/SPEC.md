@@ -2,7 +2,7 @@
 
 正式品牌為 **Seekah**（CLI／package：`seekah`），原名 LocalDocSearch／quiet-index。更名相容性見 §45.7；核准的下一版 TUI 見 §45.8。歷史章節的舊名稱、路徑及發布檔名保留原意。
 
-- 規格基線：0.42.0（第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
+- 規格基線：0.42.0（第 65 節背景自動更新的主庫 SQLITE_BUSY 重試；第 64 節背景校正批次寫入進度；第 63 節局部更新鎖外準備與有界群組提交；第 62 節搜尋候選延遲載入與有界 top-K；第 61 節局部更新重用根目錄排除規則；第 60 節背景校正區分讀取失敗與延後核對；第 59 節 SQLITE_BUSY 遷移重試；第 58 節工作台背景自動更新管理；第 57 節工作台搜尋結果改為搜尋引擎式列表；第 56 節新資料夾分批展開；第 55 節忽略資料夾的修改事件與待辦輪替；第 54 節局部更新分批穩定確認；第 53 節自動更新不處理被排除的路徑；第 52 節區段儲存、不記位置索引與提前停止；第 51 節大量刪除效能；第 50 節 block 級索引為遷移前路徑）。0.37.0 版本契約（第 46 節，§46.0～§46.11）從未單獨發布，其各階段併入 0.38.0。
 - 日期：2026-09-29
 - 狀態：package 為 0.42.0。公司 Windows 人工驗收尚未回報。實作與驗收進度以 `docs/STATUS.md` 為準。
 
@@ -2073,4 +2073,36 @@ docsearch doctor
 - 量測：建立數千檔合成資料夾（例如 5000 個小檔），分別在改動前後量測「背景校正完整跑完」的 wall time 與 work.sqlite 交易次數（用 persistHook）；同一資料、同一操作；報告數字如實。
 - 產品行為完全不變：搜尋結果、索引內容、排除、complete 語意、status 均與 baseline 逐位元等價。
 - package 版本 0.42.0。
+
+## 65. 背景自動更新的主庫 SQLITE_BUSY 重試
+
+依 D097。背景自動更新持有 coordination writer lock 後寫入主索引時，若搜尋或其他唯讀連線持有 rollback-journal 的 `SHARED` lock，主庫交易可能直接回傳 SQLite errcode 5（`SQLITE_BUSY`）或 6（`SQLITE_LOCKED`，含 extended code）。這類原始錯誤必須走既有 `INDEX_BUSY` 重試語意，不得成為一般同步失敗。
+
+### 65.1 共用判斷與 root 同步
+
+- 共用 `isSqliteBusy(error)` 以 `errcode & 0xff` 判斷 5／6；SQLite error code 名稱為 `SQLITE_BUSY`／`SQLITE_LOCKED` 及其 extended 形式時也視為相同忙碌。不得只比對完整 extended code。
+- `LiveUpdateEngine` 的 root 同步 catch 對 `IndexBusyError` 與原始 SQLite busy 使用同一分支：記錄 `INDEX_BUSY：<root>：稍後重試同步。`、設定 writer busy、保留 dirty／reconcile／pending，並依既有 backoff 安排下一輪。
+- 該分支不得設定 `syncFailed`，不得呼叫 `rememberError`，不得讓原文 `database is locked` 出現在工作台健康摘要或最近錯誤。
+- 局部更新的佇列項目只有在對應 SQLite 文件交易成功後才可 ack；busy 時未完成的事件與 generation 必須保留。
+
+### 65.2 局部更新群組提交
+
+- `withWriterBackoff` 遇到原始 SQLite busy 時，與 `IndexBusyError` 使用相同的 `WRITER_BACKOFF_MS` 重試，不提高任何 SQLite busy timeout。
+- §63 的已準備文件群組仍只取得一次 coordination writer lock。群組內每份文件重新核對後獨立提交；某份主庫交易 busy 時只重試該份，已成功提交的文件不重做，尚未提交的文件不 ack，取消或停止時仍保留待辦。
+- 既有 metadata recheck、每份 transaction 原子性、50 份／250 ms 群組邊界及文字記憶體上限不變。
+
+### 65.3 背景校正 batch
+
+- `runBackgroundReconcileBatch` 對文件更新遇到原始 SQLite busy 時不得歸入 `readFailures`，必須重新拋出給 root 同步 catch。
+- busy 前已成功處理的 `reconcile_seen` 步驟先提交；發生 busy 的項目不標記為 seen，該目錄 frontier 不提前 pop，`finishReconcile` 不執行。下一輪依 durable seen 跳過已提交項目並重試未完成項目。
+- `removeMissing` 或其他主庫寫入遇到 busy 時同樣走 root 的 `INDEX_BUSY` 分支；不得因 busy 執行不完整的刪除核對、完成 ack 或把 generation 當成已處理。
+- 讀取／解析錯誤與 `FILE_UNSTABLE` 分類仍依 §60；只有真正的讀取／解析問題才寫入 `readFailures`／`deferredChecks`。
+
+### 65.4 明確不做與驗收
+
+- 不改主索引或 work state 的 `busy_timeout = 0`、journal mode、write-lock／live-lease／live-queue timeout，不設定全域非零 busy timeout。
+- 不把一般 SQLite 寫入全面改成無限重試；只沿用既有背景更新 backoff，其他非 busy 錯誤維持原本失敗分類。
+- 不改 schema、generation、搜尋結果、索引內容、排除規則或本機處理邊界；不加入網路或外部服務。
+- `test/m55.test.ts` 以第二條主庫連線持有讀鎖觸發背景更新 busy，驗證沒有 `LIVE_UPDATE_FAILED`、狀態沒有 `database is locked`、待辦保留；釋放讀鎖後下一輪完成，且新增內容可搜尋。
+- package 版本維持 0.42.0。
 

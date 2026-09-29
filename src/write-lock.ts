@@ -10,6 +10,14 @@ export class IndexBusyError extends Error {
   }
 }
 
+export function isSqliteBusy(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const errcode = Reflect.get(error, "errcode");
+  if (typeof errcode === "number" && ((errcode & 0xff) === 5 || (errcode & 0xff) === 6)) return true;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" && /^SQLITE_(?:BUSY|LOCKED)(?:_|$)/u.test(code);
+}
+
 // 留在本機的協調資料庫，不保存文件文字，也不以檔案是否存在判斷忙碌。
 export function acquireWriteLock(databasePath: string): () => void {
   const directory = path.dirname(path.resolve(databasePath));
@@ -30,8 +38,7 @@ export function acquireWriteLock(databasePath: string): () => void {
     lock.exec("BEGIN IMMEDIATE");
   } catch (error) {
     lock.close();
-    const code = (error as { errcode?: number }).errcode;
-    if (code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6)) throw new IndexBusyError();
+    if (isSqliteBusy(error)) throw new IndexBusyError();
     throw error;
   }
   let released = false;

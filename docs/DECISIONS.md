@@ -1,5 +1,25 @@
 # 設計決策紀錄
 
+## D097：背景自動更新遇主庫 SQLITE_BUSY 走 INDEX_BUSY 重試
+
+- 日期：2026-09-29。
+- 事實：
+  - 主索引採 rollback journal，`src/store.ts` 的主庫唯讀／寫入連線與 writer 協調連線都設定 `busy_timeout = 0`。搜尋的唯讀連線持有 `SHARED` lock 時，背景自動更新即使已取得 coordination write lock，主庫的 BEGIN、寫入或 COMMIT 仍可能直接回傳 SQLite errcode 5／6。
+  - 原始 SQLite busy 不是 `IndexBusyError`。`LiveUpdateEngine.runRoot` 原本只對 `IndexBusyError` 保留待辦，其他錯誤會記 `LIVE_UPDATE_FAILED` 並把 `database is locked` 帶進工作台健康摘要；背景校正的單檔 catch 也會把主庫 busy 誤分類為 `readFailures`。
+  - 0.42.0 的局部更新群組提交在 `local-update.ts` 的 backoff 只辨識 `IndexBusyError`；若主庫交易本身 busy，已準備結果路徑不能使用既有忙碌重試語意。
+- 決定：
+  - 在 `write-lock.ts` 匯出共用 `isSqliteBusy(error)`，以 `errcode & 0xff` 判斷 SQLITE_BUSY／SQLITE_LOCKED（含 extended code），並讓 writer lock、live lease、store migration、CLI、Workbench 與背景更新路徑使用同一判斷。
+  - `LiveUpdateEngine` root catch 把原始 SQLite busy 視同 `IndexBusyError`：記錄 `INDEX_BUSY：<root>：稍後重試同步。`，設定 writer busy，保留 dirty／reconcile／pending，不設定 `syncFailed`，不記 `LIVE_UPDATE_FAILED`。
+  - `withWriterBackoff` 與 §63 群組提交納入原始 SQLite busy。群組仍只取得一次 coordination lock，逐份重試主庫交易；成功的文件才完成 ack，未完成文件保留待辦。
+  - `runBackgroundReconcileBatch` 遇主庫 busy 時重新拋出，不寫入 `readFailures`；busy 前的 seen checkpoint 先落盤，busy 項目不標記 seen、不提前 pop frontier、不執行 finish／generation ack。
+- 理由：
+  - SQLite 回滾日誌的讀寫鎖競爭是暫時性資源忙碌，不是來源文件讀取失敗。沿用既有有限／分輪 retry 可保留 at-least-once 與已提交進度，也避免工作台暴露原始 SQLite 診斷。
+  - 共用判斷避免不同入口對 extended code 的處理分歧；維持 `busy_timeout = 0` 可保留 Windows 上立即回報與可取消的鎖語意。
+- 不做什麼：
+  - 不改主索引、work state、write-lock、live-lease 或 live-queue 的 timeout，不設定全域非零 `busy_timeout`。
+  - 不把非 busy 的 SQLite 或檔案錯誤改成重試，不改 schema、generation、搜尋／索引語意，不加入網路或外部服務。
+- 版本：0.42.0。
+
 ## D096：背景校正 checkpoint 批次化（perf P0-3）
 
 - 日期：2026-09-29。依 .claude/task.md P0-3 分析、SPEC §64 與 D093 平行分支分配（SPEC 64、決策 D096）。
