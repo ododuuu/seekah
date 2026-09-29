@@ -1,5 +1,35 @@
 # 設計決策紀錄
 
+## D096：背景校正 checkpoint 批次化（perf P0-3）
+
+- 日期：2026-09-29。依 .claude/task.md P0-3 分析、SPEC §64 與 D093 平行分支分配（SPEC 64、決策 D096）。
+- 問題：src/reconcile.ts 每目錄項目就呼叫 queue.saveReconcileStep；live-queue.ts 每次 save 都是獨立 BEGIN IMMEDIATE + COMMIT + 完整 JSON.stringify(frontier+failed+acks)；synchronous=FULL 使 fsync 成本高。大量檔時 work.sqlite tx 數與 I/O 成為瓶頸，也延長 main writer lock 持有。
+- 決定：
+  - checkpoint 與 event 耐久性分離：acceptPath 等事件仍維持每筆立即落盤；reconcile 的 seen/state 改為 bounded batch。
+  - 在 reconcile.ts 內對單一 reconcile 回合累積 pendingSeen（path + kind）陣列；用記憶體 Set 讓 hasReconcileSeen 在 batch 期間能看到未提交者（避免同一批內重處理）。
+  - 新增 LiveWorkQueue.saveReconcileSteps(state, steps[])：單一 runWrite tx 內做多筆 INSERT OR IGNORE reconcile_seen + 一次 UPDATE reconcile_state。
+  - 批次上限自訂為 200 項或約 1000 ms（合理平衡重播量與 tx 減益）；到限即 flush。
+  - 強制 flush 點（硬性）：
+    - 目錄 entries 處理完、frontier.pop() 之前。
+    - 呼叫 store.removeMissing(known) 之前（保證 known 來自 durable seen）。
+    - 校正結束（frontier 空、finishReconcile）之前。
+    - abort/cancel 時（signal 檢查前 flush）。
+  - 維持既有 process batch（500 entries / 250 ms）用來釋放 main lock；checkpoint batch 可在其內多次 flush。
+  - saveReconcileStep 單筆方法保留（相容性），reconcile 內部改走 batch。
+  - 無任何 schema 變更；PRAGMA synchronous = FULL、journal=WAL、busy=0 完全不動。
+  - readFailures / deferredChecks / complete 語意、removeMissing 前提、at-least-once 全部維持 §60 與既有契約。
+- 驗證：
+  - test/m53.test.ts 用 persistHook 計 tx 數證明減少；中斷重啟案例；remove 前未 flush 誤刪案例（patch 模擬）。
+  - 反向驗證：git show main:src/... 暫換回舊碼，m53 至少 1 項失敗（tx 未降或 restart 案例）；還原通過。
+  - 量測：數千檔合成樹，前後 wall-time 與 tx count 對比（同一資料）。
+- 否決／取捨：
+  - 否決每批都用單一 tx 寫 frontier（會讓 pop 太晚，crash 重播過多；現採「seen batch，pop 後再保存 frontier」）。
+  - 否決把 batch 做到 event 層：會混淆 durability，違反「事件落盤即收」。
+  - 選 200/1000ms 而非 500/250：checkpoint 更細粒度，crash 重做量小；process batch 仍保 lock 釋放。
+  - 不改 JSON 序列化頻率以外：仍每 flush 一次 stringify，但次數大幅降。
+- 相容：行為完全等價（索引內容、搜尋結果、status complete、失敗分類、刪除判斷皆不變）；只改善效能。
+- 版本：待合併時決定。
+
 ## D092：局部更新重用 RootExclusion 避免每檔重讀規則（perf P0-4）
 
 - 日期：2026-09-29。依 P0-4 分析與 SPEC §61 實作純效能改動。

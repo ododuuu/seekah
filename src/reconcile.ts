@@ -11,6 +11,8 @@ import { LiveWorkQueue, type ReconcileState, type ReconcileSeenKind } from "./li
 
 export const DEFAULT_RECONCILE_BATCH_ENTRIES = 500;
 export const DEFAULT_RECONCILE_BATCH_MS = 250;
+export const DEFAULT_RECONCILE_CHECKPOINT_BATCH = 200;
+export const DEFAULT_RECONCILE_CHECKPOINT_MS = 1000;
 
 export interface BackgroundReconcileOptions {
   maxEntries?: number;
@@ -117,6 +119,8 @@ export async function runBackgroundReconcileBatch(
   const now = options.now ?? Date.now;
   const maxEntries = options.maxEntries ?? DEFAULT_RECONCILE_BATCH_ENTRIES;
   const maxMs = options.maxMs ?? DEFAULT_RECONCILE_BATCH_MS;
+  const checkpointMax = DEFAULT_RECONCILE_CHECKPOINT_BATCH;
+  const checkpointMs = DEFAULT_RECONCILE_CHECKPOINT_MS;
   const startedAt = now();
   const existing = queue.reconcileStatus(root);
   const state = queue.beginReconcile(root, options.reason ?? "daemon");
@@ -130,6 +134,26 @@ export async function runBackgroundReconcileBatch(
   let processed = 0;
   let release: (() => void) | undefined;
   let context: IgnoreContext;
+  let pendingSteps: { seenPath: string; kind: ReconcileSeenKind }[] = [];
+  let lastFlushAt = startedAt;
+  const flush = () => {
+    if (pendingSteps.length > 0) {
+      queue.saveReconcileSteps(state, pendingSteps);
+      pendingSteps = [];
+    } else {
+      queue.saveReconcile(state);
+    }
+    lastFlushAt = now();
+  };
+  const hasSeen = (p: string): boolean => {
+    if (pendingSteps.some(s => s.seenPath === p)) return true;
+    return queue.hasReconcileSeen(root, state.generation, p);
+  };
+  const doFlushOnAbort = (e: unknown) => {
+    if (e instanceof OperationCancelledError) {
+      flush();
+    }
+  };
   try {
     context = await loadIgnoreContext(root, store);
     release = acquire(store.databasePath);
@@ -143,23 +167,23 @@ export async function runBackgroundReconcileBatch(
       } catch {
         uniquePush(state.readFailures, directory);
         state.frontier.pop();
-        queue.saveReconcile(state);
+        flush();
         continue;
       }
       let interrupted = false;
       for (const entry of entries) {
         throwIfAborted(options.signal);
         const fullPath = path.join(directory, entry.name);
-        if (queue.hasReconcileSeen(root, state.generation, fullPath)) continue;
+        if (hasSeen(fullPath)) continue;
         const kind = entryKind(entry);
         const skip = shouldSkipEntry(context, fullPath, entry);
         if (skip || kind === "link" || kind === "ignored") {
           state.checked++;
-          queue.saveReconcileStep(state, fullPath, skip ? "ignored" : kind);
+          pendingSteps.push({ seenPath: fullPath, kind: skip ? "ignored" : kind });
         } else if (kind === "directory") {
           state.frontier.push(fullPath);
           state.checked++;
-          queue.saveReconcileStep(state, fullPath, "directory");
+          pendingSteps.push({ seenPath: fullPath, kind: "directory" });
         } else if (kind === "file" && !isIndexArtifact(fullPath, store.databasePath)) {
           let result: LocalUpdateResult;
           try {
@@ -185,18 +209,25 @@ export async function runBackgroundReconcileBatch(
             const deferred = result.deferred || result.diagnostics.some(item => item.code === "FILE_UNSTABLE");
             uniquePush(deferred ? state.deferredChecks : state.readFailures, fullPath);
           }
-          queue.saveReconcileStep(state, fullPath, "file");
+          pendingSteps.push({ seenPath: fullPath, kind: "file" });
         } else {
           state.checked++;
-          queue.saveReconcileStep(state, fullPath, "ignored");
+          pendingSteps.push({ seenPath: fullPath, kind: "ignored" });
         }
         processed++;
+        if (pendingSteps.length >= checkpointMax || (pendingSteps.length > 0 && now() - lastFlushAt >= checkpointMs)) {
+          flush();
+        }
         if (processed >= maxEntries || (processed > 0 && now() - startedAt >= maxMs)) {
           interrupted = true;
           break;
         }
       }
-      if (interrupted) break;
+      if (interrupted) {
+        flush();
+        break;
+      }
+      flush(); // all seen for this dir must be durable before pop
       state.frontier.pop();
       const readFailureBelow = state.readFailures.some(item => coversPath(directory, item));
       const deferredBelow = state.deferredChecks.some(item => coversPath(directory, item));
@@ -208,11 +239,13 @@ export async function runBackgroundReconcileBatch(
       } else if (pending && !state.deferredChecks.some(item => coversPath(directory, item))) {
         uniquePush(state.deferredChecks, directory);
       }
-      queue.saveReconcile(state);
+      flush(); // persist the popped frontier
     }
     if (state.frontier.length > 0) {
+      flush();
       return resultFrom(state, startedAt, { started, done: false, complete: false, updated, unchanged, removed, parserCalls, pendingAfter: true }, now);
     }
+    flush();
     const pendingAfter = queue.reconcilePendingAfter(root, state.scopeAcks);
     if (pendingAfter && !state.deferredChecks.some(item => coversPath(root, item))) {
       uniquePush(state.deferredChecks, root);
@@ -220,6 +253,11 @@ export async function runBackgroundReconcileBatch(
     const complete = state.readFailures.length === 0 && state.deferredChecks.length === 0 && !pendingAfter;
     queue.finishReconcile(root, state.generation, complete, state.readFailures, state.deferredChecks);
     return resultFrom(state, startedAt, { started, done: true, complete, updated, unchanged, removed, parserCalls, pendingAfter }, now);
+  } catch (e) {
+    if (e instanceof OperationCancelledError) {
+      flush();
+    }
+    throw e;
   } finally {
     release?.();
   }
