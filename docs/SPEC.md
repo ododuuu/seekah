@@ -2125,6 +2125,6 @@ docsearch doctor
 ### 67.3 明確不做與驗收
 
 - 不改 `busy_timeout`、journal mode、`src/store.ts`、`src/live-update.ts`、`src/local-update.ts`、`src/write-lock.ts`。
-- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，對工作台呼叫 `POST /api/settings`、兩個 trash 端點與 `/api/search`，回應含 `INDEX_BUSY`、不含 `database is locked`、狀態 409；放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。
+- `test/m56.test.ts`：第二條連線持有主庫寫入鎖時，`POST /api/settings` 與兩個 trash 端點回 409、含固定 `INDEX_BUSY`、不含 `database is locked`。`/api/search` 不得含原文 `database is locked`；狀態為 200，或 409 且訊息為同一固定 `INDEX_BUSY`（WAL 下讀不擋寫時可為 200）。放掉鎖後同樣請求成功。非 busy 錯誤不被吞成 INDEX_BUSY。
 - package 版本維持 0.42.0。
 

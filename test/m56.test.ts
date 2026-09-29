@@ -44,6 +44,14 @@ function assertBusy(result: { status: number; error?: string; raw: string }, lab
   assert.match(result.raw, /INDEX_BUSY/u, detail);
 }
 
+function assertSearchWithoutRawLock(result: { status: number; error?: string; raw: string }): void {
+  const detail = `search status=${result.status} error=${result.error ?? ""} raw=${result.raw}`;
+  assert.equal(result.raw.includes("database is locked"), false, detail);
+  if (result.status === 200) return;
+  assert.equal(result.status, 409, detail);
+  assert.equal(result.error, INDEX_BUSY, detail);
+}
+
 test("m56: 工作台 BUSY 回 409 INDEX_BUSY 且不含原文；非 busy 不被吞", { timeout: 20_000 }, async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m56-workbench-busy-"));
   const { databasePath, root } = await seedIndex(temp);
@@ -66,9 +74,9 @@ test("m56: 工作台 BUSY 回 409 INDEX_BUSY 且不含原文；非 busy 不被�
     assertBusy(await jsonRequest(origin, token, "POST", "/api/settings", { deleteConfirmation: false }), "settings");
     assertBusy(await jsonRequest(origin, token, "POST", "/api/index-roots/trash", { roots: [path.resolve(root)] }), "trash-move");
     assertBusy(await jsonRequest(origin, token, "DELETE", "/api/trash", { roots: [path.resolve(root)] }), "trash-purge");
-    assertBusy(await jsonRequest(origin, token, "POST", "/api/search", {
+    assertSearchWithoutRawLock(await jsonRequest(origin, token, "POST", "/api/search", {
       query: "m56-busy-needle", mode: "phrase", page: 1, pageSize: 20, field: "all", sort: "relevance",
-    }), "search");
+    }));
 
     holder.exec("ROLLBACK");
     holder.close();
@@ -114,7 +122,7 @@ test("m56: 工作台 BUSY 回 409 INDEX_BUSY 且不含原文；非 busy 不被�
       await rm(temp, { recursive: true, force: true });
     } catch (cleanup) {
       if (testError) throw testError;
-      // Windows：node:sqlite mmap 關閉後主庫檔仍可能短暫鎖定，無法 unlink。
+      // 僅在斷言已通過後忽略 Windows mmap 導致的 unlink EBUSY；testError 存在時一律拋出原失敗。
       if (cleanup && typeof cleanup === "object" && "code" in cleanup && cleanup.code === "EBUSY") return;
       throw cleanup;
     }
