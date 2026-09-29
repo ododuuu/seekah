@@ -13,7 +13,7 @@ import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
 import { parseDocument } from "../src/parser.js";
 import { sync } from "../src/sync.js";
-import { acquireWriteLock, IndexBusyError } from "../src/write-lock.js";
+import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "../src/write-lock.js";
 
 type FakeTimer = { id: number; ms: number; fn: () => void };
 
@@ -267,6 +267,14 @@ test("m59: prepared 群組在 stopping 時丟棄且不 ack", { timeout: 10_000 }
     store.close();
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test("m59: isSqliteBusy 接受精確 SQLite lock 訊息且拒絕相似訊息", () => {
+  assert.equal(isSqliteBusy({ message: "database is locked" }), true);
+  assert.equal(isSqliteBusy({ message: "database table is locked" }), true);
+  assert.equal(isSqliteBusy({ errstr: "database is locked" }), true);
+  assert.equal(isSqliteBusy({ message: "database is locked; retry" }), false);
+  assert.equal(isSqliteBusy({ message: "database table is locked by another connection" }), false);
 });
 
 test("m59: withWriterBackoff 用盡有限次數後回傳 INDEX_BUSY", async () => {
