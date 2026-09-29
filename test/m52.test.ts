@@ -23,15 +23,22 @@ type PrepareOptions = {
   deferUnstable?: boolean;
   signal?: AbortSignal;
   parse?: typeof parseDocument;
+  acquireLock?: (databasePath: string) => () => void;
 };
 type PrepareFunction = (filePath: string, root: string, store: IndexStore, options: PrepareOptions) => Promise<PreparedUpdate>;
 type CommitFunction = (prepared: PreparedUpdate, store: IndexStore, options: PrepareOptions) => Promise<LocalUpdateResult>;
+type BatchCommitFunction = (prepared: readonly PreparedUpdate[], store: IndexStore, options: PrepareOptions) => Promise<LocalUpdateResult[]>;
 
-function preparedFunctions(): { prepare: PrepareFunction; commit: CommitFunction } | undefined {
+function preparedFunctions(): { prepare: PrepareFunction; commit: CommitFunction; batchCommit: BatchCommitFunction } | undefined {
   const prepare = Reflect.get(localUpdate, "prepareFileUpdate");
   const commit = Reflect.get(localUpdate, "commitPreparedFileUpdate");
-  if (typeof prepare !== "function" || typeof commit !== "function") return undefined;
-  return { prepare: prepare as PrepareFunction, commit: commit as CommitFunction };
+  const batchCommit = Reflect.get(localUpdate, "commitPreparedFileUpdates");
+  if (typeof prepare !== "function" || typeof commit !== "function" || typeof batchCommit !== "function") return undefined;
+  return {
+    prepare: prepare as PrepareFunction,
+    commit: commit as CommitFunction,
+    batchCommit: batchCommit as BatchCommitFunction,
+  };
 }
 
 type FakeTimer = { id: number; ms: number; fn: () => void };
@@ -126,6 +133,44 @@ test("M52 writer lock stays available during batch stability wait", async () => 
     stop.resolve();
     await running;
     queue.close();
+    await closeFixture(fixtureValue);
+  }
+});
+
+test("M52 one writer lock commits multiple prepared files", async () => {
+  const fixtureValue = await fixture("seekah-m52-group-commit-");
+  const firstPath = path.join(fixtureValue.root, "first.txt");
+  const secondPath = path.join(fixtureValue.root, "second.txt");
+  try {
+    const functions = preparedFunctions();
+    assert.ok(functions, "production prepared-update API must be available");
+    if (!functions) return;
+    await writeFile(firstPath, "群組提交第一份", "utf8");
+    await writeFile(secondPath, "群組提交第二份", "utf8");
+    const first = await functions.prepare(firstPath, fixtureValue.root, fixtureValue.store, {
+      sleep: async () => {},
+      deferUnstable: true,
+    });
+    const second = await functions.prepare(secondPath, fixtureValue.root, fixtureValue.store, {
+      sleep: async () => {},
+      deferUnstable: true,
+    });
+    assert.equal(first.kind, "file");
+    assert.equal(second.kind, "file");
+    let acquisitions = 0;
+    const results = await functions.batchCommit([first, second], fixtureValue.store, {
+      sleep: async () => {},
+      deferUnstable: true,
+      acquireLock: databasePath => {
+        acquisitions++;
+        return acquireWriteLock(databasePath);
+      },
+    });
+    assert.equal(acquisitions, 1, "多份 prepared 文件應共用一次 writer lock");
+    assert.deepEqual(results.map(result => result.updated), [1, 1]);
+    assert.equal(search(fixtureValue.store, "群組提交第一份").length, 1);
+    assert.equal(search(fixtureValue.store, "群組提交第二份").length, 1);
+  } finally {
     await closeFixture(fixtureValue);
   }
 });

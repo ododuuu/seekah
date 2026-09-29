@@ -320,6 +320,32 @@ export async function commitPreparedFileUpdateLocked(
   result.parserCalls = prepared.parserCalls;
   return result;
 }
+/**
+ * 在同一把已持有的 writer lock 內重新確認並提交一組準備結果。
+ * 呼叫者必須自行持有鎖；每份結果仍各自核對 metadata，不能因同批而略過。
+ */
+export async function commitPreparedFileUpdatesLocked(
+  prepared: readonly PreparedFileUpdate[],
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult[]> {
+  const results: LocalUpdateResult[] = [];
+  for (const item of prepared) {
+    results.push(await commitPreparedFileUpdateLocked(item, store, options));
+  }
+  return results;
+}
+
+/**
+ * 取得一次 writer lock，提交一組已準備結果後才釋放。
+ */
+export async function commitPreparedFileUpdates(
+  prepared: readonly PreparedFileUpdate[],
+  store: IndexStore,
+  options: LocalUpdateOptions = {},
+): Promise<LocalUpdateResult[]> {
+  return withWriterBackoff(store.databasePath, options, () => commitPreparedFileUpdatesLocked(prepared, store, options));
+}
 
 export async function commitPreparedFileUpdate(
   prepared: PreparedFileUpdate,

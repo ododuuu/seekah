@@ -5,7 +5,7 @@ import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
 import {
-  applyPathChange, applyFileDelete, applyFileUpdate, commitPreparedFileUpdateLocked, identityKey,
+  applyPathChange, applyFileDelete, applyFileUpdate, commitPreparedFileUpdatesLocked, identityKey,
   isIgnoreFile, prepareFileUpdate, sleepMs, UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, withWriterBackoff,
   type LocalUpdateOptions, type LocalUpdateResult, type PreparedFileUpdate,
 } from "./local-update.js";
@@ -28,6 +28,11 @@ export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
 /** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
 export const LOCAL_BATCH_MAX_ITEMS = 500;
 export const LOCAL_BATCH_MAX_MS = 5_000;
+/** 已準備文件群組在一次 writer lock 內提交的數量與準備時間上限（SPEC §63）。 */
+export const LOCAL_PREPARED_GROUP_MAX_ITEMS = 50;
+export const LOCAL_PREPARED_GROUP_MAX_MS = 250;
+/** 同時保留的已準備文件文字預算；超過時先提交目前群組（SPEC §63）。 */
+export const LOCAL_PREPARED_MAX_TEXT_CHARS = 8_000_000;
 /** 資料夾展開每輪最多讀取的目錄項目數（SPEC §56.1）。 */
 export const LOCAL_WALK_MAX_ENTRIES = 2_000;
 export const HEARTBEAT_MS = 10_000;
@@ -71,6 +76,21 @@ export interface LiveUpdateOptions {
 }
 
 type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
+
+type PreparedLocalItem = {
+  item: LocalWorkItem;
+  prepared: PreparedFileUpdate;
+  textChars: number;
+};
+
+function preparedDocumentCharacters(prepared: PreparedFileUpdate): number {
+  if (prepared.kind !== "file" || !prepared.document) return 0;
+  let characters = 0;
+  for (const block of prepared.document.blocks) {
+    characters += block.content.length + (block.heading?.length ?? 0);
+  }
+  return characters;
+}
 
 type LocalBatchResult = {
   updated: number;
@@ -620,7 +640,7 @@ export class LiveUpdateEngine {
       this.dropRoot(state, true);
       return result;
     }
-    const candidates: { item: LocalWorkItem; key: string }[] = [];
+    const candidates: { item: LocalWorkItem; key: string; sizeBytes: number }[] = [];
     let walkBudget = this.options.localWalkEntries ?? LOCAL_WALK_MAX_ENTRIES;
     for (const item of work) {
       if (this.stopping && !this.options.applyFileUpdate) { result.interrupted = true; break; }
@@ -642,7 +662,7 @@ export class LiveUpdateEngine {
         finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
         continue;
       }
-      candidates.push({ item, key: identityKey(info) });
+      candidates.push({ item, key: identityKey(info), sizeBytes: info.size });
     }
     if (!candidates.length) return result;
 
@@ -650,49 +670,131 @@ export class LiveUpdateEngine {
     // 處理時間上限從穩定等待之後起算：事件湧入時觀察階段本身可能就要數秒（SPEC §54.1）。
     const processStarted = this.now();
     const apply = this.options.applyFileUpdate;
-    // 僅保留既有測試/注入 hook 的停止等待契約；正式 prepared 路徑停止後不再提交。
-    const allowLegacyStop = Boolean(apply);
     let processed = 0;
-    for (const { item, key } of candidates) {
-      // 停止時不再開始下一份；目前 prepared 只存在此迭代範圍，避免累積文件。
-      if ((this.stopping && !allowLegacyStop) || (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS)) { result.interrupted = true; break; }
-      processed++;
-      let second: fs.Stats | undefined;
-      try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
-      if (!second) {
-        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
-        continue;
-      }
-      if (identityKey(second) !== key) { defer(item); continue; }
-      this.localUpdateCount++;
-      if (apply) {
+
+    // 舊有測試 hook 仍維持逐檔 apply 行為；正式路徑在下方以 prepared 群組提交。
+    if (apply) {
+      for (const { item, key } of candidates) {
+        if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) { result.interrupted = true; break; }
+        processed++;
+        let second: fs.Stats | undefined;
+        try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
+        if (!second) {
+          finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+          continue;
+        }
+        if (identityKey(second) !== key) { defer(item); continue; }
+        this.localUpdateCount++;
         const update = await withWriterBackoff(this.store.databasePath, inner, () => apply(item.filePath, state.root, this.store, {
           ...inner, lockHeld: true, stableMs: 0, deferUnstable: true,
         }));
-        if (this.stopping && !allowLegacyStop) { result.interrupted = true; break; }
         if (update.deferred) { defer(item); continue; }
         finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+      }
+      return result;
+    }
+
+    let preparedGroup: PreparedLocalItem[] = [];
+    let preparedCharacters = 0;
+    let groupStartedAt = 0;
+    const discardPrepared = () => {
+      preparedGroup = [];
+      preparedCharacters = 0;
+      groupStartedAt = 0;
+    };
+    const flushPrepared = async (): Promise<void> => {
+      if (!preparedGroup.length) return;
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        return;
+      }
+      const group = preparedGroup;
+      discardPrepared();
+      const updates = await this.commitPreparedBatch(group, inner);
+      for (let index = 0; index < group.length; index++) {
+        if (this.stopping) {
+          result.interrupted = true;
+          return;
+        }
+        const item = group[index]!.item;
+        const update = updates[index]!;
+        if (update.deferred) defer(item);
+        else finish(item, {
+          updated: update.updated, unchanged: update.unchanged,
+          removed: update.removed, complete: update.complete, path: item.filePath,
+        });
+      }
+    };
+
+    for (const candidate of candidates) {
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        break;
+      }
+      if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) {
+        await flushPrepared();
+        result.interrupted = true;
+        break;
+      }
+      processed++;
+      let second: fs.Stats | undefined;
+      try { second = await fs.promises.lstat(candidate.item.filePath); } catch { second = undefined; }
+      if (!second) {
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions));
         continue;
       }
+      if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
 
-      // 不建立 prepared[]：一次只保留目前這份 DocumentRecord，提交後才進下一份。
-      const prepared = await prepareFileUpdate(item.filePath, state.root, this.store, {
+      const estimatedCharacters = Math.max(0, candidate.sizeBytes);
+      if (preparedGroup.length > 0 && (
+        preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
+        this.now() - groupStartedAt >= LOCAL_PREPARED_GROUP_MAX_MS ||
+        preparedCharacters + estimatedCharacters > LOCAL_PREPARED_MAX_TEXT_CHARS
+      )) {
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+      }
+
+      this.localUpdateCount++;
+      if (!preparedGroup.length) groupStartedAt = this.now();
+      const prepared = await prepareFileUpdate(candidate.item.filePath, state.root, this.store, {
         ...inner, stableMs: 0, deferUnstable: true,
       }, second);
-      if (this.stopping) { result.interrupted = true; break; }
+      if (this.stopping) {
+        result.interrupted = true;
+        discardPrepared();
+        break;
+      }
       if (prepared.kind === "result") {
-        if (prepared.result.deferred) defer(item);
-        else finish(item, {
+        if (prepared.result.deferred) defer(candidate.item);
+        else finish(candidate.item, {
           updated: prepared.result.updated, unchanged: prepared.result.unchanged,
           removed: prepared.result.removed, complete: prepared.result.complete, path: prepared.result.path,
         });
         continue;
       }
-      const update = await this.commitPrepared(prepared, inner);
-      if (this.stopping) { result.interrupted = true; break; }
-      if (update.deferred) { defer(item); continue; }
-      finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+
+      const textChars = preparedDocumentCharacters(prepared);
+      // 來源 size 先作準備前的保守預留；壓縮格式若解析後膨脹，這份文件單獨成組。
+      if (preparedGroup.length > 0 && preparedCharacters + textChars > LOCAL_PREPARED_MAX_TEXT_CHARS) {
+        await flushPrepared();
+        if (this.stopping) { result.interrupted = true; break; }
+        groupStartedAt = this.now();
+      }
+      preparedGroup.push({ item: candidate.item, prepared, textChars });
+      preparedCharacters += textChars;
+      if (
+        preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
+        preparedCharacters >= LOCAL_PREPARED_MAX_TEXT_CHARS ||
+        this.now() - groupStartedAt >= LOCAL_PREPARED_GROUP_MAX_MS
+      ) await flushPrepared();
     }
+    if (!this.stopping) await flushPrepared();
+    else discardPrepared();
     return result;
   }
 
@@ -755,12 +857,17 @@ export class LiveUpdateEngine {
     return { done: true, budgetLeft: budget };
   }
 
-  private async commitPrepared(prepared: PreparedFileUpdate, options: LocalUpdateOptions): Promise<LocalUpdateResult> {
+  private async commitPreparedBatch(
+    prepared: readonly PreparedLocalItem[],
+    options: LocalUpdateOptions,
+  ): Promise<LocalUpdateResult[]> {
     const release = acquireWriteLock(this.store.databasePath);
     try {
-      return await commitPreparedFileUpdateLocked(prepared, this.store, {
-        ...options, lockHeld: true, stableMs: 0, deferUnstable: true,
-      });
+      return await commitPreparedFileUpdatesLocked(
+        prepared.map(item => item.prepared),
+        this.store,
+        { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
+      );
     } finally {
       release();
     }
