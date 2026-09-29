@@ -8,7 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { LiveWorkQueue } from "../src/live-queue.js";
 import { LOCAL_PREPARED_GROUP_MAX_MS, LiveUpdateEngine } from "../src/live-update.js";
-import { WRITER_BACKOFF_MS, withWriterBackoff } from "../src/local-update.js";
+import { WRITER_BACKOFF_MS, applyFileDelete, withWriterBackoff } from "../src/local-update.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
 import { parseDocument } from "../src/parser.js";
@@ -172,7 +172,10 @@ test("m59: prepared 檔案在第二次 lstat 前消失會移除索引並 ack gen
   const stop = deferred();
   const logs: string[] = [];
   let removed = false;
+  let deleteApplied = false;
   let running: Promise<number> | undefined;
+  const timers: FakeTimer[] = [];
+  let timerId = 0;
   try {
     await sync(root, store);
     const queued = queue.acceptPath(root, "gone.txt", "event");
@@ -189,6 +192,19 @@ test("m59: prepared 檔案在第二次 lstat 前消失會移除索引並 ack gen
           await rm(file, { force: true });
         }
       },
+      applyFileDelete: async (filePath, rootPath, indexStore, options) => {
+        deleteApplied = true;
+        return applyFileDelete(filePath, rootPath, indexStore, options);
+      },
+      setTimer: (fn, ms) => {
+        const timer = { id: ++timerId, ms, fn };
+        timers.push(timer);
+        return timer.id as unknown as NodeJS.Timeout;
+      },
+      clearTimer: id => {
+        const index = timers.findIndex(item => item.id === (id as unknown as number));
+        if (index >= 0) timers.splice(index, 1);
+      },
     }, {
       write: line => logs.push(line),
       waitForStop: () => stop.promise,
@@ -196,6 +212,7 @@ test("m59: prepared 檔案在第二次 lstat 前消失會移除索引並 ack gen
     running = engine.run();
     await waitUntil(() => logs.some(line => line.startsWith("監看中：")));
     await waitUntil(() => removed
+      && deleteApplied
       && !fs.existsSync(file)
       && store.getDocument(file) === undefined
       && queue.listPaths(root).length === 0);
