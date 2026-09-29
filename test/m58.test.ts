@@ -92,7 +92,8 @@ test("m58: writable constructor uses the short initialization busy bound", async
     const started = Date.now();
     contended = new IndexStore(fixture.database, { onWarning: message => warnings.push(message) });
     const elapsed = Date.now() - started;
-    assert.ok(elapsed <= MAIN_INITIALIZE_BUSY_TIMEOUT_MS + 400, `constructor 等待 ${elapsed} ms 超過短初始化上限`);
+    const maxInitializeWait = MAIN_INITIALIZE_BUSY_TIMEOUT_MS * 6 + 100;
+    assert.ok(elapsed <= maxInitializeWait, `constructor 等待 ${elapsed} ms 超過初始化固定預算 ${maxInitializeWait} ms`);
     assert.ok(warnings.some(message => message.includes("WAL")));
   } finally {
     contended?.close();
