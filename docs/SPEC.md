@@ -1887,3 +1887,37 @@ docsearch doctor
 - `npm test` 全跑。已知 win32 既有失敗：M26 path coverage、M36 profile chmod 兩項，不必修；其他不得新增失敗。`npm run build` 須通過。
 
 - package 版本 0.41.0。
+
+## 59. SQLITE_BUSY 遷移重試
+
+依 D090。本節只針對格式升級遷移（schema／資料轉換）在遇到 SQLITE_BUSY 時的行為；一般開庫、搜尋、日常寫入的鎖定處理維持既有。
+
+### 59.1 重試條件與範圍
+
+- 僅在 `IndexStore.upgrade()` 內執行的格式升級路徑（`migratePayloads`、`migrateChunkStore`、舊 content_storage 升級、完成時的 metadata 寫入）中的 `BEGIN IMMEDIATE` 及隨後的寫入／COMMIT 區塊，遇到 SQLite errcode 5 (SQLITE_BUSY) 或 6 (SQLITE_LOCKED) 時重試。
+- 其他路徑（唯讀、search、upsert/remove/sync 非遷移 tx、acquireWriteLock 本身）不重試；仍立即失敗或回 IndexBusyError。
+
+### 59.2 重試策略
+
+- 退避序列：100、300、1000、2000、5000 ms（最多 5 次重試）。
+- 總等待上限約 8.4 秒；期間尊重 AbortSignal，檢查後中止。
+- 重試間呼叫 yieldToEvents 讓出事件迴圈。
+- 每次重試前 rollback 確保狀態乾淨。
+
+### 59.3 使用者訊息與行為
+
+- 重試期間進度回報可能暫停（不增加 current），但不顯示錯誤；最終成功則繼續「升級...」。
+- 失敗時上層（cli）依既有 sqlite 5/6 碼或 IndexBusyError 顯示「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」；不把原始 "database is locked" 直接暴露給一般使用者。
+- 詳細模式或 trace 仍可見內部錯誤。
+
+### 59.4 明確不做
+
+- 不改 write-lock.ts / live-lease.ts / live-queue.ts 的 timeout:0 與 PRAGMA busy_timeout=0。
+- 不對非遷移寫入加入重試（避免隱藏並行問題）。
+- 不設定非零全域 busy_timeout（Windows 繼承與鎖定語意考量）。
+- 不無限等待或 blocking sleep。
+- 不改變 lockHeld、upgrade 契約或 schema。
+- 不影響搜尋或讀取命令的回應時間。
+- 開啟資料庫的初始化不重試。
+
+- package 版本 0.41.0（與 §58、§60 同批發布）。

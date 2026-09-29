@@ -767,6 +767,43 @@ export class IndexStore {
     } finally { release?.(); }
   }
 
+  private async runTxWithBusyRetry(body: () => void, options: UpgradeOptions = {}): Promise<void> {
+    const delays = [0, 100, 300, 1000, 2000, 5000];
+    let lastErr: unknown;
+    for (let i = 0; i < delays.length; i++) {
+      throwIfAborted(options.signal);
+      const d = delays[i]!;
+      if (d > 0) {
+        await new Promise<void>(r => setTimeout(r, d));
+        await yieldToEvents();
+      }
+      try {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          body();
+          this.db.exec("COMMIT");
+          return;
+        } catch (e) {
+          this.db.exec("ROLLBACK");
+          throw e;
+        }
+      } catch (error) {
+        let code: number | undefined;
+        if (error && typeof error === "object" && "errcode" in error) {
+          const c = Reflect.get(error as object, "errcode");
+          if (typeof c === "number") code = c;
+        }
+        if (code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6)) {
+          lastErr = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastErr ?? new Error("遷移交易在 SQLITE_BUSY 重試後仍失敗");
+  }
+
+
   private migrateMultiRoot(): void {
     if (this.metadata("multi_root_version") !== "1") {
       this.db.exec("BEGIN IMMEDIATE");
@@ -2134,8 +2171,7 @@ export class IndexStore {
         ordinal: block.ordinal,
         content: block.content || Buffer.concat((legacyQuery.all(block.id) as { payload: Uint8Array }[]).map(item => brotliDecompressSync(item.payload))).toString("utf8"),
       }));
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
+      await this.runTxWithBusyRetry(() => {
         legacy.deletePayloadBlocks.run(document.id);
         legacy.deletePayloads.run(document.id);
         writes.legacyBloom?.deletePayloadBlooms.run(document.id);
@@ -2143,25 +2179,16 @@ export class IndexStore {
         this.db.prepare("DELETE FROM block_payloads WHERE block_id IN (SELECT id FROM blocks WHERE document_id = ?)").run(document.id);
         this.db.prepare("UPDATE blocks SET content = '' WHERE document_id = ?").run(document.id);
         this.db.prepare("INSERT OR REPLACE INTO index_migration_documents(version, document_id) VALUES ('content_storage_2', ?)").run(document.id);
-        this.db.exec("COMMIT");
-      } catch (error) {
-        this.db.exec("ROLLBACK");
-        throw error;
-      }
+      }, options);
       completed++;
       options.onProgress?.({ stage: "upgrade", message: "升級舊索引文字儲存格式", current: completed, total, path: document.path });
       await yieldToEvents();
     }
     throwIfAborted(options.signal);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    await this.runTxWithBusyRetry(() => {
       this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('content_storage_version', '2')").run();
       this.db.exec("DELETE FROM index_migration_documents WHERE version = 'content_storage_2'");
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    }, options);
   }
 
   /** Every block of one document with its stored id and complete content (full payload read). */
@@ -2208,8 +2235,7 @@ export class IndexStore {
         characters += blocks.reduce((sum, block) => sum + block.content.length, 0);
         batch.push({ document, blocks });
       }
-      this.db.exec("BEGIN IMMEDIATE");
-      try {
+      await this.runTxWithBusyRetry(() => {
         for (const { document, blocks } of batch) {
           // A 0.38.0 block index keeps serving read-only search until completion; its rows are already
           // current, so only chunk, filename and heading rows are (re)written here.
@@ -2217,27 +2243,18 @@ export class IndexStore {
           this.writeBlockIndexRows(document.id, document.filename, blocks.map(block => ({ ordinal: block.ordinal, heading: block.heading,
             content: block.content, locationKind: block.locationKind, locationValue: block.locationValue })), writes);
         }
-        this.db.exec("COMMIT");
-      } catch (error) {
-        this.db.exec("ROLLBACK");
-        throw error;
-      }
+      }, options);
       completed += batch.length;
       options.onProgress?.({ stage: "upgrade", message, current: completed, total, path: batch.at(-1)!.document.path });
       await yieldToEvents();
     }
     throwIfAborted(options.signal);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    await this.runTxWithBusyRetry(() => {
       for (const table of PRE_CHUNK_TABLES) this.db.exec(`DROP TABLE IF EXISTS ${table}`);
       this.db.exec(`DELETE FROM index_migration_documents;
         DELETE FROM metadata WHERE key IN ('payload_bloom_version', 'ngram_index_version', 'block_index_version');`);
       this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('chunk_store_version', ?)").run(CHUNK_STORE_VERSION);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    }, options);
     // Statements prepared against the dropped tables must not be reused.
     this.cachedWrites = null;
     this.shortTermsReady = false;
