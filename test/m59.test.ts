@@ -160,6 +160,115 @@ test("m59: prepared 群組第 2 份 busy 時只 ack 第 1 份並釋放 writer lo
   }
 });
 
+test("m59: prepared 檔案在第二次 lstat 前消失會移除索引並 ack generation", { timeout: 10_000 }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m59-prepared-delete-"));
+  const root = path.join(temp, "root");
+  const database = path.join(temp, "index.db");
+  const file = path.join(root, "gone.txt");
+  await mkdir(root, { recursive: true });
+  await writeFile(file, "m59-delete-needle", "utf8");
+  const store = new IndexStore(database);
+  const queue = new LiveWorkQueue(database, { now: (() => { let value = 0; return () => ++value; })() });
+  const stop = deferred();
+  const logs: string[] = [];
+  let removed = false;
+  let running: Promise<number> | undefined;
+  try {
+    await sync(root, store);
+    const queued = queue.acceptPath(root, "gone.txt", "event");
+    const engine = new LiveUpdateEngine(store, [root], {
+      mode: "foreground",
+      debounceMs: 200,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      workQueue: queue,
+      sleep: async () => {
+        if (!removed) {
+          removed = true;
+          await rm(file, { force: true });
+        }
+      },
+    }, {
+      write: line => logs.push(line),
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await waitUntil(() => logs.some(line => line.startsWith("監看中：")));
+    await waitUntil(() => removed
+      && !fs.existsSync(file)
+      && store.getDocument(file) === undefined
+      && queue.listPaths(root).length === 0);
+    assert.ok(queued.generation > 0);
+    assert.equal(search(store, "m59-delete-needle").length, 0);
+    assert.equal(queue.maxGeneration(root), 0);
+    stop.resolve();
+    assert.equal(await running, 0);
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
+    store.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("m59: prepared 群組在 stopping 時丟棄且不 ack", { timeout: 10_000 }, async () => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m59-prepared-stop-"));
+  const root = path.join(temp, "root");
+  const database = path.join(temp, "index.db");
+  const file = path.join(root, "stop.txt");
+  await mkdir(root, { recursive: true });
+  await writeFile(file, "m59-stop-needle", "utf8");
+  const store = new IndexStore(database);
+  const queue = new LiveWorkQueue(database, { now: (() => { let value = 0; return () => ++value; })() });
+  const stop = deferred();
+  let prepared = false;
+  let requested = false;
+  let engine!: LiveUpdateEngine;
+  let running: Promise<number> | undefined;
+  try {
+    await sync(root, store);
+    await writeFile(file, "m59-stop-needle-updated", "utf8");
+    const queued = queue.acceptPath(root, "stop.txt", "event");
+    engine = new LiveUpdateEngine(store, [root], {
+      mode: "foreground",
+      debounceMs: 200,
+      reconcileMs: 0,
+      syncNow: false,
+      watch: fakeWatch(),
+      workQueue: queue,
+      parse: async filePath => {
+        const parsed = await parseDocument(filePath);
+        prepared = true;
+        return parsed;
+      },
+      now: () => {
+        if (prepared && !requested) {
+          requested = true;
+          engine.requestStop();
+          return LOCAL_PREPARED_GROUP_MAX_MS;
+        }
+        return 0;
+      },
+    }, {
+      write: () => {},
+      waitForStop: () => stop.promise,
+    });
+    running = engine.run();
+    await waitUntil(() => requested && queue.listPaths(root).length === 1);
+    assert.equal(queue.listPaths(root)[0]?.generation, queued.generation);
+    assert.equal(search(store, "m59-stop-needle").length, 1);
+    assert.equal(await running, 0);
+  } finally {
+    stop.resolve();
+    if (running) await running;
+    queue.close();
+    store.close();
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
 test("m59: withWriterBackoff 用盡有限次數後回傳 INDEX_BUSY", async () => {
   let attempts = 0;
   const delays: number[] = [];

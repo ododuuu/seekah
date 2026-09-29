@@ -771,6 +771,7 @@ export class LiveUpdateEngine {
         await flushPrepared();
         if (result.busy) { result.interrupted = true; break; }
         if (this.stopping) { result.interrupted = true; break; }
+        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions));
         continue;
       }
       if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
