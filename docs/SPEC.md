@@ -2292,3 +2292,39 @@ docsearch doctor
 - 不改搜尋結果、文件 ID、索引 schema、work state schema、事件 queue durability、root／ignore 語意或 package 版本。
 - 只改背景校正何時可把已確認完成的 scope 交給既有 `removeMissing`；未完成或失敗範圍維持保守保留。
 
+## 73. 局部批次積壓順序與噪音隔離
+
+依 D105。本節只調整 `LiveUpdateEngine` 已選定 local branch 之後的待辦挑選順序；不改 §68 的 root branch 公平輪替、不改 §53 的排除判斷、不改 §54 的穩定確認、不改 §56 的資料夾展開、不改 queue durability 或背景校正。
+
+### 73.1 批次挑選
+
+- 每輪仍最多選取 `LOCAL_BATCH_MAX_ITEMS = 500` 筆；每輪結束仍釋放 writer lock，有未完成待辦時依 §54.1 立即接續。
+- 保留 §56.1 的優先級：事件待辦先於資料夾展開待辦；兩個優先級內各自依本節挑選，不讓展開待辦插到事件待辦前面。
+- 每個優先級先排除本輪 `state.sweep` 已嘗試過的工作項（`filePath + generation`）；若沒有未嘗試工作項才清除 sweep 開始下一圈。這保留 §55.2 的「一圈內每筆最多等一圈」輪替保證，新 generation 不沿用舊 generation 的本圈標記。
+- 在未嘗試路徑中，近期剛以同一 work item generation 延後的檔案視為 noise/deferred；穩定候選優先。新 generation 不沿用舊 generation 的 deferred 分類。
+- 一個優先級的穩定候選若超過可用名額，保留約 80% 名額給最舊候選、約 20% 名額給最新候選：目前固定為最多 400 筆 oldest 加最多 100 筆 newest，兩段均維持 `created_at_ms` 順序。最新保留名額讓新事件不必排在 500 筆舊待辦之後；最舊名額與 sweep 讓舊待辦不被持續新事件永久餓死。
+- 穩定候選不足 500 筆時，先取全部穩定候選，再以仍未嘗試的 deferred 候選依 `created_at_ms` 舊到新補足名額；沒有穩定候選時才處理 deferred 候選。deferred 不會被永久丟棄，仍受既有連續延後上限與 sweep 控制。
+- `applyLocalBatch` 的一次穩定等待、第二次 metadata／identity 確認、§54.3 延後、連續 5 次上限、§63 鎖外準備與群組提交完全不變；本節只改進入該批的順序。
+
+### 73.2 公平界線與相容性
+
+- 在 queue 暫時不再增加、且候選皆穩定的條件下，新加入的最新事件在其優先級有可用名額時至多等待一個 local batch；800 筆舊待辦加一筆新事件的固定回歸上限為 2 個 local batches。
+- 同一條件下，最舊穩定待辦每批至少取得 400 筆名額；任一穩定待辦至多在 `ceil(N / 400)` 個 local batches 內被挑選（`N` 為該優先級本圈開始時的穩定待辦數），實際完成仍受檔案 IO、解析、5 秒 process budget 與 writer busy 影響。
+- 連續新增事件或持續改寫檔案時，不宣稱固定 wall-clock SLA；新舊公平是批次挑選保證，§68 仍負責 local branch 與 background reconcile 之間的輪替。
+- deferred classification 只存在程序記憶體，不新增 work state／index schema；程序重啟後依 durable queue、`created_at_ms` 與保守的 oldest/newest 選擇接續。搜尋結果、文件內容、generation、ack、排除與來源檔案語意不變。
+
+### 73.3 明確否決
+
+- 不永遠 oldest-first：目前做法會讓第 501 筆之後的新檔在大型積壓下延後多輪。
+- 不永遠 newest-first：事件湧入時舊待辦會被無限推後，違反 §55.2 的輪替意圖。
+- 不把 deferred/noise 永久跳過、不直接 ack 未成功寫入的項目、不刪除或重建 work queue；這會留下舊索引或破壞 at-least-once。
+- 不把一次穩定等待改成逐檔等待、不取消延後上限、不把 `LOCAL_BATCH_MAX_ITEMS` 無界加大、不以平行 writer 解決順序。
+- 不修改 `runRoot` 的校正／局部分支選擇、`isExcluded`／排除入口、`reconcile.ts` 或 §68 的 timer／localPriority；這些是其他規格與分支的邊界。
+
+### 73.4 驗收
+
+- 800+ 舊待辦中加入一筆新檔，實際 local batch 不超過 2 輪即完成新檔更新並可搜尋。
+- 持續加入新事件時，既有舊待辦在有限的 local batches 內仍被處理，不被 newest reserve 永久餓死。
+- 先讓 noise 檔因 metadata 不穩定而 deferred，再加入穩定檔；穩定檔不因 noise 佔據主要名額而停滯，noise 仍依既有上限留在 queue／保留舊索引。
+- 反向暫時恢復 oldest-first 選擇時，新檔 2-batch 回歸必須失敗；還原後通過。另執行既有 live-update／queue 測試與完整 `npm test`。
+
