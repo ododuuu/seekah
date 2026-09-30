@@ -10,15 +10,18 @@ interface IndexWorkerInput {
   roots: string[];
   root?: string;
   upgradeOnly: boolean;
+  subtreeOnly: boolean;
 }
 
 interface IndexWorkerReport {
   root: string;
   complete: boolean;
   found: number;
+  added: number;
   updated: number;
   unchanged: number;
   removed: number;
+  skipped: number;
 }
 
 type IndexWorkerMessage =
@@ -40,14 +43,17 @@ function post(message: IndexWorkerMessage): void {
   workerPort.postMessage(message);
 }
 
+
 function reportOf(report: SyncReport): IndexWorkerReport {
   return {
     root: report.root,
     complete: report.complete,
     found: report.found,
+    added: report.added,
     updated: report.updated,
     unchanged: report.unchanged,
     removed: report.removed,
+    skipped: report.skipped.builtin + report.skipped.user + report.skipped.link + report.skipped.unsupported,
   };
 }
 
@@ -72,12 +78,13 @@ async function run(): Promise<void> {
     for (const root of input.roots) {
       const report = await sync(root, store, {
         requireRegistered: input.root === undefined,
+        requireCoveredByRegistered: input.subtreeOnly,
         signal: abort.signal,
         onProgress: progress => post({ type: "progress", progress }),
       });
       reports.push(reportOf(report));
     }
-    if (reports.every(report => report.complete)) store.purgeTrashRoots(input.roots);
+    if (!input.subtreeOnly && reports.every(report => report.complete)) store.purgeTrashRoots(input.roots);
     post({ type: "complete", reports });
   } catch (error) {
     if (error instanceof OperationCancelledError || abort.signal.aborted) {

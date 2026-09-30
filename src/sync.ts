@@ -40,6 +40,7 @@ export interface SyncReport extends SyncSummary {
 export interface SyncOptions {
   rebuild?: boolean;
   requireRegistered?: boolean;
+  requireCoveredByRegistered?: boolean;
   lockHeld?: boolean;
   // 注入相同契約以測試零解析及讀檔失敗，不改變 CLI 行為。
   parse?: typeof parseDocument;
@@ -61,6 +62,7 @@ function countSkipped(
   else if (explanation.source === "link") skipped.link++;
   else skipped.builtin++;
 }
+
 
 export async function sync(rootInput: string, store: IndexStore, options: SyncOptions = {}): Promise<SyncReport> {
   const release = options.lockHeld ? undefined : acquireWriteLock(store.databasePath);
@@ -104,6 +106,9 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
     return { registered, actual: canonical };
   }));
   const plan = planRootOperation({ resolved, actual }, existing);
+  if (options.requireCoveredByRegistered && plan.kind !== "existing" && plan.kind !== "subtree") {
+    throw new RootError("重新檢查資料夾已不在已登錄根目錄範圍內。");
+  }
   let retainedDocuments = 0;
   if (plan.kind === "merge") {
     retainedDocuments = store.mergeChildRoots(plan.registeredRoot, plan.mergedRoots).transferred;

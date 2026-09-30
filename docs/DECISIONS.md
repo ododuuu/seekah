@@ -1,4 +1,35 @@
 # 設計決策紀錄
+## D107：工作台手動重新檢查已登錄根目錄內的資料夾
+
+- 日期：2026-09-30。依 SPEC §75；本分支只處理工作台重新檢查入口、server 範圍驗證、索引報告與相關測試，不修改版本、STATUS、handoff 或 NEXT-TODO。
+- 事實：
+  - `fs.watch`／背景自動更新不是可靠的唯一校正入口；工作台已有完整校正、加入根目錄與停止同步，但沒有明確的「只重新檢查選定資料夾」契約。
+  - `sync.ts` 與 `root-plan.ts` 已能在要求路徑被已登錄父根涵蓋時形成 subtree plan，並把掃描與 `removeMissing` 限定在 `scanStart`；但既有 `POST /api/index` 的 `{ root }` 也承擔加入／還原未登錄根目錄，直接重用會混淆兩種範圍。
+  - 只由瀏覽器檢查路徑不能防止偽造要求、路徑邊界誤判或 symlink 逃逸；server 必須重新查詢目前 roots。
+- 決定：
+  - 沿用 `POST /api/index`，新增明確 `{ root, scope: "subtree" }` 形式；沒有 `scope` 的既有 `{ root }` 保留加入／還原根目錄語意，沒有 body 保留所有已登錄根目錄完整校正。
+  - server 對 subtree 要求執行 `realpath`／目錄檢查，再以 `coversPath` 對已登錄根目錄的實體路徑做平台正確邊界判斷；只接受根本身或其子資料夾，拒絕不存在、非目錄、未登錄、越界與 symlink 逃逸位置。
+  - `sync`／worker 增加 subtree 必須仍有已登錄涵蓋根的執行期不變量；server 驗證後若根目錄在 writer 執行前消失或範圍改變，不得退化成 independent／merge 並註冊或掃描其他範圍。
+  - 工作台根目錄頁新增 folder picker 的「重新檢查資料夾」與每列「重新檢查此根目錄」；兩者沿用同一進度／停止狀態，完整校正按鈕維持原語意。
+  - 索引報告持久化新增 `added` 與略過項目總數；完成訊息顯示新增、更新、移除、略過。略過總數由 builtin／user／link／unsupported 四類組成，未把 unchanged 混入。
+- 理由：
+  - 同一路徑保留既有 token、Origin、busy、progress 與 worker lifecycle；不用複製另一個 endpoint 或建立第二套狀態機。
+  - server 與 sync 雙層驗證同時處理一般偽造要求與驗證／writer 之間的 root lifecycle race；以實體路徑避免 symlink 把 subtree 帶出登錄根。
+  - 明確 `scope` 讓 UI 的窄範圍校正不會誤觸發既有新增根目錄能力；沿用既有 subtree remove safety 可保護 sibling。
+- 否決：
+  - 不新增 `/api/index-subtree` 或另一個進度 endpoint，避免 auth、Origin、停止、busy 與錯誤處理分裂。
+  - 不把所有 `{ root }` 都解讀成 subtree；那會破壞加入 sibling、父根合併與垃圾桶還原。
+  - 不只以字串前綴或 client 檢查判斷涵蓋，不繞過 `sync` 的 subtree plan，也不以完整 root 掃描掩蓋範圍錯誤。
+  - 不直接讀寫 SQLite 原文向 UI 報告、不強制停止背景 daemon、不接觸使用者實際資料目錄做驗收。
+- 驗證：
+  - `test/m66.test.ts` 覆蓋越界／未登錄拒絕、子樹只改選定範圍且 sibling 不變、完成四類計數、重複工作 409。
+  - 更新 m35／m37 靜態 UI id 斷言；執行 `npm run build`、聚焦工作台測試與完整 `npm test`。
+  - 反向暫時移除涵蓋驗證或放寬 subtree removal，新增 regression 至少一項必須失敗；還原後再驗證。
+- 相容與風險：
+  - 不改 package 版本、索引 schema、搜尋排序、資料目錄相容性、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／docsearch 識別或本機文件處理邊界。
+  - 若只有 server 驗證而沒有 sync 執行期 guard，root lifecycle race 可能把已驗證路徑轉成新 root；若只加 guard 而不測 sibling removal，可能仍因 scope 傳遞錯誤誤刪 sibling，兩者都必須保留。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D105：局部批次採穩定優先、首尾保留與延後代次隔離（2026-09-30）
 
 **背景**

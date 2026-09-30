@@ -1638,6 +1638,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     $("root-select-all").disabled = disabled || !data || !data.roots || !data.roots.length;
     $("root-delete-selected").disabled = disabled || state.selectedRoots.size === 0;
     $("roots-refresh").disabled = disabled;
+    $("roots-refresh-folder").disabled = disabled;
     $("roots-stop").hidden = !disabled;
     $("roots-stop").disabled = !disabled;
     $("top-refresh").disabled = disabled;
@@ -1667,7 +1668,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         const status = make("td", "root-state " + integrity.kind, integrity.text);
         status.title = Array.isArray(root.errors) && root.errors.length ? root.errors.join("；") : Array.isArray(root.notices) && root.notices.length ? root.notices.join("；") : integrity.text;
         const actions = make("td", "root-actions", "");
-        const refresh = button("更新", "", () => void runIndex(root.path));
+        const refresh = button("重新檢查此根目錄", "root-refresh-action", () => void runIndex(root.path, "subtree"));
         const move = button("移至垃圾桶", "danger", () => { state.selectedRoots.clear(); state.selectedRoots.add(root.path); requestDelete("roots"); });
         refresh.disabled = disabled;
         move.disabled = disabled;
@@ -1820,16 +1821,17 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       state.statusRefreshBusy = false;
     }
   }
-  async function runIndex(root) {
+  async function runIndex(root, scope) {
+    const subtree = scope === "subtree";
     if (state.indexOperationBusy || isIndexing()) {
-      setNotice(root ? "索引進行中，請完成後再加入。" : "索引進行中，請稍候。", "warn");
+      setNotice(subtree ? "索引進行中，請完成後再重新檢查。" : root ? "索引進行中，請完成後再加入。" : "索引進行中，請稍候。", "warn");
       return false;
     }
     state.indexOperationBusy = true;
-    setNotice(root ? "已確認資料夾；正在建立索引…" : "正在更新已登錄根目錄…", "");
+    setNotice(subtree ? "正在重新檢查選定資料夾…" : root ? "已確認資料夾；正在建立索引…" : "正在更新已登錄根目錄…", "");
     renderRoots(); renderTrash(); renderSidebar();
     try {
-      const body = root ? { root } : {};
+      const body = root ? (subtree ? { root, scope: "subtree" } : { root }) : {};
       const data = await api("/api/index", { method: "POST", body });
       state.indexStatus = { ...(state.indexStatus || {}), indexing: data.indexing };
       renderRoots(); renderTrash(); renderSidebar();
@@ -1839,7 +1841,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       }
       await refreshStatus();
       const success = state.indexStatus && state.indexStatus.indexing && state.indexStatus.indexing.state === "complete";
-      if (success && root) state.addRootDraft = "";
+      if (success && root && !subtree) state.addRootDraft = "";
       setNotice(state.indexStatus && state.indexStatus.indexing ? state.indexStatus.indexing.message : (success ? "索引已更新。" : "索引完成。"), success ? "ok" : "error");
       return Boolean(success);
     } catch (error) {
@@ -1883,6 +1885,18 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       state.addRootDraft = root;
       setNotice("已選擇資料夾；請按「確認並建立索引」。", "ok");
       renderRoots();
+    } catch (error) { setNotice(error.message || "資料夾選擇失敗。", "error"); }
+    finally { state.folderPickerBusy = false; }
+  }
+  async function chooseRefreshFolder() {
+    if (isIndexing()) { setNotice("索引進行中，請完成後再重新檢查。", "warn"); return; }
+    if (state.folderPickerBusy) return;
+    state.folderPickerBusy = true;
+    try {
+      const data = await api("/api/select-folder", { method: "POST" });
+      const root = data && typeof data.root === "string" ? data.root.trim() : "";
+      if (!root) { setNotice("已取消重新檢查；尚未開始索引。", "warn"); return; }
+      await runIndex(root, "subtree");
     } catch (error) { setNotice(error.message || "資料夾選擇失敗。", "error"); }
     finally { state.folderPickerBusy = false; }
   }
@@ -2097,6 +2111,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const temporaryPage = make("section", "page", ""); temporaryPage.dataset.page = "temporary"; temporaryPage.id = "temporary-page"; const tempHeader = makePageHeader("臨時文件", "本次工作階段解析，不加入永久索引。"); const tempCount = make("strong", "sr-only", "0 / 20 份"); tempCount.id = "temporary-count"; tempHeader.actions.append(tempCount, button("選取文件", "primary", () => $("file-input").click())); temporaryPage.append(tempHeader); const drop = make("div", "drop-zone", ""); drop.id = "drop-zone"; drop.tabIndex = 0; drop.setAttribute("role", "button"); drop.setAttribute("aria-label", "拖曳或選取文件"); drop.append(make("strong", "", "拖曳文件到這裡"), make("small", "", "目前有 0 份臨時文件可加入上下文。")); drop.querySelector("small").id = "drop-help"; temporaryPage.append(drop); const fileInput = document.createElement("input"); fileInput.id = "file-input"; fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true; temporaryPage.append(fileInput); const fileStatus = make("div", "status", ""); fileStatus.id = "file-status-message"; fileStatus.setAttribute("role", "status"); fileStatus.setAttribute("aria-live", "polite"); temporaryPage.append(fileStatus); const fileList = make("div", "file-list", ""); fileList.id = "file-list"; temporaryPage.append(fileList); main.append(temporaryPage);
 
     const rootsPage = make("section", "page", ""); rootsPage.dataset.page = "roots"; rootsPage.id = "roots-page"; const rootsHeader = makePageHeader("索引根目錄", "「完整校正」會列舉所有檔案比較 metadata，但只重新解析新增或變更的文件；日常更新可在設定開啟背景自動更新。"); const rootRefresh = button("完整校正", "", () => void runIndex()); rootRefresh.id = "roots-refresh"; const rootStop = button("停止同步", "danger", () => void stopIndex()); rootStop.id = "roots-stop"; rootStop.hidden = true; const rootChoose = button("加入資料夾", "primary", () => void chooseFolder()); rootChoose.id = "root-choose"; rootsHeader.actions.append(rootRefresh, rootStop, rootChoose); rootsPage.append(rootsHeader); const indexStatusMessage = make("div", "status", "讀取中…"); indexStatusMessage.id = "index-status-message"; indexStatusMessage.setAttribute("role", "status"); indexStatusMessage.setAttribute("aria-live", "polite"); rootsPage.append(indexStatusMessage); const rootsPanel = make("section", "root-list-panel", ""); rootsPage.append(rootsPanel); const rootsToolbar = make("div", "root-toolbar", ""); const rootSelectAll = document.createElement("input"); rootSelectAll.type = "checkbox"; rootSelectAll.id = "root-select-all"; rootSelectAll.setAttribute("aria-label", "選取全部根目錄"); rootSelectAll.addEventListener("change", () => { state.selectedRoots.clear(); if (rootSelectAll.checked && state.indexStatus && state.indexStatus.roots) for (const item of state.indexStatus.roots) state.selectedRoots.add(item.path); renderRoots(); }); const rootDeleteSelected = button("移除所選", "danger", () => requestDelete("roots")); rootDeleteSelected.id = "root-delete-selected"; rootsToolbar.append(rootSelectAll, make("span", "", "選取全部"), rootDeleteSelected); rootsPanel.append(rootsToolbar); const rootsTable = document.createElement("table"); rootsTable.className = "roots-table"; const rootsHead = document.createElement("thead"); const rootsHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "文件", "同步", "完整性", "操作"]) rootsHeadRow.append(make("th", "", label)); rootsHead.append(rootsHeadRow); const rootsBody = document.createElement("tbody"); rootsBody.id = "roots-body"; rootsTable.append(rootsHead, rootsBody); rootsPanel.append(rootsTable);
+    const rootRefreshFolder = button("重新檢查資料夾", "", () => void chooseRefreshFolder()); rootRefreshFolder.id = "roots-refresh-folder"; rootsHeader.actions.insertBefore(rootRefreshFolder, rootChoose);
     rootsHeadRow.lastChild.textContent = "";
     const addPanel = make("section", "panel root-add", ""); addPanel.id = "root-add-panel"; const addHead = make("div", "panel-head", ""); addHead.append(make("div", "", "")); addHead.firstChild.append(make("h2", "", "加入資料夾"), make("p", "", "選擇資料夾後，按「確認並建立索引」才會開始。只索引選取的資料夾，不要選整顆系統磁碟。")); addPanel.append(addHead); const rootInstructions = make("p", "root-instructions", "取消選擇或尚未確認不會送出索引；選取路徑為唯讀。"); addPanel.append(rootInstructions); const addBody = make("div", "root-add-body", ""); const addField = make("div", "root-add-field", ""); const addLabel = make("label", "", "已選資料夾"); addLabel.htmlFor = "root-draft"; const rootDraft = document.createElement("input"); rootDraft.id = "root-draft"; rootDraft.readOnly = true; rootDraft.placeholder = "尚未選擇資料夾"; rootDraft.setAttribute("aria-readonly", "true"); addField.append(addLabel, rootDraft); const draftMessage = make("div", "status", "尚未選取資料夾。"); draftMessage.id = "root-draft-message"; addField.append(draftMessage); const chooseButton = button("重新選擇", "", () => void chooseFolder()); chooseButton.id = "root-choose-inline"; chooseButton.addEventListener("click", () => void chooseFolder()); const confirmButton = button("確認並建立索引", "primary", requestAddRoot); confirmButton.id = "root-confirm"; addBody.append(addField, chooseButton, confirmButton); addPanel.append(addBody); rootsPage.append(addPanel); main.append(rootsPage);
 
