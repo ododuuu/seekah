@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
-import { loadIgnoreRules, type IgnoreRules } from "./ignore.js";
-import { isIndexArtifact, type IndexStore } from "./store.js";
+import { type IndexStore } from "./store.js";
 import { applyFileUpdate, type LocalUpdateResult } from "./local-update.js";
-import { coversPath } from "./root-plan.js";
-import { isWindowsVolumeSystemPath } from "./builtin-paths.js";
+import { coversPath, samePath } from "./root-plan.js";
+import { emptySkippedCounts, type ExclusionCleanupSummary, type SkippedCounts } from "./model.js";
 import { OperationCancelledError, throwIfAborted } from "./progress.js";
 import { LiveWorkQueue, type ReconcileState, type ReconcileSeenKind } from "./live-queue.js";
-
+import { RootExclusion } from "./root-exclusion.js";
 export const DEFAULT_RECONCILE_BATCH_ENTRIES = 500;
 export const DEFAULT_RECONCILE_BATCH_MS = 250;
 export const DEFAULT_RECONCILE_CHECKPOINT_BATCH = 200;
@@ -23,6 +22,7 @@ export interface BackgroundReconcileOptions {
   acquireLock?: typeof acquireWriteLock;
   sleep?: (ms: number) => Promise<void>;
   reason?: string;
+  exclusion?: RootExclusion;
 }
 
 export interface BackgroundReconcileResult {
@@ -41,13 +41,20 @@ export interface BackgroundReconcileResult {
   frontierCount: number;
   elapsedMs: number;
   pendingAfter: boolean;
+  skipped: SkippedCounts;
+  exclusionCleanup: ExclusionCleanupSummary;
 }
 
-type IgnoreContext = {
-  root: string;
-  rules: IgnoreRules;
-  extras: { base: string; rules: IgnoreRules }[];
-};
+function countSkipped(
+  skipped: SkippedCounts,
+  explanation: ReturnType<RootExclusion["explain"]>,
+): void {
+  const ruleId = explanation.ruleId ?? explanation.source;
+  skipped.byRule[ruleId] = (skipped.byRule[ruleId] ?? 0) + 1;
+  if (explanation.source === "user-rule") skipped.user++;
+  else if (explanation.source === "link") skipped.link++;
+  else skipped.builtin++;
+}
 
 function uniquePush(values: string[], value: string): void {
   if (!values.some(existing => existing === value)) values.push(value);
@@ -58,22 +65,6 @@ function entryKind(entry: fs.Dirent): ReconcileSeenKind {
   if (entry.isDirectory()) return "directory";
   if (entry.isFile()) return "file";
   return "ignored";
-}
-
-async function loadIgnoreContext(root: string, store: IndexStore): Promise<IgnoreContext> {
-  const rules = await loadIgnoreRules(root);
-  const extras: { base: string; rules: IgnoreRules }[] = [];
-  for (const base of store.ignoreBases(root)) extras.push({ base, rules: await loadIgnoreRules(base) });
-  return { root, rules, extras };
-}
-
-function shouldSkipEntry(context: IgnoreContext, fullPath: string, entry: fs.Dirent): boolean {
-  if (entry.isDirectory() && (entry.name.toLowerCase() === ".git" || entry.name.toLowerCase() === "node_modules"
-    || entry.name.toLowerCase() === ".localdocsearch" || isWindowsVolumeSystemPath(fullPath))) return true;
-  if (entry.isFile() && entry.name.startsWith("~$")) return true;
-  const relative = path.relative(context.root, fullPath);
-  if (context.rules.matches(relative, entry.isDirectory())) return true;
-  return context.extras.some(item => coversPath(item.base, fullPath) && item.rules.matches(path.relative(item.base, fullPath), entry.isDirectory()));
 }
 
 function pendingBelow(queue: LiveWorkQueue, root: string, scope: string, scopeAcks: ReconcileState["scopeAcks"]): boolean {
@@ -88,7 +79,18 @@ function pendingBelow(queue: LiveWorkQueue, root: string, scope: string, scopeAc
 function resultFrom(
   state: ReconcileState,
   startedAt: number,
-  values: { started: boolean; done: boolean; complete: boolean; updated: number; unchanged: number; removed: number; parserCalls: number; pendingAfter: boolean },
+  values: {
+    started: boolean;
+    done: boolean;
+    complete: boolean;
+    updated: number;
+    unchanged: number;
+    removed: number;
+    parserCalls: number;
+    pendingAfter: boolean;
+    skipped: SkippedCounts;
+    exclusionCleanup: ExclusionCleanupSummary;
+  },
   now: () => number,
 ): BackgroundReconcileResult {
   return {
@@ -107,8 +109,11 @@ function resultFrom(
     frontierCount: state.frontier.length,
     elapsedMs: Math.round((now() - startedAt) * 100) / 100,
     pendingAfter: values.pendingAfter,
+    skipped: values.skipped,
+    exclusionCleanup: values.exclusionCleanup,
   };
 }
+
 
 export async function runBackgroundReconcileBatch(
   root: string,
@@ -125,15 +130,22 @@ export async function runBackgroundReconcileBatch(
   const existing = queue.reconcileStatus(root);
   const state = queue.beginReconcile(root, options.reason ?? "daemon");
   const started = !existing || existing.phase !== "active";
+  const previousSummary = store.getLastSyncReport(root).summary;
+  const resume = !started && previousSummary?.reconcileGeneration === state.generation;
   const applyUpdate = options.applyFileUpdate ?? applyFileUpdate;
   const acquire = options.acquireLock ?? acquireWriteLock;
   let updated = 0;
   let unchanged = 0;
   let removed = 0;
   let parserCalls = 0;
+  let exclusionRemoved = resume ? previousSummary?.exclusionCleanup?.removed ?? 0 : 0;
+  let exclusionPending = resume ? previousSummary?.exclusionCleanup?.pending ?? 0 : 0;
+  let skipped = resume && previousSummary
+    ? { ...previousSummary.skipped, byRule: { ...(previousSummary.skipped.byRule ?? {}) } }
+    : emptySkippedCounts();
   let processed = 0;
   let release: (() => void) | undefined;
-  let context: IgnoreContext;
+  let exclusion: RootExclusion;
   let pendingSteps: { seenPath: string; kind: ReconcileSeenKind }[] = [];
   let lastFlushAt = startedAt;
   const flush = () => {
@@ -149,13 +161,10 @@ export async function runBackgroundReconcileBatch(
     if (pendingSteps.some(s => s.seenPath === p)) return true;
     return queue.hasReconcileSeen(root, state.generation, p);
   };
-  const doFlushOnAbort = (e: unknown) => {
-    if (e instanceof OperationCancelledError) {
-      flush();
-    }
-  };
   try {
-    context = await loadIgnoreContext(root, store);
+    exclusion = options.exclusion && samePath(options.exclusion.root, root)
+      ? options.exclusion
+      : await RootExclusion.load(root, store);
     release = acquire(store.databasePath);
     while (state.frontier.length > 0) {
       throwIfAborted(options.signal);
@@ -176,19 +185,22 @@ export async function runBackgroundReconcileBatch(
         const fullPath = path.join(directory, entry.name);
         if (hasSeen(fullPath)) continue;
         const kind = entryKind(entry);
-        const skip = shouldSkipEntry(context, fullPath, entry);
-        if (skip || kind === "link" || kind === "ignored") {
+        const explanation = exclusion.explain(fullPath, entry.isDirectory(), entry.isSymbolicLink());
+        const skip = explanation.excluded || kind === "ignored";
+        if (explanation.excluded) countSkipped(skipped, explanation);
+        if (skip || kind === "link") {
           state.checked++;
           pendingSteps.push({ seenPath: fullPath, kind: skip ? "ignored" : kind });
         } else if (kind === "directory") {
           state.frontier.push(fullPath);
           state.checked++;
           pendingSteps.push({ seenPath: fullPath, kind: "directory" });
-        } else if (kind === "file" && !isIndexArtifact(fullPath, store.databasePath)) {
+        } else if (kind === "file") {
           let result: LocalUpdateResult;
           try {
             const updateOptions = {
               lockHeld: true,
+              exclusion,
               ...(options.signal ? { signal: options.signal } : {}),
               ...(options.now ? { now: options.now } : {}),
               ...(options.sleep ? { sleep: options.sleep } : {}),
@@ -242,17 +254,26 @@ export async function runBackgroundReconcileBatch(
       const pending = pendingBelow(queue, root, directory, state.scopeAcks);
       if (!readFailureBelow && !deferredBelow && !pending) {
         const known = new Set(queue.reconcileSeenPaths(root, state.generation));
-        const removal = await store.removeMissing(known, root, directory);
+        const removal = await store.removeMissing(known, root, directory, [], {
+          trackExcluded: (filePath: string) => exclusion.explain(filePath, undefined).excluded,
+        });
         removed += removal.removed;
+        exclusionRemoved += removal.exclusionRemoved ?? 0;
+        exclusionPending += removal.exclusionPending ?? 0;
       } else if (pending && !state.deferredChecks.some(item => coversPath(directory, item))) {
         uniquePush(state.deferredChecks, directory);
       }
       flush(); // persist the popped frontier
     }
+    const exclusionCleanup = { removed: exclusionRemoved, pending: exclusionPending };
     if (state.frontier.length > 0) {
       flush();
       store.checkpointWal();
-      return resultFrom(state, startedAt, { started, done: false, complete: false, updated, unchanged, removed, parserCalls, pendingAfter: true }, now);
+      store.recordReconcileSummary(root, state.generation, skipped, exclusionCleanup);
+      return resultFrom(state, startedAt, {
+        started, done: false, complete: false, updated, unchanged, removed, parserCalls, pendingAfter: true,
+        skipped, exclusionCleanup,
+      }, now);
     }
     flush();
     const pendingAfter = queue.reconcilePendingAfter(root, state.scopeAcks);
@@ -262,7 +283,11 @@ export async function runBackgroundReconcileBatch(
     const complete = state.readFailures.length === 0 && state.deferredChecks.length === 0 && !pendingAfter;
     queue.finishReconcile(root, state.generation, complete, state.readFailures, state.deferredChecks);
     store.checkpointWal();
-    return resultFrom(state, startedAt, { started, done: true, complete, updated, unchanged, removed, parserCalls, pendingAfter }, now);
+    store.recordReconcileSummary(root, state.generation, skipped, exclusionCleanup);
+    return resultFrom(state, startedAt, {
+      started, done: true, complete, updated, unchanged, removed, parserCalls, pendingAfter,
+      skipped, exclusionCleanup,
+    }, now);
   } catch (e) {
     if (e instanceof OperationCancelledError) {
       flush();

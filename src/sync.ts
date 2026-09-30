@@ -4,12 +4,12 @@ import path from "node:path";
 import { realpath, stat } from "node:fs/promises";
 import { parseDocument } from "./parser.js";
 import { scan, validateRoot, RootError } from "./scanner.js";
-import { canonicalizeRootInput, planRootOperation, resolveUserRootPath, runtimePathPlatform, type RootOperationKind } from "./root-plan.js";
+import { canonicalizeRootInput, planRootOperation, resolveUserRootPath, runtimePathPlatform, samePath, type RootOperationKind } from "./root-plan.js";
 import { emptyStatusCounts, classifyReprocess, emptyReasonCounts, reprocessAction, reprocessReasonLabels, type Diagnostic, type DocumentRecord, type ReprocessReason, type SyncSummary } from "./model.js";
 import { indexArtifactPaths, isIndexArtifact, type IndexStore, type RemovalResult, type UpsertTimings } from "./store.js";
 import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { addTimingSample, createTimingReservoir, rememberSlowFile, type SlowFileProfile, type TimingReservoir } from "./profile.js";
-
+import { RootExclusion } from "./root-exclusion.js";
 export interface SyncReport extends SyncSummary {
   root: string;
   errors: string[];
@@ -47,6 +47,19 @@ export interface SyncOptions {
   signal?: AbortSignal;
   onProgress?: (update: ProgressUpdate) => void;
   excludePaths?: readonly string[];
+  /** 可選注入同一根排除 context；正式路徑由 effective root 建立。 */
+  exclusion?: RootExclusion;
+}
+
+function countSkipped(
+  skipped: SyncReport["skipped"],
+  explanation: ReturnType<RootExclusion["explain"]>,
+): void {
+  const ruleId = explanation.ruleId ?? explanation.source;
+  skipped.byRule[ruleId] = (skipped.byRule[ruleId] ?? 0) + 1;
+  if (explanation.source === "user-rule") skipped.user++;
+  else if (explanation.source === "link") skipped.link++;
+  else skipped.builtin++;
 }
 
 export async function sync(rootInput: string, store: IndexStore, options: SyncOptions = {}): Promise<SyncReport> {
@@ -96,29 +109,40 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
     retainedDocuments = store.mergeChildRoots(plan.registeredRoot, plan.mergedRoots).transferred;
   }
   const root = plan.registeredRoot;
+  const exclusion = options.exclusion && samePath(options.exclusion.root, root)
+    ? options.exclusion
+    : await RootExclusion.load(root, store);
   const extraIgnoreBases = store.ignoreBases(root);
   const scanStart = plan.subtree ?? root;
   const enumerateStarted = performance.now();
+  const scanOptions = {
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    ...(extraIgnoreBases.length ? { extraIgnoreBases } : {}),
+    ...(scanStart !== root ? { start: scanStart } : {}),
+    exclusion,
+    databasePath: store.databasePath,
+  };
   const found = options.scan
-    ? await options.scan(root, {
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-      ...(extraIgnoreBases.length ? { extraIgnoreBases } : {}),
-      ...(scanStart !== root ? { start: scanStart } : {}),
-    })
-    : await scan(root, {
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-      ...(extraIgnoreBases.length ? { extraIgnoreBases } : {}),
-      ...(scanStart !== root ? { start: scanStart } : {}),
-    });
+    ? await options.scan(root, scanOptions)
+    : await scan(root, scanOptions);
   const enumerateMs = performance.now() - enumerateStarted;
   // 使用者可能把索引資料目錄放在被掃描根目錄內；LocalDocSearch 自己的資料庫
   // 與 WAL／協調檔不是來源文件，納入會造成每次同步都修改自己的輸入。
   const databasePath = path.resolve(store.databasePath);
   const internalPaths = new Set([...indexArtifactPaths(databasePath), ...(options.excludePaths ?? []).map(item => path.resolve(item))]);
-  const sourcePaths = found.paths.filter(filePath => !internalPaths.has(path.resolve(filePath)) && !isIndexArtifact(filePath, databasePath));
-  found.skipped.builtin += found.paths.length - sourcePaths.length;
+  const sourcePaths: string[] = [];
+  for (const filePath of found.paths) {
+    const explanation = exclusion.explain(filePath, false);
+    if (explanation.excluded) {
+      countSkipped(found.skipped, explanation);
+    } else if (internalPaths.has(path.resolve(filePath)) || isIndexArtifact(filePath, databasePath)) {
+      found.skipped.byRule["index-artifact"] = (found.skipped.byRule["index-artifact"] ?? 0) + 1;
+      found.skipped.builtin++;
+    } else {
+      sourcePaths.push(filePath);
+    }
+  }
   found.paths = sourcePaths;
   const notices: string[] = [];
   if (canon.rewrittenFrom !== undefined) notices.push(`已將根目錄 ${canon.rewrittenFrom} 視為 ${canon.path}`);
@@ -298,12 +322,23 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
       root,
       plan.kind === "subtree" ? scanStart : undefined,
       found.protectedScopes,
-      { ...(options.signal ? { signal: options.signal } : {}), ...(options.onProgress ? { onProgress: options.onProgress } : {}) },
+      {
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+        trackExcluded: filePath => exclusion.explain(filePath, undefined).excluded,
+      },
     );
   } catch (error) {
     if (error instanceof OperationCancelledError) {
       // Committed removal batches stay; the next sync recomputes the rest (SPEC §51.3).
-      report.removed = (error.partial as RemovalResult | undefined)?.removed ?? 0;
+      const partial = error.partial as RemovalResult | undefined;
+      report.removed = partial?.removed ?? 0;
+      if (partial?.exclusionRemoved !== undefined || partial?.exclusionPending !== undefined) {
+        report.exclusionCleanup = {
+          removed: partial.exclusionRemoved ?? 0,
+          pending: partial.exclusionPending ?? 0,
+        };
+      }
       report.elapsedMs = Math.round((performance.now() - started) * 100) / 100;
       error.partial = report;
     }
@@ -311,6 +346,10 @@ async function syncLocked(rootInput: string, store: IndexStore, options: SyncOpt
   }
   report.removed = removal.removed;
   report.protectedByScanFailure = removal.protected;
+  report.exclusionCleanup = {
+    removed: removal.exclusionRemoved ?? 0,
+    pending: removal.exclusionPending ?? 0,
+  };
   addPhase("remove", performance.now() - removeStarted);
   report.elapsedMs = Math.round((performance.now() - started) * 100) / 100;
   if (plan.kind !== "subtree") {

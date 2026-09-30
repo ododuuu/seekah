@@ -1,16 +1,11 @@
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadIgnoreRules, type IgnoreRules } from "./ignore.js";
-import { canonicalizeRootInput, coversPath, RootError } from "./root-plan.js";
-import type { Diagnostic, SkippedCounts } from "./model.js";
+import { canonicalizeRootInput, RootError } from "./root-plan.js";
+import { emptySkippedCounts, type Diagnostic, type SkippedCounts } from "./model.js";
 import { throwIfAborted, type ProgressUpdate } from "./progress.js";
-import { isWindowsVolumeSystemPath, isWindowsVolumeSystemRoot } from "./builtin-paths.js";
-
-const ignoredDirectories: Record<string, true> = {
-  ".git": true,
-  node_modules: true,
-  ".localdocsearch": true,
-};
+import { isWindowsVolumeSystemRoot } from "./builtin-paths.js";
+import { RootExclusion } from "./root-exclusion.js";
 
 export interface ScanResult {
   paths: string[];
@@ -28,6 +23,16 @@ export interface ScanOptions {
   onProgress?: (update: ProgressUpdate) => void;
   extraIgnoreBases?: readonly string[];
   start?: string;
+  exclusion?: RootExclusion;
+  databasePath?: string;
+}
+
+function countSkipped(result: ScanResult, exclusion: ReturnType<RootExclusion["explain"]>): void {
+  const ruleId = exclusion.ruleId ?? exclusion.source;
+  result.skipped.byRule[ruleId] = (result.skipped.byRule[ruleId] ?? 0) + 1;
+  if (exclusion.source === "user-rule") result.skipped.user++;
+  else if (exclusion.source === "link") result.skipped.link++;
+  else result.skipped.builtin++;
 }
 
 export async function scan(root: string, options: ScanOptions = {}): Promise<ScanResult> {
@@ -39,9 +44,11 @@ export async function scan(root: string, options: ScanOptions = {}): Promise<Sca
     extraRules.push({ base, rules });
     if (rules.sourcePath) extraIgnoreFiles.push(rules.sourcePath);
   }
+  const exclusion = options.exclusion
+    ?? await RootExclusion.loadWithExtraIgnoreBases(root, options.extraIgnoreBases ?? [], options.databasePath);
   const start = options.start ?? root;
   const result: ScanResult = { paths: [], errors: [], diagnostics: [], protectedScopes: [],
-    skipped: { builtin: 0, user: 0, unsupported: 0, link: 0 },
+    skipped: emptySkippedCounts(),
     ignoreFile: ignoreRules.sourcePath, ignorePatterns: [...ignoreRules.patterns, ...extraRules.flatMap(item => item.rules.patterns)],
     extraIgnoreFiles };
   const pending = [start];
@@ -61,16 +68,9 @@ export async function scan(root: string, options: ScanOptions = {}): Promise<Sca
     }
     for (const entry of entries) {
       const fullPath = path.join(directory, entry.name);
-      const relativePath = path.relative(root, fullPath);
-      const ignoredByExtra = extraRules.some(item => coversPath(item.base, fullPath) && item.rules.matches(path.relative(item.base, fullPath), entry.isDirectory()));
-      if ((entry.isDirectory() && (ignoredDirectories[entry.name.toLowerCase()] === true || isWindowsVolumeSystemPath(fullPath)))
-        || (entry.isFile() && entry.name.startsWith("~$"))) {
-        result.skipped.builtin++;
-      } else if (ignoreRules.matches(relativePath, entry.isDirectory()) || ignoredByExtra) {
-        result.skipped.user++;
-      } else if (entry.isSymbolicLink()) {
-        // 包含 Windows junction，不 stat 目標，避免循環或越過根目錄。
-        result.skipped.link++;
+      const explanation = exclusion.explain(fullPath, entry.isDirectory(), entry.isSymbolicLink());
+      if (explanation.excluded) {
+        countSkipped(result, explanation);
       } else if (entry.isDirectory()) {
         pending.push(fullPath);
       } else if (entry.isFile()) {

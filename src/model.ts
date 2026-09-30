@@ -97,6 +97,17 @@ export interface SkippedCounts {
   user: number;
   unsupported: number;
   link: number;
+  /** 以 RootExclusion 的穩定 rule id 計數；舊摘要可缺少此欄位。 */
+  byRule: Record<string, number>;
+}
+
+export interface ExclusionCleanupSummary {
+  removed: number;
+  pending: number;
+}
+
+export function emptySkippedCounts(): SkippedCounts {
+  return { builtin: 0, user: 0, unsupported: 0, link: 0, byRule: {} };
 }
 
 export interface SyncSummary {
@@ -111,12 +122,16 @@ export interface SyncSummary {
   skipped: SkippedCounts;
   readErrors: number;
   elapsedMs: number;
-  /** 舊摘要沒有這些欄位時應顯示「未提供」，不可補 0。 */
+  /** 既有摘要缺少這些欄位時應顯示「未提供」，不可補 0。 */
   checked?: number;
   failedDocuments?: number;
   reasonsAttempted?: Record<ReprocessReason, number>;
   reasonsCommitted?: Record<ReprocessReason, number>;
   protectedByScanFailure?: number;
+  /** 背景校正摘要所屬的 queue generation；完整同步摘要不填此欄位。 */
+  reconcileGeneration?: number;
+  /** 預設排除造成的既有索引清理進度；不是來源檔案刪除進度。 */
+  exclusionCleanup?: ExclusionCleanupSummary;
 }
 
 export function emptyStatusCounts(): Record<DocumentStatus, number> {

@@ -24,6 +24,31 @@
 - `m65` 驗證 800 筆以上舊積壓與新檔在兩個局部批次內都有進度、持續新增時舊待辦不永久餓死、defer 噪音不阻塞穩定檔案，以及反向恢復舊選擇後回歸失敗。
 - 執行 `npm run build`、`npm run test -- --runInBand test/m65.test.ts`、相關 live-update／queue 測試及完整 `npm test`；記錄既有 Windows 平台限制。
 
+## D103：整顆本機磁碟根目錄預設排除且不可沉默
+
+- 日期：2026-09-30。依 SPEC §71；分配給 `feat/default-exclusion`。背景是整顆 `C:\` 作為根目錄時，Windows 系統／程式資料與權限受限範圍造成大量事件、讀取錯誤與無關索引；本決策只處理政策核心與可見性資料契約，不處理事件遺失後的校正順序或局部批次公平。
+- 決定：
+  - 只在 Windows 本機 drive volume root（`C:\`、`D:\` 等精確根）啟用 volume-default policy；UNC、非磁碟根、POSIX 與其他平台不套用新增清單。
+  - 第一版排除 `Windows`、`Program Files`、`Program Files (x86)`、`ProgramData`、`Users\<profile>\AppData`、`PerfLogs`，保留既有 `$Recycle.Bin` 與 `System Volume Information`。比對使用 root-relative 完整 segment 與 Windows 不分大小寫；相似名稱不命中。
+  - volume-default 是不可被普通 ignore 重新納入的 built-in policy；`!` 仍由既有 parser 拒絕，不新增 hidden flag、`--include-system-paths` 或只在工作台存在的 bypass。使用者若需被排除位置，先移除父 volume root，再以窄根目錄直接登錄；父根仍存在時窄根不是 override。
+  - `src/default-exclusions.ts` 匯出 `listDefaultExclusions(root, platform?)` 與 `explainExclusion(root, absPath, store)`。前者回傳穩定 id、相對 pattern、中文名稱、原因與誤傷提醒；後者回傳 `excluded`、`source`（`builtin`／`volume-default`／`user-rule`／`link`／`index-artifact`／`not-excluded`）、`matchedRule` 與規則 `base`。入口不必複製清單或自行解析。
+  - `RootExclusion` 是 scanner、reconcile、watch-path、local-update、live-update、root-exclusion、sync／root plan 的唯一 effective 判定 context。user rule 錯誤時 built-in／volume-default 仍有效，但同步仍依既有錯誤契約失敗；不可因入口不同而得到不同排除結果。
+  - scanner report 與背景 reconcile result 的 skipped 保留 aggregate，增加每個穩定 rule id 的計數；局部事件可辨識為排除時不入 queue，但累加排除計數。完整同步將 skipped per-rule 與既有索引清理的已移除／待移除摘要持久化到 root 的最後同步摘要，供後續 CLI／工作台 status 顯示。
+  - 既有索引清理只在完整校正已安全完成 scope 時執行，沿用 §51 每批最多 1,000 份、有限 transaction、取消與接續；只刪衍生索引，不刪來源，並讓使用者看見目前已移除／待移除數。不可用清理掩蓋 §60 讀取失敗／延後核對。
+- 理由：
+  - 作用範圍以「明確登錄整顆本機磁碟」作為意圖訊號，避免把一般 `C:\Users\mains` 或 UNC 的同名企業資料誤當 Windows 系統資料。
+  - 將政策、診斷與入口判定集中在 immutable `RootExclusion`，避免 scanner、watcher、queue 與校正各自維護名稱清單；`explainExclusion` 讓使用者能追查「為何搜不到」而非只看到空結果。
+  - 以既有 `removeMissing` 分批清理，沿用已驗證的外鍵／索引刪除與取消接續，不把大範圍清理改成 live queue 逐檔事件或單一長 transaction。
+- 否決：
+  - 不對所有 root 套用 `Windows`／`ProgramData`／`AppData` 名稱，不把 `Users` 整棵排除，不加入不穩定的 `Recovery`、`Boot`、`Windows.old` 等清單。
+  - 不支援 `!` override、不自動修改 `.localdocsearchignore`、不新增 hidden include flag、不在搜尋層另做即時過濾。
+  - 不只在 status 隱藏既有索引、不清空資料庫、不刪 WAL／journal、不讀／解析被排除來源、不修改來源文件。
+- 驗證：
+  - `test/m64.test.ts` 覆蓋 volume／非 volume／UNC／相似名稱矩陣、規則 API、六個入口 parity、不可沉默摘要、父根／窄根替代與大量分批刪除。
+  - 暫時繞過 central policy 或還原一個入口後新測試至少一項失敗；還原後 build、聚焦測試與完整 `npm test` 通過。
+- 相容與限制：不改 schema、package 版本、資料目錄、搜尋語意、IPC／MCP／`docsearch` 識別；本機 win32 測試不代表公司 Windows 人工驗收。
+- 版本：待合併時決定；本分支不修改 `package.json`、`STATUS`、handoff 或 `NEXT-TODO`。
+
 ## D102：背景校正只在 frontier 頂端收尾 scope
 
 - 日期：2026-09-29。依 SPEC §70；本項分配給 `fix/fix-reconcile-frontier`，不涉及 §68／D100 的局部更新公平性或 §69／D101 的舊 root work item 清理。
@@ -54,7 +79,6 @@
   - 若錯誤只修 pop 而未驗證 resume，可能重播已 seen entries 或在父 scope premature remove；永久測試必須覆蓋 durable checkpoint 與重啟。
 - 版本：待合併時決定；本分支不修改 `package.json` 版本。
 
-
 ## D101：清理已不在 roots 的孤兒工作狀態
 
 - 日期：2026-09-30。依 SPEC §69；問題由背景更新調查確認：重啟後 engine 只為目前 `store.roots()` 建立 state，舊 root 的 `work_items`／`reconcile_state` 沒有 consumer，卻污染全域 queue status、最舊時間與 overflow 計數。
@@ -79,6 +103,7 @@
   - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新、busy-lock 主操作成功與釋放鎖後 startup 補清測試，並對 best-effort 前版本反向驗證。
   - `npm run build`、聚焦測試與完整 `npm test`；如 M26 path coverage、M36 profile chmod 仍為 win32 環境失敗，單獨記錄。
 - 相容：不改 work state schema、索引 schema、文件內容、搜尋結果、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 `docsearch` 相容入口。
+
 ## D100：背景校正與局部事件更新公平輪替
 
 - 日期：2026-09-30。
@@ -1055,4 +1080,3 @@
 - 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
-
