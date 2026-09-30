@@ -1187,6 +1187,11 @@ export class IndexStore {
     return this.documentByPathStmt().get(filePath) as StoredDocumentRow | undefined;
   }
 
+  getDocumentIssue(filePath: string): StoredIssue | undefined {
+    return this.db.prepare(`SELECT path, status, error_code AS errorCode, error_message AS errorMessage
+      FROM documents WHERE path = ?`).get(filePath) as StoredIssue | undefined;
+  }
+
   private documentsHaveParseVersion(): boolean {
     if (this.parseVersionKnown === null) {
       if (!this.hasTable("documents")) this.parseVersionKnown = false;

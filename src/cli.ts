@@ -8,6 +8,8 @@ import { collectIndexStorage, defaultDatabasePath, describeDatabaseLocation, for
 import { parseTypes, type SearchResult } from "./search.js";
 import { formatTotal, runSearchSession, SearchSession, SearchIndexChangedError } from "./search-session.js";
 import { resolveUserRootPath } from "./root-plan.js";
+import { explainPathSync, readExclusionPolicies, readExclusionPolicy } from "./exclusion-visibility.js";
+import { formatExclusionExplanation, formatExclusionPolicyLines, formatExclusionPolicySummary, formatZeroResultExclusionHint } from "./describe-exclusion.js";
 import { RootError } from "./scanner.js";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -92,6 +94,8 @@ export function buildHelpText(): string {
     "  docsearch reveal <文件代碼> [--dry-run]",
     "  docsearch roots [remove <root>]",
     "  docsearch status [--issues] [--types]",
+    "  docsearch exclusions [--root <path>]              # 查看有效排除規則與逐規則 skipped",
+    "  docsearch explain <path>                          # 查詢目前檔案為何搜不到",
     "  docsearch rebuild [root] [--verbose]",
     "  docsearch watch [root] [--debounce <毫秒>] [--rescan <毫秒>] [--verbose]",
     "  docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--data-dir <資料目錄>] # 初次索引後的日常變更",
@@ -157,6 +161,15 @@ function printSummary(summary: SyncSummary): void {
   }
   console.log(`本次處理狀態：${Object.entries(summary.statuses).map(([status, count]) => `${status}=${count}`).join("、")}`);
   console.log(`略過項目（不計已排除目錄的內部文件）：內建規則 ${summary.skipped.builtin}、使用者規則 ${summary.skipped.user}、連結 ${summary.skipped.link}。${summary.skipped.unsupported ? ` 舊版未登錄格式 ${summary.skipped.unsupported}。` : ""}`);
+  const byRule = (summary.skipped as { byRule?: unknown }).byRule;
+  const byRuleText = byRule === undefined
+    ? "未提供"
+    : byRule && typeof byRule === "object" && !Array.isArray(byRule)
+      ? (Object.entries(byRule as Record<string, unknown>).map(([rule, count]) => `${rule}=${count}`).join("、") || "無")
+      : "未提供";
+  console.log(`逐規則略過：${byRuleText}`);
+  const cleanup = (summary as { exclusionCleanup?: { removed: number; pending: number } }).exclusionCleanup;
+  console.log(cleanup ? `既有索引排除清理：已移除 ${cleanup.removed}；待清理 ${cleanup.pending}。` : "既有索引排除清理：未提供。");
   console.log(`掃描／讀取錯誤 ${summary.readErrors}；同步耗時 ${summary.elapsedMs} ms。`);
   if (summary.protectedByScanFailure !== undefined) {
     console.log(`掃描失敗範圍保留 ${summary.protectedByScanFailure} 份既有索引。`);
@@ -235,7 +248,7 @@ export async function main(args: readonly string[]): Promise<number> {
     console.log(`壓縮完成：${formatStorageSize(before)} → ${formatStorageSize(after)}。`);
     return 0;
   }
-  if (!["index", "search", "status", "rebuild", "open", "reveal", "roots", "context", "watch", "tui"].includes(command ?? "")) {
+  if (!["index", "search", "status", "exclusions", "explain", "rebuild", "open", "reveal", "roots", "context", "watch", "tui"].includes(command ?? "")) {
     console.error(`未知命令：${command}`);
     return 2;
   }
@@ -251,6 +264,7 @@ export async function main(args: readonly string[]): Promise<number> {
   const contextQuery = command === "context" && args[1] && !args[1].startsWith("--") ? args[1] : undefined;
   let rootInput: string | undefined;
   let rootFilter: string | undefined;
+  let explainInput: string | undefined;
   let dryRun = false;
   let limit = command === "context" ? 100 : 20;
   let limitSpecified = false;
@@ -326,6 +340,17 @@ export async function main(args: readonly string[]): Promise<number> {
       }
       statusIssues = seen.has("--issues");
       statusTypes = seen.has("--types");
+    } else if (command === "exclusions") {
+      if (args.length > 3 || (args[1] !== undefined && args[1] !== "--root") || (args[1] === "--root" && !args[2]?.trim())) {
+        throw new Error("用法：docsearch exclusions [--root <path>]");
+      }
+      if (args[1] === "--root") {
+        if (args[2]!.length > 16_384) throw new Error("--root 路徑超過上限。");
+        rootFilter = args[2]!.trim();
+      }
+    } else if (command === "explain") {
+      if (args.length !== 2 || !args[1]!.trim() || args[1]!.length > 16_384) throw new Error("用法：docsearch explain <path>");
+      explainInput = args[1]!.trim();
     } else {
       if (command !== "context" && !args[1]?.trim()) throw new Error("搜尋文字不可為空白。");
       const seen = new Set<string>();
@@ -630,6 +655,23 @@ export async function main(args: readonly string[]): Promise<number> {
       }
       return 0;
     }
+    if (command === "exclusions") {
+      if (!roots.length) {
+        console.log("尚無已登錄根目錄；沒有可列出的排除政策。");
+        return 0;
+      }
+      const policyRoots = rootFilter ? [registeredRoot(rootFilter)] : roots;
+      for (const policy of readExclusionPolicies(store, policyRoots)) {
+        for (const line of formatExclusionPolicyLines(policy)) console.log(line);
+        console.log("");
+      }
+      return 0;
+    }
+    if (command === "explain") {
+      const result = explainPathSync(store, explainInput!);
+      console.log(formatExclusionExplanation(result));
+      return 0;
+    }
     if (!roots.length) {
       console.error("索引尚未建立；請先執行 docsearch index <root>。"); return 3;
     }
@@ -670,6 +712,7 @@ export async function main(args: readonly string[]): Promise<number> {
         if (syncReport.complete !== null) console.log(`最近同步完整：${syncReport.complete ? "是" : "否"}`);
         if (syncReport.summary) { console.log("最近同步摘要（歷史紀錄，非目前索引累計狀態）："); printSummary(syncReport.summary); }
         console.log(`最近同步診斷：${syncReport.diagnostics.length}（詳見 status --issues）`);
+        console.log(`排除摘要：${formatExclusionPolicySummary(readExclusionPolicy(store, root))}`);
       }
       console.log("目前索引累計狀態：");
       for (const [status, count] of Object.entries(store.counts())) console.log(`${status}：${count}`);
@@ -714,6 +757,7 @@ export async function main(args: readonly string[]): Promise<number> {
     if (session.originalTotal === 0) {
       console.log(Object.values(store.counts()).every(count => count === 0)
         ? "索引內沒有支援的文件；請確認根目錄、排除規則與同步狀態。" : "沒有符合的結果。");
+      console.log(formatZeroResultExclusionHint());
       if (verbose) printSearchTrace(session.trace);
       if (!interactive) return 0;
     } else if (limitSpecified) {

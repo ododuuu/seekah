@@ -3,12 +3,12 @@ import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 import { IndexStore } from "./store.js";
-import { indexStatus, McpToolError, prepareContextTool, searchDocuments } from "./mcp-tools.js";
+import { explainPath, indexStatus, McpToolError, prepareContextTool, searchDocuments } from "./mcp-tools.js";
 import { describeIndexClientError } from "./index-errors.js";
 import { MCP_APP_HTML, MCP_APP_MIME_TYPE, MCP_APP_RESOURCE_URI } from "./mcp-app.js";
 import { productVersion } from "./version.js";
 
-export const MCP_TOOL_NAMES = ["search_documents", "prepare_context", "index_status", "open_search_app"] as const;
+export const MCP_TOOL_NAMES = ["search_documents", "prepare_context", "index_status", "explain_path", "open_search_app"] as const;
 
 const readOnlyAnnotations = {
   readOnlyHint: true,
@@ -170,6 +170,24 @@ export function createMcpServer(databasePath: string, options: { createIndexStor
       const result = indexStatus(store);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    }),
+  );
+
+  server.registerTool(
+    "explain_path",
+    {
+      title: "查詢檔案為何未出現在搜尋結果",
+      description: "唯讀重新計算目前路徑的排除、索引、解析與根目錄狀態；只回傳路徑、規則、狀態與錯誤碼，不回傳文件內容。",
+      inputSchema: z.object({ path: z.string().min(1).max(16_384) }),
+      annotations: readOnlyAnnotations,
+      _meta: { ui: { visibility: ["model", "app"] } },
+    },
+    async input => withStore(store => {
+      const result = explainPath(store, input.path);
+      return {
+        content: [{ type: "text", text: result.message }],
         structuredContent: result,
       };
     }),

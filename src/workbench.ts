@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { IndexStore, dataDirectory, type TrashedRoot } from "./store.js";
 import { indexStatus, prepareContextTool, searchDocuments } from "./mcp-tools.js";
+import { explainPathSync, previewExclusionPolicy, readExclusionPolicies } from "./exclusion-visibility.js";
+import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 import { emptySearchTrace } from "./search-trace.js";
 import { AnswerTraceRecorder, type AnswerTrace } from "./answer-trace.js";
 import { createTraceLog, readTraceLog, TRACE_LOG_FILES, TRACE_LOG_LIMIT } from "./trace-log.js";
@@ -19,7 +21,7 @@ import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, p
 import { workbenchHtml } from "./workbench-app.js";
 import { traceHtml } from "./trace-app.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
-import { coversPath } from "./root-plan.js";
+import { coversPath, samePath } from "./root-plan.js";
 import { sync } from "./sync.js";
 import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
@@ -108,6 +110,12 @@ function rootList(body: Record<string, unknown>): string[] {
     throw Object.assign(new Error("根目錄清單無效。"), { statusCode: 400 });
   }
   return [...new Set(body.roots.map(root => (root as string).trim()))];
+}
+function explainPathInput(body: Record<string, unknown>): string {
+  if (typeof body.path !== "string" || !body.path.trim() || body.path.length > 16_384) {
+    throw Object.assign(new Error("檔案路徑無效或超過長度上限。"), { statusCode: 400 });
+  }
+  return body.path;
 }
 
 function contextRequest(body: Record<string, unknown>): ContextRequest {
@@ -234,6 +242,9 @@ async function readWorkbenchIndexStatus(
       autoupdateSettings: defaultAutoupdateSettings,
     };
   }
+}
+function exclusionPolicyPayload(policy: ReturnType<typeof readExclusionPolicies>[number]) {
+  return { ...policy, summary: formatExclusionPolicySummary(policy) };
 }
 
 function workbenchStartupOptions(databasePath: string, options: Pick<WorkbenchOptions, "startupOptions">): StartupCommandOptions {
@@ -709,6 +720,36 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         json(response, 200, { ...await readWorkbenchIndexStatus(options.databasePath, options.createIndexStore), indexing,
           autoupdate: await readAutoupdateStatus(options.databasePath),
           autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options) }); return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/exclusions") {
+        const requestedInput = url.searchParams.get("root");
+        if (requestedInput !== null && (!requestedInput.trim() || requestedInput.length > 16_384)) {
+          throw Object.assign(new Error("排除預覽根目錄無效或超過長度上限。"), { statusCode: 400 });
+        }
+        if (!existsSync(options.databasePath)) {
+          const requested = requestedInput === null ? undefined : previewExclusionPolicy(requestedInput);
+          json(response, 200, {
+            roots: [],
+            ...(requested ? { requested: exclusionPolicyPayload(requested) } : {}),
+          });
+          return;
+        }
+        const result = await openStore(options.databasePath, store => {
+          const policies = readExclusionPolicies(store);
+          if (requestedInput === null) return { roots: policies.map(exclusionPolicyPayload) };
+          const requestedPreview = previewExclusionPolicy(requestedInput);
+          const registered = store.roots().find(root => samePath(root, requestedPreview.root));
+          const requested = registered ? readExclusionPolicies(store, [registered])[0]! : requestedPreview;
+          return { roots: policies.map(exclusionPolicyPayload), requested: exclusionPolicyPayload(requested) };
+        }, options.createIndexStore);
+        json(response, 200, result);
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/explain") {
+        const input = explainPathInput(await readJson(request));
+        const result = await openStore(options.databasePath, store => explainPathSync(store, input), options.createIndexStore);
+        json(response, 200, { ...result, message: formatExclusionExplanation(result) });
+        return;
       }
       if (request.method === "POST" && url.pathname === "/api/index") {
         const body = await readJson(request);

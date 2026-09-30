@@ -94,8 +94,9 @@ test("0.37.0 desktop workbench keeps the shell self-contained and safe", () => {
   assert.match(html, /<script nonce="fixed-nonce">/u);
   assert.match(html, /min-width: 1180px/u);
   assert.match(html, /--sidebar-width: 246px/u);
-  for (const control of ["roots-refresh-folder", "root-refresh-action"]) assert.match(html, new RegExp(control, "u"));
-  for (const endpoint of ["/api/state", "/api/index-status", "/api/select-folder", "/api/search", "/api/files", "/api/document-action", "/api/preview"]) assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
+  for (const control of ["roots-refresh-folder", "root-refresh-action", "search-empty-explain-form", "search-empty-explain-path", "search-empty-explain-button",
+    "root-exclusion-preview", "settings-exclusion-policy"]) assert.match(html, new RegExp(control, "u"));
+  for (const endpoint of ["/api/state", "/api/index-status", "/api/exclusions", "/api/explain", "/api/select-folder", "/api/search", "/api/files", "/api/document-action", "/api/preview"]) assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
   assert.match(html, /dataTransfer\.files/u);
   assert.match(html, /replaceChildren/u);
   assert.match(html, /textContent/u);

@@ -109,7 +109,7 @@ test("0.33 stdio MCP initializes, lists tools and calls search without stdout no
     const lines = child.stdout.trim().split(/\r?\n/u).filter(Boolean);
     const responses = lines.map(line => JSON.parse(line) as { id?: number; result?: Record<string, unknown> });
     const tools = responses.find(item => item.id === 2)?.result?.tools as Array<{ name: string }>;
-    assert.deepEqual(tools.map(tool => tool.name), ["search_documents", "prepare_context", "index_status", "open_search_app"]);
+    assert.deepEqual(tools.map(tool => tool.name), ["search_documents", "prepare_context", "index_status", "explain_path", "open_search_app"]);
     assert.match(JSON.stringify(responses.find(item => item.id === 3)), /mcp-protocol-needle/u);
     assert.ok(lines.every(line => line.startsWith("{")), child.stdout);
     assert.match(child.stderr, /running on stdio/u);

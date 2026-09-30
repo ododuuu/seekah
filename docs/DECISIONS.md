@@ -1,4 +1,32 @@
 # 設計決策紀錄
+## D106：排除可見性不可沉默
+
+- 日期：2026-09-30。依 SPEC §74；本分支只處理排除政策的唯讀可見性與查詢入口，不修改版本、STATUS、handoff 或 NEXT-TODO。
+- 事實：
+  - §71 已把內建規則、整顆本機磁碟的 volume-default、`RootExclusion`、`.localdocsearchignore` 與逐規則 skipped／清理摘要定為唯一排除來源；目前 CLI、工作台、TUI、MCP 仍缺少一致的檔案級說明。
+  - 既有索引可能是舊版摘要，沒有 `skipped.byRule` 或 `exclusionCleanup`；缺欄位與真實計數不同，不能格式化成零。
+  - 使用者需要知道目前檔案是被規則排除、已索引、尚未索引、解析失敗、僅檔名可搜尋或不在任何已登錄根目錄內；這些判斷必須重新查詢目前規則與索引，不可由前端或歷史計數推測。
+- §65–§67 與 D097–D099 已提供索引結果、同步報告與 live status 的資料流；D106 對照後只增加可見查詢入口，不另建排除來源或改變既有欄位語意。
+- 決定：
+  - 新增共同的 `src/describe-exclusion.ts` 純格式化函式與集中查詢流程；所有入口使用相同結構化結果與說明文字。結構只允許路徑、規則、狀態與錯誤碼，不回傳文件正文、snippet、解析錯誤原文或其他內容。
+  - CLI 新增唯讀 `exclusions [--root <path>]` 與 `explain <path>`；`status` 增加各根預設排除摘要、逐規則 skipped 計數與清理進度，舊資料缺欄位顯示「未提供」。
+  - 工作台新增 token 保護的 `GET /api/exclusions` 與 Origin／token 保護的 `POST /api/explain`；server 每次重新分類路徑。工作台根頁逐根提供可展開政策，設定頁說明預設不索引位置，零結果提供查詢輸入，整顆磁碟預覽沿用 §71 文案。DOM 只用節點 API，不用 `innerHTML`。
+  - TUI 新增 `/explain <path>`，`/status` 顯示排除摘要；MCP 新增標示 `readOnlyHint` 的 `explain_path`，並在 `index_status` 以新增欄位提供排除摘要，既有欄位與工具輸出保持相容。
+  - 被排除結果必須附「若真的需要索引」替代做法與限制：可調整 user ignore 或另登錄適當窄根，但不承諾 `!` override、父 volume root 存在時的窄根 override、追蹤 link／junction 或刪除來源。
+  - 不可沉默條款：凡因預設規則、user ignore、link／junction、索引內部檔案或格式限制而未進入正文搜尋的路徑，至少一個唯讀入口必須回報可理解原因與目前狀態，不得只回報搜尋零結果。
+- 理由：
+  - 以一個純函式產生說明可避免 CLI、Web、TUI、MCP 漂移；以 server／store 重新查詢可避免把前端欄位或過期 skipped 摘要當成目前狀態。
+  - 結構化規則、逐規則計數與清理進度同時滿足一般使用者理解與診斷需求；`未提供` 保留舊索引的不確定性，不製造虛假的零。
+- 否決：
+  - 不新增第二套排除 matcher、不讓前端自行判斷、不把歷史 skipped 當作檔案狀態、不用搜尋結果過濾或錯誤原文取代說明。
+  - 不把解釋 API 做成寫入／修規則工具，不讀取文件正文，不啟動／停止 daemon，不改 schema、資料目錄、版本、IPC／MCP／`docsearch` 相容識別。
+- 驗證：
+  - 純格式化矩陣覆蓋所有路徑狀態與被排除替代做法；CLI、API、工作台靜態 id、TUI、MCP 各有測試；至少兩項反向驗證先讓共同文案／server 重算或入口註冊失效，再還原。
+  - 執行 `npm run build`、聚焦測試與完整 `npm test`；不宣稱未由使用者回報的公司 Windows 驗收。
+- 相容與風險：
+  - 沿用 LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、既有 IPC／MCP／`docsearch` 識別與 `default-exclusions.ts`；查詢只讀，不取得 writer lock。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D107：工作台手動重新檢查已登錄根目錄內的資料夾
 
 - 日期：2026-09-30。依 SPEC §75；本分支只處理工作台重新檢查入口、server 範圍驗證、索引報告與相關測試，不修改版本、STATUS、handoff 或 NEXT-TODO。

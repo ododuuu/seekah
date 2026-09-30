@@ -156,7 +156,7 @@ export function runDoctor(options: DoctorOptions): number {
     const validApp = MCP_APP_RESOURCE_URI.startsWith("ui://")
       && MCP_APP_MIME_TYPE === "text/html;profile=mcp-app"
       && MCP_APP_HTML.includes("ui/update-model-context")
-      && MCP_TOOL_NAMES.length === 4;
+        && MCP_TOOL_NAMES.length === 5;
     report(validApp, "MCP／App", `${MCP_TOOL_NAMES.length} 個工具與 1 個本機 UI resource 可註冊`);
   } catch {
     report(false, "MCP／App", "server 或 UI resource 註冊失敗");

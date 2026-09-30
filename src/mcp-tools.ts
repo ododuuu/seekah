@@ -2,6 +2,8 @@ import { prepareSelectedContext, type SelectedContextReference, ContextError } f
 import { parseTypes, type SearchField, type SearchMode, type SearchSort } from "./search.js";
 import { SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
+import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.js";
+import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 
 export class McpToolError extends Error {
   constructor(public readonly code: string, message: string) {
@@ -144,11 +146,16 @@ export function indexStatus(store: IndexStore) {
     };
   });
   const format = store.formatStatus();
+  const exclusions = readExclusionPolicies(store).map(policy => ({
+    ...policy,
+    summary: formatExclusionPolicySummary(policy),
+  }));
   return {
     databasePath: store.databasePath,
     readOnly: true,
     counts: store.counts(),
     roots,
+    exclusions,
     format: {
       contentStorageVersion: format.contentStorageVersion,
       payloadBloomVersion: format.payloadBloomVersion,
@@ -165,4 +172,9 @@ export function indexStatus(store: IndexStore) {
       totalDocuments: format.totalDocuments,
     },
   };
+}
+
+export function explainPath(store: IndexStore, input: string) {
+  const result = explainPathSync(store, input);
+  return { ...result, message: formatExclusionExplanation(result) };
 }

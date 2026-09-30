@@ -59,11 +59,12 @@ test("0.37.0 workbench exposes real root, trash and confirmation controls", () =
   const html = workbenchHtml("fixed-nonce");
   for (const page of ["roots", "trash"]) assert.match(html, new RegExp(`dataset\\.page = "${page}"`, "u"));
   for (const control of ["root-select-all", "root-delete-selected", "trash-select-all", "trash-restore-selected", "trash-purge-selected",
-    "roots-refresh-folder", "root-refresh-action", "roots-stop", "top-stop", "delete-dialog", "delete-dont-remind", "settings-delete-confirmation", "settings-autoupdate",
+    "roots-refresh-folder", "root-refresh-action", "root-exclusion-preview", "search-empty-explain-path", "search-empty-explain-button",
+    "settings-exclusion-policy", "settings-exclusion-policy-list", "roots-stop", "top-stop", "delete-dialog", "delete-dont-remind", "settings-delete-confirmation", "settings-autoupdate",
     "query-field", "scope-root", "scope-format", "scope-parse", "document-search-button"]) {
     assert.match(html, new RegExp(control, "u"));
   }
-  for (const endpoint of ["/api/index", "/api/index/stop", "/api/index-roots/trash", "/api/trash", "/api/settings"]) {
+  for (const endpoint of ["/api/index", "/api/index/stop", "/api/index-roots/trash", "/api/trash", "/api/settings", "/api/exclusions", "/api/explain"]) {
     assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
   }
   assert.match(html, /重新檢查資料夾/u);

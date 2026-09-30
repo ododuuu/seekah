@@ -796,13 +796,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     selected: new Map(),
     imported: new Map(),
     indexStatus: null,
+    exclusions: null,
+    exclusionPreview: null,
+    exclusionPreviewReady: false,
+    emptyExplainMessage: "",
     indexNotice: "",
     indexNoticeKind: "",
     statusRefreshBusy: false,
-    supportedExtensions: [],
-    addRootDraft: "",
-    selectedRoots: new Set(),
-    selectedTrash: new Set(),
     folderPickerBusy: false,
     deleteConfirmation: true,
     totalMode: "fast",
@@ -1174,6 +1174,45 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const end = Math.min(data.page * data.pageSize, data.accessibleTotal);
     return "第 " + start + "–" + end + " 筆，共 " + totalLabel(data) + (data.truncatedToFirst500 ? "；僅開放前 500 筆" : "");
   }
+  async function explainEmptyPath(input, resultNode) {
+    const requested = input.value.trim();
+    if (!requested) {
+      resultNode.textContent = "請輸入檔案路徑。";
+      return;
+    }
+    resultNode.textContent = "正在重新計算目前排除與索引狀態…";
+    try {
+      const data = await api("/api/explain", { method: "POST", body: { path: requested } });
+      state.emptyExplainMessage = data.message || "未提供說明。";
+      resultNode.textContent = state.emptyExplainMessage;
+    } catch (error) {
+      state.emptyExplainMessage = error.message || "檔案說明查詢失敗。";
+      resultNode.textContent = state.emptyExplainMessage;
+    }
+  }
+  function emptySearchState(emptyText) {
+    const empty = make("div", "empty-state", "");
+    empty.append(make("strong", "", emptyText), make("p", "empty-exclusion-hint", "可能有位置依預設排除規則不索引；可檢查某個檔案為何搜不到。"));
+    const form = make("form", "empty-explain-form", "");
+    form.id = "search-empty-explain-form";
+    const label = make("label", "", "檢查某個檔案為何搜不到");
+    label.htmlFor = "search-empty-explain-path";
+    const input = document.createElement("input");
+    input.id = "search-empty-explain-path";
+    input.type = "text";
+    input.maxLength = 16_384;
+    input.placeholder = "輸入檔案路徑";
+    input.autocomplete = "off";
+    const submit = button("檢查", "primary", undefined);
+    submit.id = "search-empty-explain-button";
+    submit.type = "submit";
+    const result = make("p", "empty-explain-result", state.emptyExplainMessage);
+    result.id = "search-empty-explain-result";
+    form.append(label, input, submit, result);
+    form.addEventListener("submit", event => { event.preventDefault(); void explainEmptyPath(input, result); });
+    empty.append(form);
+    return empty;
+  }
   function renderDocuments() {
     syncQueryInputs();
     renderScopeSummaries();
@@ -1210,7 +1249,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const emptyText = data.total ? "目前頁面沒有結果" : "沒有符合文件";
       title.textContent = emptyText;
       subtitle.textContent = "";
-      resultList.append(make("div", "empty-state", emptyText));
+      resultList.append(emptySearchState(emptyText));
       appendTableMessage(tableBody, emptyText);
       range.textContent = String(data.page || 1);
     } else {
@@ -1627,6 +1666,76 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (root.lastSyncComplete === null) return { text: "尚未完成", kind: "warn" };
     return { text: "完整", kind: "good" };
   }
+  function exclusionPolicyForRoot(rootPath) {
+    const policies = state.exclusions && Array.isArray(state.exclusions.roots) ? state.exclusions.roots : [];
+    return policies.find(policy => policy && (policy.root === rootPath || String(policy.root || "").toLocaleLowerCase() === String(rootPath || "").toLocaleLowerCase())) || null;
+  }
+  function exclusionRuleCount(rule) {
+    return rule && rule.lastSkipped !== undefined ? String(rule.lastSkipped) : "未提供";
+  }
+  function appendExclusionPolicyDetails(parent, policy, id) {
+    const details = document.createElement("details");
+    details.className = "root-exclusion-details";
+    if (id) details.id = id;
+    const summary = make("summary", "", policy && policy.summary ? policy.summary : "預設排除：未提供");
+    details.append(summary);
+    const body = make("div", "exclusion-policy-body", "");
+    const rules = policy && Array.isArray(policy.rules) ? policy.rules : [];
+    if (!rules.length) body.append(make("p", "is-muted", "預設排除規則：無。"));
+    for (const rule of rules) {
+      const item = make("section", "exclusion-rule", "");
+      item.append(make("strong", "", String(rule.name || "未提供") + "（" + String(rule.pattern || "未提供") + "）"));
+      item.append(make("p", "", "理由：" + String(rule.reason || "未提供")));
+      item.append(make("p", "", "警告：" + String(rule.warning || "未提供") + "；最後一次略過：" + exclusionRuleCount(rule)));
+      body.append(item);
+    }
+    const ignoreHeading = make("strong", "", ".localdocsearchignore");
+    body.append(ignoreHeading);
+    const ignoreFiles = policy && Array.isArray(policy.ignoreFiles) ? policy.ignoreFiles : [];
+    if (!ignoreFiles.length) body.append(make("p", "is-muted", "未提供有效作用域。"));
+    for (const file of ignoreFiles) {
+      const patterns = Array.isArray(file.patterns) && file.patterns.length ? file.patterns.join("、") : file.exists ? "存在但沒有規則" : "不存在";
+      body.append(make("p", "", String(file.path || "未提供") + "：" + (file.errorCode ? "規則無法讀取（" + file.errorCode + "）" : patterns)));
+    }
+    const skippedByRule = policy && policy.skippedByRule;
+    body.append(make("p", "exclusion-rule-counts", skippedByRule
+      ? "逐規則最近略過：" + (Object.entries(skippedByRule).map(([id, count]) => id + "=" + String(count)).join("、") || "無") + "。"
+      : "逐規則最近略過：未提供。"));
+    const cleanup = policy && policy.exclusionCleanup;
+    body.append(make("p", "exclusion-cleanup", cleanup
+      ? "既有索引排除清理：已移除 " + String(cleanup.removed) + "；待清理 " + String(cleanup.pending) + "。"
+      : "既有索引排除清理：未提供。"));
+    details.append(body);
+    parent.append(details);
+  }
+  function renderExclusionPolicySettings() {
+    const container = $("settings-exclusion-policy-list");
+    if (!container) return;
+    container.replaceChildren();
+    const policies = state.exclusions && Array.isArray(state.exclusions.roots) ? state.exclusions.roots : [];
+    if (!policies.length) {
+      container.append(make("p", "is-muted", "尚無已登錄根目錄或目前無法提供政策。"));
+      return;
+    }
+    for (const policy of policies) {
+      const section = make("section", "settings-exclusion-root", "");
+      section.append(make("h3", "", String(policy.root || "未提供")));
+      appendExclusionPolicyDetails(section, policy);
+      container.append(section);
+    }
+  }
+  function renderRootExclusionPreview() {
+    const preview = $("root-exclusion-preview");
+    if (!preview) return;
+    preview.replaceChildren();
+    const policy = state.exclusionPreview;
+    const isVolumeRoot = policy && Array.isArray(policy.rules) && policy.rules.some(rule => rule.source === "volume-default");
+    preview.hidden = !state.addRootDraft || !policy || !isVolumeRoot;
+    if (!preview.hidden) {
+      preview.append(make("strong", "", "會預設略過哪些位置"));
+      appendExclusionPolicyDetails(preview, policy);
+    }
+  }
   function renderRoots() {
     renderScopeSummaries();
     const data = state.indexStatus;
@@ -1646,12 +1755,12 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     $("top-stop").disabled = !disabled;
     $("root-choose").disabled = disabled;
     $("root-choose-inline").disabled = disabled;
-    $("root-confirm").disabled = disabled || !state.addRootDraft;
+    $("root-confirm").disabled = disabled || !state.addRootDraft || !state.exclusionPreviewReady;
     $("root-draft").value = state.addRootDraft;
     if (!data || data.state === "missing" || !data.roots || !data.roots.length) {
       body.append(make("tr", "root-empty-row", ""));
       body.lastChild.append(make("td", "", "尚無已登錄根目錄。"));
-      body.lastChild.firstChild.colSpan = 6;
+      body.lastChild.firstChild.colSpan = 7;
     } else {
       for (const root of data.roots) {
         const row = document.createElement("tr");
@@ -1667,13 +1776,17 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         const synced = make("td", "root-state", root.lastSyncComplete === null ? "尚未同步" : "已同步");
         const status = make("td", "root-state " + integrity.kind, integrity.text);
         status.title = Array.isArray(root.errors) && root.errors.length ? root.errors.join("；") : Array.isArray(root.notices) && root.notices.length ? root.notices.join("；") : integrity.text;
+        const exclusionCell = make("td", "root-exclusions", "");
+        const policy = exclusionPolicyForRoot(root.path);
+        if (policy) appendExclusionPolicyDetails(exclusionCell, policy);
+        else exclusionCell.textContent = "預設排除：未提供";
         const actions = make("td", "root-actions", "");
         const refresh = button("重新檢查此根目錄", "root-refresh-action", () => void runIndex(root.path, "subtree"));
         const move = button("移至垃圾桶", "danger", () => { state.selectedRoots.clear(); state.selectedRoots.add(root.path); requestDelete("roots"); });
         refresh.disabled = disabled;
         move.disabled = disabled;
         actions.append(refresh, move);
-        row.append(check, pathCell, count, synced, status, actions);
+        row.append(check, pathCell, count, synced, status, exclusionCell, actions);
         body.append(row);
       }
     }
@@ -1681,6 +1794,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     addPanel.classList.toggle("has-draft", Boolean(state.addRootDraft));
     const draftMessage = $("root-draft-message");
     draftMessage.textContent = state.addRootDraft ? "已選取；尚未開始索引。" : "尚未選取資料夾。";
+    renderRootExclusionPreview();
+    renderExclusionPolicySettings();
     renderSidebar();
   }
   function renderTrash() {
@@ -1794,7 +1909,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     state.statusRefreshBusy = true;
     const previous = state.indexStatus;
     try {
-      state.indexStatus = await api("/api/index-status");
+      const [indexStatus, exclusions] = await Promise.all([api("/api/index-status"), api("/api/exclusions")]);
+      state.indexStatus = indexStatus;
+      state.exclusions = exclusions;
       state.deleteConfirmation = state.indexStatus.deleteConfirmation !== false;
       const settingsCheck = $("settings-delete-confirmation");
       if (settingsCheck) settingsCheck.checked = state.deleteConfirmation;
@@ -1841,7 +1958,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       }
       await refreshStatus();
       const success = state.indexStatus && state.indexStatus.indexing && state.indexStatus.indexing.state === "complete";
-      if (success && root && !subtree) state.addRootDraft = "";
+      if (success && root && !subtree) {
+        state.addRootDraft = "";
+        state.exclusionPreview = null;
+        state.exclusionPreviewReady = false;
+      }
       setNotice(state.indexStatus && state.indexStatus.indexing ? state.indexStatus.indexing.message : (success ? "索引已更新。" : "索引完成。"), success ? "ok" : "error");
       return Boolean(success);
     } catch (error) {
@@ -1874,6 +1995,21 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     state.selectedTrash.clear();
     renderTrash();
   }
+  async function loadExclusionPreview(root) {
+    state.exclusionPreview = null;
+    state.exclusionPreviewReady = false;
+    renderRoots();
+    try {
+      const data = await api("/api/exclusions?root=" + encodeURIComponent(root));
+      state.exclusionPreview = data && data.requested ? data.requested : null;
+      state.exclusionPreviewReady = Boolean(state.exclusionPreview);
+      if (!state.exclusionPreviewReady) setNotice("無法取得目前排除預覽；為避免沉默加入，請稍後重選資料夾。", "error");
+    } catch (error) {
+      setNotice(error.message || "無法取得排除預覽；為避免沉默加入，請稍後重選資料夾。", "error");
+    } finally {
+      renderRoots();
+    }
+  }
   async function chooseFolder() {
     if (isIndexing()) { setNotice("索引進行中，請完成後再加入。", "warn"); return; }
     if (state.folderPickerBusy) return;
@@ -1883,8 +2019,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const root = data && typeof data.root === "string" ? data.root.trim() : "";
       if (!root) { setNotice("已取消選擇資料夾；尚未開始索引。", "warn"); return; }
       state.addRootDraft = root;
-      setNotice("已選擇資料夾；請按「確認並建立索引」。", "ok");
-      renderRoots();
+      await loadExclusionPreview(root);
+      if (state.exclusionPreviewReady) setNotice("已選擇資料夾；請先查看預設排除，再按「確認並建立索引」。", "ok");
     } catch (error) { setNotice(error.message || "資料夾選擇失敗。", "error"); }
     finally { state.folderPickerBusy = false; }
   }
@@ -2113,7 +2249,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const rootsPage = make("section", "page", ""); rootsPage.dataset.page = "roots"; rootsPage.id = "roots-page"; const rootsHeader = makePageHeader("索引根目錄", "「完整校正」會列舉所有檔案比較 metadata，但只重新解析新增或變更的文件；日常更新可在設定開啟背景自動更新。"); const rootRefresh = button("完整校正", "", () => void runIndex()); rootRefresh.id = "roots-refresh"; const rootStop = button("停止同步", "danger", () => void stopIndex()); rootStop.id = "roots-stop"; rootStop.hidden = true; const rootChoose = button("加入資料夾", "primary", () => void chooseFolder()); rootChoose.id = "root-choose"; rootsHeader.actions.append(rootRefresh, rootStop, rootChoose); rootsPage.append(rootsHeader); const indexStatusMessage = make("div", "status", "讀取中…"); indexStatusMessage.id = "index-status-message"; indexStatusMessage.setAttribute("role", "status"); indexStatusMessage.setAttribute("aria-live", "polite"); rootsPage.append(indexStatusMessage); const rootsPanel = make("section", "root-list-panel", ""); rootsPage.append(rootsPanel); const rootsToolbar = make("div", "root-toolbar", ""); const rootSelectAll = document.createElement("input"); rootSelectAll.type = "checkbox"; rootSelectAll.id = "root-select-all"; rootSelectAll.setAttribute("aria-label", "選取全部根目錄"); rootSelectAll.addEventListener("change", () => { state.selectedRoots.clear(); if (rootSelectAll.checked && state.indexStatus && state.indexStatus.roots) for (const item of state.indexStatus.roots) state.selectedRoots.add(item.path); renderRoots(); }); const rootDeleteSelected = button("移除所選", "danger", () => requestDelete("roots")); rootDeleteSelected.id = "root-delete-selected"; rootsToolbar.append(rootSelectAll, make("span", "", "選取全部"), rootDeleteSelected); rootsPanel.append(rootsToolbar); const rootsTable = document.createElement("table"); rootsTable.className = "roots-table"; const rootsHead = document.createElement("thead"); const rootsHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "文件", "同步", "完整性", "操作"]) rootsHeadRow.append(make("th", "", label)); rootsHead.append(rootsHeadRow); const rootsBody = document.createElement("tbody"); rootsBody.id = "roots-body"; rootsTable.append(rootsHead, rootsBody); rootsPanel.append(rootsTable);
     const rootRefreshFolder = button("重新檢查資料夾", "", () => void chooseRefreshFolder()); rootRefreshFolder.id = "roots-refresh-folder"; rootsHeader.actions.insertBefore(rootRefreshFolder, rootChoose);
     rootsHeadRow.lastChild.textContent = "";
+    rootsHeadRow.insertBefore(make("th", "", "預設排除"), rootsHeadRow.lastChild);
     const addPanel = make("section", "panel root-add", ""); addPanel.id = "root-add-panel"; const addHead = make("div", "panel-head", ""); addHead.append(make("div", "", "")); addHead.firstChild.append(make("h2", "", "加入資料夾"), make("p", "", "選擇資料夾後，按「確認並建立索引」才會開始。只索引選取的資料夾，不要選整顆系統磁碟。")); addPanel.append(addHead); const rootInstructions = make("p", "root-instructions", "取消選擇或尚未確認不會送出索引；選取路徑為唯讀。"); addPanel.append(rootInstructions); const addBody = make("div", "root-add-body", ""); const addField = make("div", "root-add-field", ""); const addLabel = make("label", "", "已選資料夾"); addLabel.htmlFor = "root-draft"; const rootDraft = document.createElement("input"); rootDraft.id = "root-draft"; rootDraft.readOnly = true; rootDraft.placeholder = "尚未選擇資料夾"; rootDraft.setAttribute("aria-readonly", "true"); addField.append(addLabel, rootDraft); const draftMessage = make("div", "status", "尚未選取資料夾。"); draftMessage.id = "root-draft-message"; addField.append(draftMessage); const chooseButton = button("重新選擇", "", () => void chooseFolder()); chooseButton.id = "root-choose-inline"; chooseButton.addEventListener("click", () => void chooseFolder()); const confirmButton = button("確認並建立索引", "primary", requestAddRoot); confirmButton.id = "root-confirm"; addBody.append(addField, chooseButton, confirmButton); addPanel.append(addBody); rootsPage.append(addPanel); main.append(rootsPage);
+    addHead.querySelector("p").textContent = "選擇資料夾後，確認前會顯示預設排除位置；只索引選取的資料夾。";
+    rootInstructions.textContent = "取消選擇或尚未確認不會送出索引；選取路徑為唯讀。整顆本機磁碟也會先顯示會預設略過哪些位置。";
+    const rootExclusionPreview = make("section", "root-exclusion-preview", "");
+    rootExclusionPreview.id = "root-exclusion-preview";
+    rootExclusionPreview.hidden = true;
+    addPanel.insertBefore(rootExclusionPreview, addBody);
 
     const trashPage = make("section", "page", ""); trashPage.dataset.page = "trash"; trashPage.id = "trash-page"; const trashHeader = makePageHeader("垃圾桶", "這裡只保存被移除的索引記錄；來源資料仍在原位置。"); const purgeSelected = button("永久刪除所選", "danger", () => requestDelete("trash")); purgeSelected.id = "trash-purge-selected"; trashHeader.actions.append(purgeSelected); trashPage.append(trashHeader); const trashStatus = make("div", "status", ""); trashStatus.id = "trash-status-message"; trashStatus.setAttribute("role", "status"); trashStatus.setAttribute("aria-live", "polite"); trashPage.append(trashStatus); const trashPanel = make("section", "trash-list-panel", ""); const trashToolbar = make("div", "trash-toolbar", ""); const trashSelectAll = document.createElement("input"); trashSelectAll.type = "checkbox"; trashSelectAll.className = "table-check"; trashSelectAll.id = "trash-select-all"; trashSelectAll.setAttribute("aria-label", "全選垃圾桶項目"); trashSelectAll.addEventListener("change", () => { state.selectedTrash.clear(); if (trashSelectAll.checked && state.indexStatus?.trash) for (const item of state.indexStatus.trash) state.selectedTrash.add(item.path); renderTrash(); }); const trashSelectLabel = make("label", "", ""); trashSelectLabel.htmlFor = "trash-select-all"; trashSelectLabel.append(trashSelectAll, make("span", "", "全選垃圾桶項目")); const trashToolbarActions = make("div", "button-row", ""); const restoreSelected = button("還原選取並重新索引", "primary", () => void restoreTrash(Array.from(state.selectedTrash))); restoreSelected.id = "trash-restore-selected"; trashToolbarActions.append(restoreSelected); trashToolbar.append(trashSelectLabel, trashToolbarActions); trashPanel.append(trashToolbar); const trashTable = document.createElement("table"); trashTable.className = "trash-table"; const trashHead = document.createElement("thead"); const trashHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "操作"]) trashHeadRow.append(make("th", "", label)); trashHead.append(trashHeadRow); const trashBody = document.createElement("tbody"); trashBody.id = "trash-body"; trashTable.append(trashHead, trashBody); trashPanel.append(trashTable); trashPage.append(trashPanel); main.append(trashPage);
     shell.append(main); app.append(shell);
@@ -2140,6 +2283,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const reconcileRow = make("div", "settings-number-row", ""); const reconcileLabel = make("label", "", ""); reconcileLabel.htmlFor = "settings-autoupdate-reconcile"; reconcileLabel.append(make("strong", "", "完整校正間隔"), make("small", "", "小時（0.25～24）")); const reconcileField = document.createElement("input"); reconcileField.type = "number"; reconcileField.id = "settings-autoupdate-reconcile"; reconcileField.min = "0.25"; reconcileField.max = "24"; reconcileField.step = "0.25"; reconcileField.addEventListener("change", () => void saveAutoupdateParameters()); reconcileRow.append(reconcileLabel, reconcileField); autoupdateSettings.append(reconcileRow);
     autoupdateSection.append(autoupdateLabel, startupLabel, startupHelp, autoupdateSettings);
     const totalLabelEl = make("label", "setting-check", ""); const totalCheck = document.createElement("input"); totalCheck.type = "checkbox"; totalCheck.id = "settings-total-exact"; totalCheck.addEventListener("change", () => void saveTotalMode(totalCheck.checked)); totalLabelEl.append(totalCheck, make("span", "", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）"));
+    const exclusionPolicySection = make("section", "settings-section", "");
+    exclusionPolicySection.id = "settings-exclusion-policy";
+    exclusionPolicySection.append(make("h2", "", "哪些位置預設不索引"), make("p", "settings-help", "Seekah 會依目前根目錄與平台規則略過系統資料、內部資料與使用者排除規則；規則、逐規則略過計數與清理進度只讀顯示。"));
+    const exclusionPolicyList = make("div", "settings-exclusion-policy-list", "");
+    exclusionPolicyList.id = "settings-exclusion-policy-list";
+    exclusionPolicySection.append(exclusionPolicyList);
+    settingsBody.append(exclusionPolicySection);
     settingsBody.append(settingLabel, autoupdateSection, totalLabelEl); const settingsStatus = make("div", "status", ""); settingsStatus.id = "settings-status"; settingsStatus.setAttribute("role", "status"); settingsStatus.setAttribute("aria-live", "polite"); settingsBody.append(settingsStatus); const settingsActions = make("div", "dialog-actions", ""); settingsActions.append(button("完成", "primary", () => settingsDialog.close())); settingsDialog.append(settingsHead, settingsBody, settingsActions); app.append(settingsDialog);
 
     const deleteDialog = document.createElement("dialog"); deleteDialog.id = "delete-dialog"; deleteDialog.className = "delete-dialog"; deleteDialog.setAttribute("aria-labelledby", "delete-title"); const deleteHead = make("div", "dialog-head", ""); const deleteHeading = make("div", "", ""); deleteHeading.append(make("h2", "", "確認操作"), make("p", "", "")); deleteHeading.firstChild.id = "delete-title"; deleteHeading.lastChild.id = "delete-message"; const deleteClose = iconButton("×", "取消刪除操作", () => deleteDialog.close()); deleteHead.append(deleteHeading, deleteClose); const deleteBody = make("div", "dialog-body", ""); const deleteDetail = make("div", "delete-detail", ""); deleteDetail.id = "delete-detail"; const deleteWarning = make("div", "delete-warning", ""); deleteWarning.id = "delete-warning"; deleteBody.append(deleteDetail, deleteWarning); const deleteActions = make("div", "dialog-actions", ""); const dontRemindLabel = make("label", "setting-check", ""); dontRemindLabel.id = "delete-dont-remind-row"; const dontRemind = document.createElement("input"); dontRemind.type = "checkbox"; dontRemind.id = "delete-dont-remind"; dontRemindLabel.append(dontRemind, make("span", "", "下次不再提醒（可在設定重新開啟）")); const deleteCancel = button("取消", "", () => deleteDialog.close()); const deleteConfirm = button("確認", "danger-fill", () => { const pending = state.pendingDelete; if (!pending) return; const dont = $("delete-dont-remind").checked; state.pendingDelete = null; deleteDialog.close(); void executeDelete(pending.kind, pending.paths, dont); }); deleteConfirm.id = "delete-confirm"; deleteActions.append(dontRemindLabel, deleteCancel, deleteConfirm); deleteDialog.append(deleteHead, deleteBody, deleteActions); app.append(deleteDialog);
