@@ -9,6 +9,8 @@ import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.j
 import { formatExclusionExplanation, formatExclusionPolicySummary, formatZeroResultExclusionHint } from "./describe-exclusion.js";
 import { describeIndexClientError } from "./index-errors.js";
 import { productVersion } from "./version.js";
+import { formatTruncatedListNotice, previewStatusList, STATUS_LIST_PREVIEW_LIMIT } from "./status-preview.js";
+
 
 export type TuiStopReason = "eof" | "sigint" | "sigterm";
 
@@ -1005,7 +1007,15 @@ export async function runTui(
           const counts = store.counts();
           const policies = readExclusionPolicies(store);
           const policySummary = policies.length ? policies.map(formatExclusionPolicySummary).join("；") : "尚無已登錄根目錄。";
-          const lines = ["目前索引文件狀態", ...Object.entries(counts).map(([status, count]) => `${status}: ${count}`),
+          const errorLines = store.roots().map(root => {
+            const preview = previewStatusList(store.getLastSyncReport(root).errors);
+            const label = preview.truncated
+              ? formatTruncatedListNotice(preview.total, STATUS_LIST_PREVIEW_LIMIT)
+              : `${preview.total} 筆`;
+            return `${path.basename(root) || root}：最近同步錯誤 ${label}`;
+          });
+          const heading = errorLines.length ? `目前索引文件狀態（${errorLines.join("；")}）` : "目前索引文件狀態";
+          const lines = [heading, ...Object.entries(counts).map(([status, count]) => `${status}: ${count}`),
             `預設排除摘要：${policySummary}`, "", "此畫面只顯示真實索引統計；不假設背景監看正在執行。"];
           openView("status", lines, "已讀取目前索引狀態。", "input");
           continue;
