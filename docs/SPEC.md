@@ -2205,6 +2205,7 @@ docsearch doctor
 - live engine 的 `dropRoot`／`isolateRoot` 必須同時清理該 root 的 `work_items`、`reconcile_state` 與 `reconcile_seen`；現有根目錄的其他列不得受影響。
 - `moveRootsToTrash`、`removeRoot` 與 `mergeChildRoots` 成功提交後，必須清理被移除或被合併的舊 root 工作狀態；合併保留的 parent root 工作狀態不得清理。垃圾桶永久清除入口也不得重新留下被清除 root 的工作狀態。
 - 垃圾桶只保存 root metadata；還原以同一路徑重新 index／register 後，該 root 視為新的現有 root，可重新建立新的 generation、reconcile scope 與局部更新待辦，不得因先前清理而拒絕更新。
+- 根目錄生命週期後的工作狀態清理是 best-effort 整理，不屬於主索引交易的成功條件；`.work.sqlite` 忙碌或清理失敗不得讓已成功的 trash／merge／remove 呼叫回傳錯誤。沒有可用 logger 的 store 入口靜默略過，下一次 engine 啟動的 `cleanupOrphanRoots` 必須補清。
 - 清理只依 root 歸屬判斷，不以「目前沒有文件」或來源資料夾是否存在判斷；來源檔案與索引文件內容不因工作狀態清理而刪除。
 
 ### 69.3 明確不做
@@ -2218,6 +2219,7 @@ docsearch doctor
 
 - 預埋不在 `store.roots()` 的 `work_items`、`reconcile_state`、`reconcile_seen`，啟動 engine 後三表均清除；現有 root 的列保持不變；log 顯示各類清理筆數，status 的待辦數／最舊時間不再包含孤兒列。
 - 分別驗證移至垃圾桶、父根合併、直接移除後，舊 root 不留三表列，保留中的 root 列不變；垃圾桶還原並重新 index 後，新增／修改文件仍能由背景更新搜尋到。
+- 以另一個 `.work.sqlite` 連線持有 `BEGIN IMMEDIATE` 寫入鎖時，`moveRootsToTrash`、`purgeTrashRoots`、`mergeChildRoots`、`removeRoot` 的主操作仍成功且不拋錯；釋放鎖後 engine startup cleanup 補清殘留 orphan。
 - 反向驗證：暫時以未加入本節清理的版本執行同一組新測試，至少一項孤兒列／log／生命周期斷言失敗；還原本節實作後全部通過。
 - 執行 `npm run build` 與完整 `npm test`；如本機 win32 仍出現 M26 path coverage、M36 profile chmod，必須分別列為既有環境限制，不得誤報成 §69 失敗。
 

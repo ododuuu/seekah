@@ -16,6 +16,14 @@ import type { SearchTrace, SearchTraceRecorder } from "./search-trace.js";
 import { RootError } from "./scanner.js";
 import { purgeWorkStateRoots } from "./live-queue.js";
 
+function bestEffortPurgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): void {
+  try {
+    purgeWorkStateRoots(indexDatabasePath, roots);
+  } catch {
+    // 工作狀態整理不是主索引交易的一部分；下次 engine 啟動會重試。
+  }
+}
+
 export type DataDirSource = "LOCALDOCSEARCH_DATA_DIR" | "LOCALAPPDATA" | "XDG_DATA_HOME" | "home-fallback";
 export interface RemovalResult {
   removed: number;
@@ -1024,7 +1032,7 @@ export class IndexStore {
         }
         this.db.exec("COMMIT");
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-      purgeWorkStateRoots(this.databasePath, result.map(item => item.path));
+      bestEffortPurgeWorkStateRoots(this.databasePath, result.map(item => item.path));
       return result;
     } finally { release(); }
   }
@@ -1041,7 +1049,7 @@ export class IndexStore {
         for (const root of unique) removed += Number(statement.run(root).changes);
       } finally { release(); }
     }
-    purgeWorkStateRoots(this.databasePath, unique);
+    bestEffortPurgeWorkStateRoots(this.databasePath, unique);
     return removed;
   }
 
@@ -1142,7 +1150,7 @@ export class IndexStore {
       options.beforeCommit?.();
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    purgeWorkStateRoots(this.databasePath, children);
+    bestEffortPurgeWorkStateRoots(this.databasePath, children);
     return { transferred };
   }
 
@@ -1154,7 +1162,7 @@ export class IndexStore {
     const release = acquireWriteLock(this.databasePath);
     try {
       const removed = this.removeRootLocked(root);
-      purgeWorkStateRoots(this.databasePath, [root]);
+      bestEffortPurgeWorkStateRoots(this.databasePath, [root]);
       return removed;
     } finally { release(); }
   }

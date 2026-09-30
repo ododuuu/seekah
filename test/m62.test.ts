@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { LiveWorkQueue } from "../src/live-queue.js";
+import { LiveWorkQueue, workStatePath } from "../src/live-queue.js";
 import { LiveUpdateEngine } from "../src/live-update.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
@@ -31,7 +32,7 @@ async function setup(files: Record<string, string>): Promise<{
   database: string;
   store: IndexStore;
 }> {
-  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m61-orphan-"));
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m62-orphan-"));
   const root = path.join(temp, "root");
   const database = path.join(temp, "index.db");
   await mkdir(root, { recursive: true });
@@ -56,6 +57,21 @@ function assertRootStateCleared(queue: LiveWorkQueue, root: string): void {
   assert.deepEqual(queue.list(root), []);
   assert.equal(queue.reconcileStatus(root), undefined);
   assert.deepEqual(queue.reconcileSeenPaths(root, 1), []);
+}
+
+function holdWorkStateWriteLock(database: string): DatabaseSync {
+  const blocker = new DatabaseSync(workStatePath(database));
+  blocker.exec("BEGIN IMMEDIATE");
+  return blocker;
+}
+
+function runStartupCleanup(store: IndexStore, queue: LiveWorkQueue): string[] {
+  const logs: string[] = [];
+  new LiveUpdateEngine(store, store.roots(), { mode: "foreground", workQueue: queue }, {
+    write: line => { logs.push(line); },
+    waitForStop: () => Promise.resolve(),
+  });
+  return logs;
 }
 
 test("0.43.0 engine startup removes orphan work and reconcile state only", async () => {
@@ -137,6 +153,83 @@ test("0.43.0 removing a root clears every live state table", async () => {
     queue.close();
     fixture.store.close();
     await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("0.43.0 root lifecycle succeeds when work-state cleanup is busy", async () => {
+  const trashFixture = await setup({ "seed.txt": "seed" });
+  const trashQueue = new LiveWorkQueue(trashFixture.database);
+  let trashBlocker: DatabaseSync | undefined;
+  try {
+    seedState(trashQueue, trashFixture.root);
+    trashBlocker = holdWorkStateWriteLock(trashFixture.database);
+    assert.equal(trashFixture.store.moveRootsToTrash([trashFixture.root]).length, 1);
+    assert.deepEqual(trashFixture.store.roots(), []);
+  } finally {
+    trashBlocker?.exec("ROLLBACK");
+    trashBlocker?.close();
+    const logs = runStartupCleanup(trashFixture.store, trashQueue);
+    assertRootStateCleared(trashQueue, trashFixture.root);
+    assert.equal(logs.some(line => line.includes("根 1；work_items 2；reconcile_state 1；reconcile_seen 1")), true);
+    trashQueue.close();
+    trashFixture.store.close();
+    await rm(trashFixture.temp, { recursive: true, force: true });
+  }
+
+  const removeFixture = await setup({ "seed.txt": "seed" });
+  const removeQueue = new LiveWorkQueue(removeFixture.database);
+  let removeBlocker: DatabaseSync | undefined;
+  try {
+    seedState(removeQueue, removeFixture.root);
+    removeBlocker = holdWorkStateWriteLock(removeFixture.database);
+    assert.equal(removeFixture.store.removeRoot(removeFixture.root), 1);
+    assert.deepEqual(removeFixture.store.roots(), []);
+  } finally {
+    removeBlocker?.exec("ROLLBACK");
+    removeBlocker?.close();
+    runStartupCleanup(removeFixture.store, removeQueue);
+    assertRootStateCleared(removeQueue, removeFixture.root);
+    removeQueue.close();
+    removeFixture.store.close();
+    await rm(removeFixture.temp, { recursive: true, force: true });
+  }
+
+  const mergeFixture = await setup({ "seed.txt": "seed" });
+  const mergeQueue = new LiveWorkQueue(mergeFixture.database);
+  const parent = path.join(mergeFixture.temp, "parent");
+  let mergeBlocker: DatabaseSync | undefined;
+  try {
+    seedState(mergeQueue, mergeFixture.root);
+    mergeBlocker = holdWorkStateWriteLock(mergeFixture.database);
+    assert.deepEqual(mergeFixture.store.mergeChildRoots(parent, [mergeFixture.root]), { transferred: 1 });
+    assert.deepEqual(mergeFixture.store.roots(), [parent]);
+  } finally {
+    mergeBlocker?.exec("ROLLBACK");
+    mergeBlocker?.close();
+    runStartupCleanup(mergeFixture.store, mergeQueue);
+    assertRootStateCleared(mergeQueue, mergeFixture.root);
+    mergeQueue.close();
+    mergeFixture.store.close();
+    await rm(mergeFixture.temp, { recursive: true, force: true });
+  }
+
+  const purgeFixture = await setup({ "seed.txt": "seed" });
+  const purgeQueue = new LiveWorkQueue(purgeFixture.database);
+  let purgeBlocker: DatabaseSync | undefined;
+  try {
+    purgeFixture.store.moveRootsToTrash([purgeFixture.root]);
+    seedState(purgeQueue, purgeFixture.root);
+    purgeBlocker = holdWorkStateWriteLock(purgeFixture.database);
+    assert.equal(purgeFixture.store.purgeTrashRoots([purgeFixture.root]), 1);
+    assert.deepEqual(purgeFixture.store.roots(), []);
+  } finally {
+    purgeBlocker?.exec("ROLLBACK");
+    purgeBlocker?.close();
+    runStartupCleanup(purgeFixture.store, purgeQueue);
+    assertRootStateCleared(purgeQueue, purgeFixture.root);
+    purgeQueue.close();
+    purgeFixture.store.close();
+    await rm(purgeFixture.temp, { recursive: true, force: true });
   }
 });
 

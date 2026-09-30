@@ -960,6 +960,7 @@
   - `IndexStore.moveRootsToTrash`、`removeRoot`、`mergeChildRoots` 成功移除／合併 root 後清理舊 root 工作狀態；`purgeTrashRoots` 也清理指定已移除 root 的殘留列。parent root 的工作狀態保留。
   - 清理後沿用既有全域 queue count；因孤兒列已被實際刪除，status／oldest／overflow 不另造第二套 root 篩選查詢。
   - 垃圾桶還原不搬回舊工作狀態；重新 index 產生新的現有 root 工作狀態，維持 generation 與 at-least-once 語意。
+  - lifecycle 清理在主索引交易 COMMIT 後執行但不是主操作成功條件；`.work.sqlite` 的 busy／清理錯誤由 store 入口吞掉，沒有 logger 時靜默，下一次 engine 的 `cleanupOrphanRoots` 補清。
 - 理由：
   - 舊 root 沒有合法 consumer，實際刪除比只在 status 隱藏更能消除 overflow 與最舊時間的錯誤來源。
   - 三表同時清理避免只刪 path row 後留下 active／failed reconcile cursor 或 seen scope；清理 root state 不涉及來源檔案與索引文件。
@@ -970,6 +971,6 @@
   - 否決在 restore 時復原舊列；還原後應以新 generation 重新發現目前檔案。
   - 否決修改 §68／D100 的 `runRoot` 公平排程；本決策只修 root lifecycle 的 persistence 邊界。
 - 驗證：
-  - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新與反向驗證測試。
+  - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新、busy-lock 主操作成功與釋放鎖後 startup 補清測試，並對 best-effort 前版本反向驗證。
   - `npm run build`、聚焦測試與完整 `npm test`；如 M26 path coverage、M36 profile chmod 仍為 win32 環境失敗，單獨記錄。
 - 相容：不改 work state schema、索引 schema、文件內容、搜尋結果、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 `docsearch` 相容入口。
