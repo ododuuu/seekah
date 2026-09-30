@@ -10,9 +10,11 @@ export interface PersistedIndexingReport {
   root: string;
   complete: boolean;
   found: number;
+  added: number;
   updated: number;
   unchanged: number;
   removed: number;
+  skipped: number;
 }
 
 export interface PersistedIndexingState {

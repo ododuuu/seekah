@@ -59,14 +59,16 @@ test("0.37.0 workbench exposes real root, trash and confirmation controls", () =
   const html = workbenchHtml("fixed-nonce");
   for (const page of ["roots", "trash"]) assert.match(html, new RegExp(`dataset\\.page = "${page}"`, "u"));
   for (const control of ["root-select-all", "root-delete-selected", "trash-select-all", "trash-restore-selected", "trash-purge-selected",
-    "roots-stop", "top-stop", "delete-dialog", "delete-dont-remind", "settings-delete-confirmation", "settings-autoupdate",
+    "roots-refresh-folder", "root-refresh-action", "roots-stop", "top-stop", "delete-dialog", "delete-dont-remind", "settings-delete-confirmation", "settings-autoupdate",
     "query-field", "scope-root", "scope-format", "scope-parse", "document-search-button"]) {
     assert.match(html, new RegExp(control, "u"));
   }
   for (const endpoint of ["/api/index", "/api/index/stop", "/api/index-roots/trash", "/api/trash", "/api/settings"]) {
     assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
   }
+  assert.match(html, /重新檢查資料夾/u);
   assert.match(html, /選擇資料夾/u);
+  assert.match(html, /重新檢查此根目錄/u);
   assert.match(html, /確認並建立索引/u);
   assert.match(html, /移至垃圾桶/u);
   assert.match(html, /永久刪除所選/u);

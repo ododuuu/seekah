@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +19,7 @@ import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, p
 import { workbenchHtml } from "./workbench-app.js";
 import { traceHtml } from "./trace-app.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
+import { coversPath } from "./root-plan.js";
 import { sync } from "./sync.js";
 import { selectFolder } from "./folder-picker.js";
 import { productVersion } from "./version.js";
@@ -307,6 +308,8 @@ interface WorkbenchIndexingState {
 
 interface IndexWorkerReport extends PersistedIndexingReport {}
 
+type IndexScope = "all" | "subtree";
+
 type IndexWorkerMessage =
   | { type: "progress"; progress: ProgressUpdate }
   | { type: "complete"; reports: IndexWorkerReport[] }
@@ -327,6 +330,20 @@ function indexingMessage(progress: ProgressUpdate): string {
   if (progress.total === 0) return `${progress.message}；沒有找到文件${pathLabel}`;
   const percent = progress.stage === "complete" ? 100 : Math.min((progress.current / progress.total) * 100, 99.99);
   return `${progress.message}：${progress.current}／${progress.total}（${percent.toFixed(2)}%）${pathLabel}`;
+}
+
+function indexingCompletionMessage(reports: readonly PersistedIndexingReport[]): string {
+  let added = 0;
+  let updated = 0;
+  let removed = 0;
+  let skipped = 0;
+  for (const report of reports) {
+    added += report.added ?? 0;
+    updated += report.updated ?? 0;
+    removed += report.removed ?? 0;
+    skipped += report.skipped ?? 0;
+  }
+  return `索引已更新；新增 ${added}、更新 ${updated}、移除 ${removed}、略過 ${skipped}。`;
 }
 
 function initialIndexingState(databasePath: string, instanceId: string): WorkbenchIndexingState {
@@ -406,6 +423,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     roots: string[];
     root?: string;
     upgradeOnly: boolean;
+    subtreeOnly: boolean;
   }): Promise<{ reports: IndexWorkerReport[] }> {
     return new Promise((resolve, reject) => {
       const execArgv = process.execArgv.filter((argument, index) =>
@@ -451,9 +469,36 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     timer.unref();
   }
 
-  function startIndex(root: string | undefined, upgradeOnly = false): WorkbenchIndexingState {
+  async function validateSubtreeRoot(requested: string): Promise<string> {
+    let selected: string;
+    try {
+      const info = await stat(requested);
+      if (!info.isDirectory()) throw Object.assign(new Error("重新檢查資料夾必須是目錄。"), { statusCode: 400 });
+      selected = await realpath(requested);
+    } catch (error) {
+      if (error && typeof error === "object" && "statusCode" in error) throw error;
+      throw Object.assign(new Error("重新檢查資料夾不存在或無法讀取。"), { statusCode: 400 });
+    }
+    if (!existsSync(options.databasePath)) throw Object.assign(new Error("尚無已登錄根目錄；請先加入資料夾。"), { statusCode: 400 });
+    const covered = await withIndexStore(options.databasePath, {
+      readOnly: true,
+      ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}),
+    }, async store => {
+      const roots = await Promise.all(store.roots().map(async root => {
+        try { return await realpath(root); } catch { return path.resolve(root); }
+      }));
+      return roots.some(root => coversPath(root, selected));
+    });
+    if (!covered) throw Object.assign(new Error("重新檢查資料夾必須位於已登錄根目錄內。"), { statusCode: 400 });
+    return selected;
+  }
+
+  function startIndex(root: string | undefined, upgradeOnly = false, scope: IndexScope = "all"): WorkbenchIndexingState {
     if (indexingBusy) {
-      if (root) throw Object.assign(new Error("索引進行中，請完成後再加入。"), { statusCode: 409 });
+      if (root) {
+        const message = scope === "subtree" ? "索引進行中，請完成後再重新檢查。" : "索引進行中，請完成後再加入。";
+        throw Object.assign(new Error(message), { statusCode: 409 });
+      }
       return indexing;
     }
     if ((indexing.state === "running" || indexing.state === "stopping")
@@ -480,7 +525,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     const now = new Date().toISOString();
     indexing = {
       state: "running",
-      message: upgradeOnly ? "正在建立 unigram／trigram 搜尋 postings…" : "正在初始化索引…",
+      message: upgradeOnly ? "正在建立 unigram／trigram 搜尋 postings…"
+        : scope === "subtree" ? "正在重新檢查資料夾…" : "正在初始化索引…",
       roots,
       reports: [],
       progress: null,
@@ -513,6 +559,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
             for (const target of roots) {
               const report = await sync(target, store!, {
                 requireRegistered: !root,
+                requireCoveredByRegistered: scope === "subtree",
                 signal: abort.signal,
                 onProgress: updateProgress,
               });
@@ -520,12 +567,14 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
                 root: report.root,
                 complete: report.complete,
                 found: report.found,
+                added: report.added,
                 updated: report.updated,
                 unchanged: report.unchanged,
                 removed: report.removed,
+                skipped: report.skipped.builtin + report.skipped.user + report.skipped.link + report.skipped.unsupported,
               });
             }
-            if (indexing.reports.every(report => report.complete)) store!.purgeTrashRoots(roots);
+            if (scope !== "subtree" && indexing.reports.every(report => report.complete)) store!.purgeTrashRoots(roots);
           }
         } else {
           const result = await runIndexWorker({
@@ -533,14 +582,16 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
             roots,
             ...(root === undefined ? {} : { root }),
             upgradeOnly,
+            subtreeOnly: scope === "subtree",
           });
           indexing = { ...indexing, reports: result.reports, updatedAt: new Date().toISOString() };
         }
+        const completeMessage = indexingCompletionMessage(indexing.reports);
         indexing = {
           ...indexing,
           state: "complete",
           message: upgradeOnly ? "unigram／trigram 搜尋 postings 已建立。"
-            : indexing.reports.every(report => report.complete) ? "索引已更新。" : "索引完成，但部分根目錄未完整同步。",
+            : indexing.reports.every(report => report.complete) ? completeMessage : `${completeMessage}但部分根目錄未完整同步。`,
           updatedAt: new Date().toISOString(),
         };
       } catch (error) {
@@ -662,6 +713,13 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       if (request.method === "POST" && url.pathname === "/api/index") {
         const body = await readJson(request);
         const root = body.root;
+        const scope = body.scope;
+        if (scope !== undefined && scope !== "subtree") throw new Error("索引範圍無效。");
+        if (scope === "subtree") {
+          if (typeof root !== "string" || !root.trim() || root.length > 16_384) throw new Error("重新檢查資料夾無效。");
+          const selected = await validateSubtreeRoot(root.trim());
+          json(response, 202, { indexing: startIndex(selected, false, "subtree") }); return;
+        }
         if (root !== undefined && (typeof root !== "string" || !root.trim() || root.length > 16_384)) {
           throw new Error("索引根目錄無效。");
         }
