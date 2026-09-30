@@ -950,3 +950,26 @@
 - 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
+
+## D101：清理已不在 roots 的孤兒工作狀態
+
+- 日期：2026-09-30。依 SPEC §69；問題由背景更新調查確認：重啟後 engine 只為目前 `store.roots()` 建立 state，舊 root 的 `work_items`／`reconcile_state` 沒有 consumer，卻污染全域 queue status、最舊時間與 overflow 計數。
+- 決定：
+  - `LiveWorkQueue` 在 engine 啟動前以目前 roots 清理 `work_items`、`reconcile_state`、`reconcile_seen` 中不屬於現有 root 的資料，並由 engine 記錄 root 數與各表筆數至 autoupdate log。
+  - `isolateRoot` 擴大為清理同一 root 的三類工作狀態；`dropRoot` 沿用這個入口。
+  - `IndexStore.moveRootsToTrash`、`removeRoot`、`mergeChildRoots` 成功移除／合併 root 後清理舊 root 工作狀態；`purgeTrashRoots` 也清理指定已移除 root 的殘留列。parent root 的工作狀態保留。
+  - 清理後沿用既有全域 queue count；因孤兒列已被實際刪除，status／oldest／overflow 不另造第二套 root 篩選查詢。
+  - 垃圾桶還原不搬回舊工作狀態；重新 index 產生新的現有 root 工作狀態，維持 generation 與 at-least-once 語意。
+- 理由：
+  - 舊 root 沒有合法 consumer，實際刪除比只在 status 隱藏更能消除 overflow 與最舊時間的錯誤來源。
+  - 三表同時清理避免只刪 path row 後留下 active／failed reconcile cursor 或 seen scope；清理 root state 不涉及來源檔案與索引文件。
+  - 沿用 `isolateRoot` 與根目錄生命週期入口，避免在 `runRoot` 分支選擇之外建立另一套 ack／清理語意。
+- 否決：
+  - 否決只修改 `pendingCount()`／`oldestCreatedAtMs()` 的 SQL 篩選；這會保留 stale path row，仍可能觸發 overflow。
+  - 否決重啟時清空整個 work state 或將 orphan row 改掛到 parent；會破壞現有 root 的 at-least-once 與 root 邊界。
+  - 否決在 restore 時復原舊列；還原後應以新 generation 重新發現目前檔案。
+  - 否決修改 §68／D100 的 `runRoot` 公平排程；本決策只修 root lifecycle 的 persistence 邊界。
+- 驗證：
+  - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新與反向驗證測試。
+  - `npm run build`、聚焦測試與完整 `npm test`；如 M26 path coverage、M36 profile chmod 仍為 win32 環境失敗，單獨記錄。
+- 相容：不改 work state schema、索引 schema、文件內容、搜尋結果、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 `docsearch` 相容入口。

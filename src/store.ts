@@ -14,6 +14,7 @@ import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
 import type { SearchTrace, SearchTraceRecorder } from "./search-trace.js";
 import { RootError } from "./scanner.js";
+import { purgeWorkStateRoots } from "./live-queue.js";
 
 export type DataDirSource = "LOCALDOCSEARCH_DATA_DIR" | "LOCALAPPDATA" | "XDG_DATA_HOME" | "home-fallback";
 export interface RemovalResult {
@@ -998,11 +999,11 @@ export class IndexStore {
   moveRootsToTrash(roots: readonly string[]): TrashedRoot[] {
     const release = acquireWriteLock(this.databasePath);
     try {
+      const unique = [...new Set(roots)];
+      const now = new Date().toISOString();
+      const result: TrashedRoot[] = [];
       this.db.exec("BEGIN IMMEDIATE");
       try {
-        const unique = [...new Set(roots)];
-        const now = new Date().toISOString();
-        const result: TrashedRoot[] = [];
         const writes = this.writes();
         for (const root of unique) {
           if (!this.roots().includes(root)) throw new RootError("只能刪除目前已登錄的根目錄。");
@@ -1022,23 +1023,28 @@ export class IndexStore {
           if (next) this.setRoot(next);
         }
         this.db.exec("COMMIT");
-        return result;
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+      purgeWorkStateRoots(this.databasePath, result.map(item => item.path));
+      return result;
     } finally { release(); }
   }
 
   purgeTrashRoots(roots: readonly string[]): number {
     if (this.readOnly) throw new Error("唯讀索引不能清空垃圾桶。");
     const unique = [...new Set(roots)];
-    if (!unique.length || !this.hasTable("root_trash")) return 0;
-    const release = acquireWriteLock(this.databasePath);
-    try {
-      const statement = this.db.prepare("DELETE FROM root_trash WHERE path = ?");
-      let removed = 0;
-      for (const root of unique) removed += Number(statement.run(root).changes);
-      return removed;
-    } finally { release(); }
+    if (!unique.length) return 0;
+    let removed = 0;
+    if (this.hasTable("root_trash")) {
+      const release = acquireWriteLock(this.databasePath);
+      try {
+        const statement = this.db.prepare("DELETE FROM root_trash WHERE path = ?");
+        for (const root of unique) removed += Number(statement.run(root).changes);
+      } finally { release(); }
+    }
+    purgeWorkStateRoots(this.databasePath, unique);
+    return removed;
   }
+
 
   registerRoot(root: string): void { this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(root); }
 
@@ -1110,10 +1116,10 @@ export class IndexStore {
   }
 
   mergeChildRoots(parent: string, children: readonly string[], options: MergeChildRootsOptions = {}): { transferred: number } {
+    let transferred = 0;
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(parent);
-      let transferred = 0;
       const mergedAt = new Date().toISOString();
       for (const child of children) {
         const count = this.documentCountForRoot(child);
@@ -1135,8 +1141,9 @@ export class IndexStore {
       } satisfies LastSyncReport), parent);
       options.beforeCommit?.();
       this.db.exec("COMMIT");
-      return { transferred };
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    purgeWorkStateRoots(this.databasePath, children);
+    return { transferred };
   }
 
   documentRoot(id: number): string | null {
@@ -1145,7 +1152,11 @@ export class IndexStore {
 
   removeRoot(root: string): number {
     const release = acquireWriteLock(this.databasePath);
-    try { return this.removeRootLocked(root); } finally { release(); }
+    try {
+      const removed = this.removeRootLocked(root);
+      purgeWorkStateRoots(this.databasePath, [root]);
+      return removed;
+    } finally { release(); }
   }
 
   private removeRootLocked(root: string): number {

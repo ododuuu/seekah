@@ -249,6 +249,10 @@ export class LiveUpdateEngine {
       ...(options.queueLimit !== undefined ? { limit: options.queueLimit } : {}),
       ...(options.queuePersistHook ? { persistHook: options.queuePersistHook } : {}),
     });
+    const cleanup = this.queue.cleanupOrphanRoots(store.roots());
+    if (cleanup.roots > 0) {
+      this.log(`工作佇列清理孤兒根目錄：根 ${cleanup.roots}；work_items ${cleanup.workItems}；reconcile_state ${cleanup.reconcileStates}；reconcile_seen ${cleanup.reconcileSeen}`);
+    }
     for (const root of roots) this.states.set(root, this.newState(root));
     options.signal?.addEventListener("abort", () => this.requestStop(), { once: true });
   }
