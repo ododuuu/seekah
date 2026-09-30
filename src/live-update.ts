@@ -55,6 +55,8 @@ export interface LiveUpdateOptions {
   verbose?: boolean;
   syncNow?: boolean;
   watch?: typeof fs.watch;
+  /** watcher callback 的同步 lstat 注入點；正式路徑使用 fs.lstatSync，測試可計數。 */
+  lstatSync?: typeof fs.lstatSync;
   sync?: typeof sync;
   applyFileUpdate?: typeof applyFileUpdate;
   /** 解析函式注入僅供測試準確控制準備階段；正式路徑仍在 writer lock 外執行。 */
@@ -1266,16 +1268,17 @@ export class LiveUpdateEngine {
   ): void {
     const label = filename ? String(filename) : "";
     const abs = label ? path.resolve(watchDir, label) : undefined;
-    let info: fs.Stats | undefined;
-    let missing = false;
-    if (abs) {
-      try { info = fs.lstatSync(abs); } catch { missing = true; }
-    }
+    // coarse／split callback 先以字串和已載入規則做保守檔案判定；命中時不得觸發 IO。
     if (label && shouldIgnoreWatchPath(
-      label, watchDir, runtimePathPlatform(), state.exclusion, info?.isDirectory(), info?.isSymbolicLink() ?? false,
+      label, watchDir, runtimePathPlatform(), state.exclusion, false, false,
     )) {
       this.excludedEventCount++;
       return;
+    }
+    let info: fs.Stats | undefined;
+    let missing = false;
+    if (abs) {
+      try { info = (this.options.lstatSync ?? fs.lstatSync)(abs); } catch { missing = true; }
     }
     if (abs) {
       if (info?.isSymbolicLink() && this.isExcluded(state, abs, false, true)) {

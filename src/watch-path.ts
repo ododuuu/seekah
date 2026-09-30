@@ -15,7 +15,7 @@ export function shouldIgnoreWatchPath(
   const flavor = platform === "win32" ? path.win32 : path.posix;
   if (exclusion) {
     const candidate = root ? flavor.resolve(root, relativeOrAbsolute) : relativeOrAbsolute;
-    if (exclusion.excludes(candidate, isDirectory, isLink)) return true;
+    return exclusion.excludes(candidate, isDirectory, isLink);
   }
   const normalized = relativeOrAbsolute.replace(/\\/g, "/");
   if (IGNORED_SEGMENT.test(normalized)) return true;

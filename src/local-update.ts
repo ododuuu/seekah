@@ -217,7 +217,7 @@ export async function prepareFileUpdate(
   if (!info.isFile()) return { kind: "result", result: skippedResult(filePath, root) };
 
   const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
-  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, false)) {
+  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform(), exclusion, false)) {
     return { kind: "result", result: skippedResult(filePath, root) };
   }
 
@@ -304,7 +304,7 @@ export async function commitPreparedFileUpdateLocked(
     return deferredResult(prepared.filePath, prepared.root, "FILE_UNSTABLE");
   }
   const exclusion = options.exclusion ?? await RootExclusion.load(prepared.root, store);
-  if (shouldIgnoreWatchPath(prepared.filePath, prepared.root, runtimePathPlatform()) || exclusion.excludes(prepared.filePath, false)) {
+  if (shouldIgnoreWatchPath(prepared.filePath, prepared.root, runtimePathPlatform(), exclusion, false)) {
     result.kind = "skipped";
     return result;
   }
@@ -388,7 +388,7 @@ async function applyFileUpdateLocked(
   const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
   const ignore = {
     match(filePath: string, isDirectory: boolean) {
-      return shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, isDirectory);
+      return shouldIgnoreWatchPath(filePath, root, runtimePathPlatform(), exclusion, isDirectory);
     },
   };
   const lstatFn = options.lstat ?? lstat;
@@ -561,7 +561,7 @@ async function applyPathDeleteLocked(
     return result;
   }
   const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
-  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, undefined)) {
+  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform(), exclusion, undefined)) {
     result.kind = "skipped";
     return result;
   }

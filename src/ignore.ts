@@ -78,16 +78,27 @@ export class IgnoreRules {
   }
 
   matchingPattern(relativePath: string, isDirectory: boolean | undefined): string | undefined {
+    return this.matchingPath(relativePath, isDirectory)?.pattern;
+  }
+
+  matchingPath(
+    relativePath: string,
+    isDirectory: boolean | undefined,
+  ): { pattern: string; relativePath: string } | undefined {
     const normalized = relativePath.replaceAll(path.sep, "/").replaceAll("\\", "/");
-    for (let index = 0; index < this.rules.length; index++) {
-      const rule = this.rules[index]!;
-      if (!rule.regex.test(normalized)) continue;
-      if (rule.directoryOnly && isDirectory === false) {
-        const segments = normalized.split("/");
-        const descendant = segments.slice(0, -1).some((_, end) => rule.regex.test(segments.slice(0, end + 1).join("/")));
-        if (!descendant) continue;
+    const candidates: string[] = [];
+    const segments = normalized.split("/");
+    for (let end = 1; end <= segments.length; end++) {
+      candidates.push(segments.slice(0, end).join("/"));
+    }
+    for (const rule of this.rules) {
+      for (let index = 0; index < candidates.length; index++) {
+        const candidate = candidates[index]!;
+        if (!rule.regex.test(candidate)) continue;
+        const candidateIsDirectory = index < candidates.length - 1 ? true : isDirectory;
+        if (rule.directoryOnly && candidateIsDirectory === false) continue;
+        return { pattern: rule.pattern, relativePath: candidate };
       }
-      return rule.pattern;
     }
     return undefined;
   }

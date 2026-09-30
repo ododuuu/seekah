@@ -22,6 +22,8 @@ export interface ExclusionExplanation {
   source: ExclusionSource;
   ruleId: string | null;
   matchedRule: string | null;
+  /** 實際命中的檔案或祖先目錄；未命中時為 null。 */
+  matchedPath: string | null;
   base: string | null;
 }
 
@@ -184,19 +186,25 @@ function lower(value: string, platform: PathPlatform): string {
   return platform === "win32" ? value.toLowerCase() : value;
 }
 
-function matchRule(ruleId: string, base: string): ExclusionExplanation {
+function absoluteFromParts(root: string, parts: readonly string[], platform: PathPlatform): string {
+  const flavor = platform === "win32" ? path.win32 : path.posix;
+  return flavor.join(root, ...parts);
+}
+
+function matchRule(ruleId: string, base: string, matchedPath = base): ExclusionExplanation {
   const rule = RULES_BY_ID.get(ruleId);
   return {
     excluded: true,
     source: rule?.source ?? "builtin",
     ruleId,
     matchedRule: rule?.pattern ?? ruleId,
+    matchedPath,
     base,
   };
 }
 
 function notExcluded(): ExclusionExplanation {
-  return { excluded: false, source: "not-excluded", ruleId: null, matchedRule: null, base: null };
+  return { excluded: false, source: "not-excluded", ruleId: null, matchedRule: null, matchedPath: null, base: null };
 }
 
 export function listDefaultExclusions(root: string, platform: PathPlatform = runtimePathPlatform()): DefaultExclusionRule[] {
@@ -221,10 +229,16 @@ export function matchDefaultExclusion(
     const leaf = index === parts.length - 1;
     const segment = normalizedParts[index]!;
     const ruleId = GENERIC_BY_SEGMENT[segment];
-    if (ruleId && (!leaf || isDirectory !== false)) return matchRule(ruleId, root);
+    if (ruleId && (!leaf || isDirectory !== false)) {
+      return matchRule(ruleId, root, absoluteFromParts(root, parts.slice(0, index + 1), platform));
+    }
     if (volumeRoot && index === 0 && (segment === "$recycle.bin" || segment === "system volume information")
       && (!leaf || isDirectory !== false)) {
-      return matchRule(segment === "$recycle.bin" ? "builtin:$recycle-bin" : "builtin:system-volume-information", root);
+      return matchRule(
+        segment === "$recycle.bin" ? "builtin:$recycle-bin" : "builtin:system-volume-information",
+        root,
+        absoluteFromParts(root, parts.slice(0, index + 1), platform),
+      );
     }
     if (volume && index === 0) {
       const directRule = segment === "windows" ? "volume-default:windows"
@@ -232,13 +246,21 @@ export function matchDefaultExclusion(
           : segment === "program files (x86)" ? "volume-default:program-files-x86"
             : segment === "programdata" ? "volume-default:program-data"
               : segment === "perflogs" ? "volume-default:perflogs" : undefined;
-      if (directRule && (!leaf || isDirectory !== false)) return matchRule(directRule, root);
+      if (directRule && (!leaf || isDirectory !== false)) {
+        return matchRule(directRule, root, absoluteFromParts(root, parts.slice(0, index + 1), platform));
+      }
     }
     if (volume && index === 2 && normalizedParts[0] === "users" && normalizedParts[2] === "appdata"
       && (!leaf || isDirectory !== false)) {
-      return matchRule("volume-default:users-profile-appdata", root);
+      return matchRule(
+        "volume-default:users-profile-appdata",
+        root,
+        absoluteFromParts(root, parts.slice(0, index + 1), platform),
+      );
     }
-    if (leaf && isDirectory !== true && parts[index]!.startsWith("~$")) return matchRule("builtin:office-temp", root);
+    if (leaf && isDirectory !== true && parts[index]!.startsWith("~$")) {
+      return matchRule("builtin:office-temp", root, absoluteFromParts(root, parts, platform));
+    }
   }
   return notExcluded();
 }
@@ -260,13 +282,15 @@ export function matchUserExclusion(
   for (const scope of scopes) {
     const relative = relativeForRules(scope.base, absPath, platform);
     if (relative === undefined) continue;
-    const pattern = scope.rules.matchingPattern(relative, isDirectory);
-    if (pattern !== undefined) {
+    const match = scope.rules.matchingPath(relative, isDirectory);
+    if (match !== undefined) {
+      const flavor = platform === "win32" ? path.win32 : path.posix;
       return {
         excluded: true,
         source: "user-rule",
-        ruleId: `user-rule:${scope.base}:${pattern}`,
-        matchedRule: pattern,
+        ruleId: `user-rule:${scope.base}:${match.pattern}`,
+        matchedRule: match.pattern,
+        matchedPath: flavor.resolve(scope.base, match.relativePath),
         base: scope.base,
       };
     }
@@ -284,9 +308,18 @@ export function matchExclusion(
   platform: PathPlatform = runtimePathPlatform(),
 ): ExclusionExplanation {
   if (databasePath && isIndexArtifact(absPath, databasePath)) {
-    return { excluded: true, source: "index-artifact", ruleId: "index-artifact", matchedRule: null, base: null };
+    return {
+      excluded: true,
+      source: "index-artifact",
+      ruleId: "index-artifact",
+      matchedRule: null,
+      matchedPath: absPath,
+      base: null,
+    };
   }
-  if (isLink) return { excluded: true, source: "link", ruleId: "link", matchedRule: null, base: null };
+  if (isLink) {
+    return { excluded: true, source: "link", ruleId: "link", matchedRule: null, matchedPath: absPath, base: null };
+  }
   const builtIn = matchDefaultExclusion(root, absPath, isDirectory, platform);
   if (builtIn.excluded) return builtIn;
   return matchUserExclusion(root, absPath, isDirectory, scopes, platform);

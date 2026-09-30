@@ -75,6 +75,7 @@ test("M64 volume-root defaults are exact, non-UNC, and reversible by choosing a 
   for (const relative of [
     "Windows.old\\notes.txt",
     "Program Files2\\notes.txt",
+    "PROGRA~1\\Seekah\\README.txt",
     "ProgramData-old\\notes.txt",
     "Users\\Alice\\AppData-old\\notes.txt",
     "User\\Alice\\AppData\\notes.txt",
@@ -94,6 +95,69 @@ test("M64 volume-root defaults are exact, non-UNC, and reversible by choosing a 
   // 移除 C:\\ 後，直接把 C:\\Windows 作為窄根目錄，文件不再帶有 volume-default 規則。
   assert.equal(defaultSource("C:\\Windows", "notes.txt"), "not-excluded");
 });
+test("M64 coarse volume-default events are excluded before lstat", async () => {
+  const item = await fixture("seekah-m64-fast-path-");
+  const { root, store } = item;
+  let queue: LiveWorkQueue | undefined;
+  const originalLoadSync = RootExclusion.loadSync;
+  let lstatCalls = 0;
+  let callback: ((event: fs.WatchEventType, filename: string | Buffer | null) => void) | undefined;
+  const loadSyncHost = RootExclusion as unknown as {
+    loadSync: typeof RootExclusion.loadSync;
+  };
+  const fakeExclusion = {
+    excludes(absPath: string, isDirectory: boolean | undefined, isLink = false): boolean {
+      if (isLink) return true;
+      const relative = path.relative(root, absPath).replaceAll(path.sep, "\\");
+      const synthetic = path.win32.join(VOLUME, relative);
+      return matchDefaultExclusion(VOLUME, synthetic, isDirectory, WIN32).excluded;
+    },
+  } as unknown as RootExclusion;
+  try {
+    await mkdir(path.join(root, "ordinary"), { recursive: true });
+    await sync(root, store);
+    loadSyncHost.loadSync = () => fakeExclusion;
+    const watch = ((_: string, __: unknown, listener: (event: fs.WatchEventType, filename: string | Buffer | null) => void) => {
+      callback = listener;
+      const watcher = new EventEmitter() as fs.FSWatcher;
+      watcher.close = () => {};
+      return watcher;
+    }) as unknown as typeof fs.watch;
+    queue = new LiveWorkQueue(store.databasePath);
+    const engine = new LiveUpdateEngine(store, [root], {
+      mode: "foreground",
+      syncNow: false,
+      reconcileMs: 0,
+      watch,
+      watchHandleLimit: 1,
+      workQueue: queue,
+      lstatSync: ((target: fs.PathLike) => {
+        lstatCalls++;
+        return fs.lstatSync(target);
+      }) as typeof fs.lstatSync,
+    }, {
+      write: () => {},
+      waitForStop: async () => {
+        while (!callback) await new Promise<void>(resolve => setImmediate(resolve));
+        for (let index = 0; index < 50; index++) {
+          callback("change", `Windows\\event-${index}.log`);
+          callback("change", `Users\\Alice\\AppData\\event-${index}.log`);
+        }
+      },
+    });
+    await engine.run();
+    const snapshot = engine.snapshot();
+    assert.equal(snapshot.roots[0]?.scopeMode, "coarse");
+    assert.equal(lstatCalls, 0);
+    assert.equal(snapshot.excludedEventCount, 100);
+    assert.equal(snapshot.eventCount, 0);
+  } finally {
+    loadSyncHost.loadSync = originalLoadSync;
+    queue?.close();
+    await closeFixture(item);
+  }
+});
+
 
 test("M64 root-exclusion, scanner, watch-path, local-update and live-update share one decision", async () => {
   const item = await fixture("seekah-m64-parity-");
@@ -121,7 +185,7 @@ test("M64 root-exclusion, scanner, watch-path, local-update and live-update shar
     assert.equal(userExplanation.excluded, true);
     assert.equal(userExplanation.source, "user-rule");
     assert.equal(userExplanation.matchedRule, "skip/");
-    assert.equal(userExplanation.base, root);
+    assert.equal(userExplanation.matchedPath, path.join(root, "skip"));
     assert.deepEqual(await explainExclusion(root, skipped, store), userExplanation);
     if (linkPath) assert.equal((await explainExclusion(root, linkPath, store)).source, "link");
     assert.equal(exclusion.explain(builtIn, false).source, "builtin");
@@ -174,6 +238,47 @@ test("M64 root-exclusion, scanner, watch-path, local-update and live-update shar
     await closeFixture(item);
   }
 });
+test("M64 user ancestor rules keep scan, watch, local-update and explain in parity", async () => {
+  const item = await fixture("seekah-m64-user-ancestor-");
+  const { root, store } = item;
+  const cases = [
+    { rule: "cache", directory: "cache" },
+    { rule: "/AppData/", directory: "AppData" },
+    { rule: "skip/", directory: "skip" },
+  ] as const;
+  const files = cases.map(({ directory }) => path.join(root, directory, "inside.txt"));
+  const keep = path.join(root, "keep.txt");
+  try {
+    for (const file of files) {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "excluded");
+    }
+    await writeFile(keep, "keep");
+    await sync(root, store);
+    await writeFile(path.join(root, ".localdocsearchignore"), `${cases.map(item => item.rule).join("\n")}\n`);
+    const exclusion = await RootExclusion.load(root, store);
+    for (const [index, file] of files.entries()) {
+      const itemCase = cases[index]!;
+      const explanation = exclusion.explain(file, false);
+      assert.equal(explanation.excluded, true);
+      assert.equal(explanation.source, "user-rule");
+      assert.equal(explanation.matchedRule, itemCase.rule);
+      assert.equal(explanation.matchedPath, path.join(root, itemCase.directory));
+      assert.equal(shouldIgnoreWatchPath(file, root, runtimePathPlatform(), exclusion, false), true);
+      assert.deepEqual(await explainExclusion(root, file, store), explanation);
+      assert.equal((await applyFileUpdate(file, root, store, { exclusion })).kind, "skipped");
+    }
+    assert.equal(exclusion.explain(keep, false).excluded, false);
+    const result = await scan(root, { exclusion, databasePath: store.databasePath });
+    for (const file of files) assert.equal(result.paths.includes(file), false);
+    for (const itemCase of cases) {
+      assert.equal(result.skipped.byRule[`user-rule:${root}:${itemCase.rule}`], 1);
+    }
+  } finally {
+    await closeFixture(item);
+  }
+});
+
 
 test("M64 background reconcile removes indexed files under newly excluded scopes and persists visibility", async () => {
   const item = await fixture("seekah-m64-reconcile-");
