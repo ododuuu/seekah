@@ -13,7 +13,7 @@ export interface ExclusionPathResult {
   path: string;
   root: string | null;
   state: ExclusionPathState;
-  exists: boolean | null;
+  exists?: boolean;
   source: ExclusionSource | null;
   ruleId: string | null;
   matchedRule: string | null;

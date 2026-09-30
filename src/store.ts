@@ -503,6 +503,7 @@ export class IndexStore {
   readonly databasePath: string;
   private pathOrder: ChunkPathOrder = "native";
   private documentByPathSql: ReturnType<DatabaseSync["prepare"]> | null = null;
+  private documentByPathInsensitiveSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private documentByIdSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private parseVersionKnown: boolean | null = null;
   private shortTermsReady = false;
@@ -1187,9 +1188,18 @@ export class IndexStore {
     return this.documentByPathStmt().get(filePath) as StoredDocumentRow | undefined;
   }
 
+  getDocumentCaseInsensitive(filePath: string): StoredDocumentRow | undefined {
+    return this.documentByPathInsensitiveStmt().get(filePath) as StoredDocumentRow | undefined;
+  }
+
   getDocumentIssue(filePath: string): StoredIssue | undefined {
     return this.db.prepare(`SELECT path, status, error_code AS errorCode, error_message AS errorMessage
       FROM documents WHERE path = ?`).get(filePath) as StoredIssue | undefined;
+  }
+
+  getDocumentIssueCaseInsensitive(filePath: string): StoredIssue | undefined {
+    return this.db.prepare(`SELECT path, status, error_code AS errorCode, error_message AS errorMessage
+      FROM documents WHERE path = ? COLLATE NOCASE`).get(filePath) as StoredIssue | undefined;
   }
 
   private documentsHaveParseVersion(): boolean {
@@ -1210,6 +1220,15 @@ export class IndexStore {
       this.documentByIdSql = this.db.prepare(`SELECT id, path, filename, extension, size_bytes, modified_at_ms, status, ${parseVersion} FROM documents WHERE id = ?`);
     }
     return this.documentByPathSql;
+  }
+
+  private documentByPathInsensitiveStmt(): ReturnType<DatabaseSync["prepare"]> {
+    this.documentByPathStmt();
+    if (!this.documentByPathInsensitiveSql) {
+      const parseVersion = this.documentsHaveParseVersion() ? "parse_version" : "NULL AS parse_version";
+      this.documentByPathInsensitiveSql = this.db.prepare(`SELECT id, path, filename, extension, size_bytes, modified_at_ms, status, ${parseVersion} FROM documents WHERE path = ? COLLATE NOCASE`);
+    }
+    return this.documentByPathInsensitiveSql;
   }
 
   private documentByIdStmt(): ReturnType<DatabaseSync["prepare"]> {

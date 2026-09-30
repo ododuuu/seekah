@@ -52,7 +52,7 @@ export function previewExclusionPolicy(rootInput: string): ExclusionPolicy {
   return {
     root,
     rules,
-    ignoreFiles: [ignoreFilePolicy(root)],
+    ignoreFiles: [],
   };
 }
 
@@ -94,8 +94,9 @@ function fileFacts(absPath: string): { exists: boolean; isDirectory: boolean | u
 }
 
 function documentStatus(store: IndexStore, absPath: string): { status: DocumentStatus | null; errorCode: string | null } {
-  const row = store.getDocument(absPath);
-  const issue = store.getDocumentIssue(absPath);
+  const caseInsensitive = runtimePathPlatform() === "win32";
+  const row = caseInsensitive ? store.getDocumentCaseInsensitive(absPath) : store.getDocument(absPath);
+  const issue = caseInsensitive ? store.getDocumentIssueCaseInsensitive(absPath) : store.getDocumentIssue(absPath);
   const status = row?.status ?? issue?.status ?? null;
   return { status, errorCode: issue?.errorCode ?? null };
 }
@@ -108,7 +109,6 @@ export function explainPathSync(store: IndexStore, input: string): ExclusionPath
       path: absPath,
       root: null,
       state: "outside-root",
-      exists: existsSync(absPath),
       source: null,
       ruleId: null,
       matchedRule: null,
