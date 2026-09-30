@@ -2188,6 +2188,42 @@ docsearch doctor
 - `test/m60.test.ts` 以注入錯誤模擬 MCP 工具路徑、TUI 與 autoupdate 分類。
 - package 版本維持 0.42.0。
 
+## 69. 背景更新清理已失效根目錄的工作狀態
+
+依 D101。起因：工作狀態庫以 `root` 保存事件待辦與背景校正游標；根目錄移除、移至垃圾桶、被父根合併或舊版留下資料後，`work_items`、`reconcile_state` 與 `reconcile_seen` 可能屬於已不在目前 `store.roots()` 的根目錄。重啟後 engine 只建立目前根目錄的 state，這些列沒有 consumer 會確認完成，卻仍被全域 status COUNT、最舊待辦時間與 queue overflow 判斷計入。
+
+### 69.1 啟動清理
+
+- daemon／`LiveUpdateEngine` 建立工作狀態 consumer 時，必須以當下 `store.roots()` 為現有根目錄集合。
+- 啟動前清理 `work_items`、`reconcile_state`、`reconcile_seen` 三表中 `root` 不屬於現有根目錄的所有列；清理以 root 為單位，必須同時移除該 root 的 path、dirty-scope、downtime-gap、校正狀態與校正已見資料。
+- 清理必須可重複執行；沒有孤兒列時不得改動現有根目錄資料。清理後，status 的待辦數與最舊待辦時間自然只反映現有根目錄，queue overflow 不得再被孤兒 root 觸發。
+- 清理完成且至少移除一列時，autoupdate log 必須記錄孤兒 root 數與各資料表移除筆數；不得記錄文件正文或把工作狀態內容送出本機。
+
+### 69.2 根目錄生命週期
+
+- live engine 的 `dropRoot`／`isolateRoot` 必須同時清理該 root 的 `work_items`、`reconcile_state` 與 `reconcile_seen`；現有根目錄的其他列不得受影響。
+- `moveRootsToTrash`、`removeRoot` 與 `mergeChildRoots` 成功提交後，必須清理被移除或被合併的舊 root 工作狀態；合併保留的 parent root 工作狀態不得清理。垃圾桶永久清除入口也不得重新留下被清除 root 的工作狀態。
+- 垃圾桶只保存 root metadata；還原以同一路徑重新 index／register 後，該 root 視為新的現有 root，可重新建立新的 generation、reconcile scope 與局部更新待辦，不得因先前清理而拒絕更新。
+- 根目錄生命週期後的工作狀態清理是 best-effort 整理，不屬於主索引交易的成功條件；`.work.sqlite` 忙碌或清理失敗不得讓已成功的 trash／merge／remove 呼叫回傳錯誤。沒有可用 logger 的 store 入口靜默略過，下一次 engine 啟動的 `cleanupOrphanRoots` 必須補清。
+- 清理只依 root 歸屬判斷，不以「目前沒有文件」或來源資料夾是否存在判斷；來源檔案與索引文件內容不因工作狀態清理而刪除。
+
+### 69.3 明確不做
+
+- 不只在 status 顯示時過濾孤兒列而保留資料；持久化工作狀態必須實際清掉，避免日後 overflow 或最舊時間再次被污染。
+- 不只刪 `work_items` 而留下 `reconcile_state`／`reconcile_seen`；三表必須以同一 root 清理。
+- 不清空整個工作狀態庫、不重置現有 root generation、不改工作狀態 schema，也不把還原 root 的舊列搬回來。
+- 不改 §68／D100 的事件公平或 `runRoot` 分支選擇；本節只處理 root 生命周期與孤兒工作狀態。
+
+### 69.4 驗收
+
+- 預埋不在 `store.roots()` 的 `work_items`、`reconcile_state`、`reconcile_seen`，啟動 engine 後三表均清除；現有 root 的列保持不變；log 顯示各類清理筆數，status 的待辦數／最舊時間不再包含孤兒列。
+- 分別驗證移至垃圾桶、父根合併、直接移除後，舊 root 不留三表列，保留中的 root 列不變；垃圾桶還原並重新 index 後，新增／修改文件仍能由背景更新搜尋到。
+- 以另一個 `.work.sqlite` 連線持有 `BEGIN IMMEDIATE` 寫入鎖時，`moveRootsToTrash`、`purgeTrashRoots`、`mergeChildRoots`、`removeRoot` 的主操作仍成功且不拋錯；釋放鎖後 engine startup cleanup 補清殘留 orphan。
+- 反向驗證：暫時以未加入本節清理的版本執行同一組新測試，至少一項孤兒列／log／生命周期斷言失敗；還原本節實作後全部通過。
+- 執行 `npm run build` 與完整 `npm test`；如本機 win32 仍出現 M26 path coverage、M36 profile chmod，必須分別列為既有環境限制，不得誤報成 §69 失敗。
+
+- package 版本維持 0.43.0。
+
 ## 70. 背景校正 frontier 的 scope 收尾安全
 
 依 D102。背景校正以 stack 形式保存 `state.frontier`；目前 `directory` 只有在其所有子目錄都已完成時，才可作為刪除核對的 scope。這是資料完整性規則，不是效能最佳化。

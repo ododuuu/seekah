@@ -2,6 +2,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { samePath } from "./root-plan.js";
+
 export const WORK_STATE_SCHEMA_VERSION = 1;
 export const DEFAULT_QUEUE_LIMIT = 10_000;
 export const SCOPE_REL = ".";
@@ -25,6 +27,14 @@ export interface WorkItem {
   reason: string | null;
   createdAtMs: number;
 }
+
+export interface WorkStateCleanupReport {
+  roots: number;
+  workItems: number;
+  reconcileStates: number;
+  reconcileSeen: number;
+}
+
 export type ReconcilePhase = "active" | "complete" | "failed";
 
 export interface ReconcileScopeAck {
@@ -126,6 +136,54 @@ function databaseOptions(): ConstructorParameters<typeof DatabaseSync>[1] {
 
 export function workStatePath(indexDatabasePath: string): string {
   return `${path.resolve(indexDatabasePath)}.work.sqlite`;
+}
+
+type RootRow = { root: string };
+
+function stateRoots(db: DatabaseSync): string[] {
+  return (db.prepare(`
+    SELECT root FROM work_items
+    UNION
+    SELECT root FROM reconcile_state
+    UNION
+    SELECT root FROM reconcile_seen
+  `).all() as RootRow[]).map(row => row.root);
+}
+
+function deleteRootStateRows(db: DatabaseSync, roots: readonly string[]): WorkStateCleanupReport {
+  const report: WorkStateCleanupReport = { roots: 0, workItems: 0, reconcileStates: 0, reconcileSeen: 0 };
+  report.roots = roots.length;
+  const deleteWorkItems = db.prepare("DELETE FROM work_items WHERE root = ?");
+  const deleteReconcileStates = db.prepare("DELETE FROM reconcile_state WHERE root = ?");
+  const deleteReconcileSeen = db.prepare("DELETE FROM reconcile_seen WHERE root = ?");
+  for (const root of roots) {
+    report.workItems += Number(deleteWorkItems.run(root).changes);
+    report.reconcileStates += Number(deleteReconcileStates.run(root).changes);
+    report.reconcileSeen += Number(deleteReconcileSeen.run(root).changes);
+  }
+  return report;
+}
+
+export function purgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): WorkStateCleanupReport {
+  if (!roots.length || !existsSync(workStatePath(indexDatabasePath))) {
+    return { roots: 0, workItems: 0, reconcileStates: 0, reconcileSeen: 0 };
+  }
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(workStatePath(indexDatabasePath), databaseOptions());
+    db.exec("PRAGMA busy_timeout = 0");
+    db.exec("BEGIN IMMEDIATE");
+    const selected = stateRoots(db).filter(row => roots.some(root => samePath(root, row)));
+    const report = deleteRootStateRows(db, selected);
+    db.exec("COMMIT");
+    return report;
+  } catch (error) {
+    try { db?.exec("ROLLBACK"); } catch { /* 交易可能尚未開始 */ }
+    if (error instanceof QueuePersistError) throw error;
+    throw new QueuePersistError(error instanceof Error ? error.message : "工作狀態庫無法清理。");
+  } finally {
+    db?.close();
+  }
 }
 
 export class LiveWorkQueue {
@@ -248,8 +306,18 @@ export class LiveWorkQueue {
 
   isolateRoot(root: string): void {
     this.runWrite("ack", () => {
-      this.db.prepare("DELETE FROM work_items WHERE root = ?").run(root);
+      deleteRootStateRows(this.db, [root]);
     });
+  }
+
+  cleanupOrphanRoots(activeRoots: readonly string[]): WorkStateCleanupReport {
+    const orphanRoots = [...new Set(stateRoots(this.db).filter(root => !activeRoots.some(active => samePath(active, root))))];
+    if (!orphanRoots.length) return { roots: 0, workItems: 0, reconcileStates: 0, reconcileSeen: 0 };
+    let report: WorkStateCleanupReport | undefined;
+    this.runWrite("ack", () => {
+      report = deleteRootStateRows(this.db, orphanRoots);
+    });
+    return report!;
   }
 
   getReconcile(root: string): ReconcileState | undefined {
