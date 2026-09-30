@@ -75,7 +75,7 @@ function runStartupCleanup(store: IndexStore, queue: LiveWorkQueue): string[] {
   return logs;
 }
 
-test("0.43.0 engine startup removes orphan work and reconcile state only", async () => {
+test("0.44.0 engine startup removes orphan work and reconcile state only", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   let now = 1000;
   const queue = new LiveWorkQueue(fixture.database, { now: () => now });
@@ -108,7 +108,7 @@ test("0.43.0 engine startup removes orphan work and reconcile state only", async
   }
 });
 
-test("0.43.0 moving a root to trash clears every live state table", async () => {
+test("0.44.0 moving a root to trash clears every live state table", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   try {
@@ -123,7 +123,7 @@ test("0.43.0 moving a root to trash clears every live state table", async () => 
   }
 });
 
-test("0.43.0 merging a child root clears child state but keeps parent state", async () => {
+test("0.44.0 merging a child root clears child state but keeps parent state", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const child = fixture.root;
   const parent = path.join(fixture.temp, "parent");
@@ -142,7 +142,7 @@ test("0.43.0 merging a child root clears child state but keeps parent state", as
   }
 });
 
-test("0.43.0 removing a root clears every live state table", async () => {
+test("0.44.0 removing a root clears every live state table", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   try {
@@ -157,7 +157,7 @@ test("0.43.0 removing a root clears every live state table", async () => {
   }
 });
 
-test("0.43.0 purge of a current root leaves all live work state unchanged", async () => {
+test("0.44.0 purge of a current root leaves all live work state unchanged", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   try {
@@ -176,7 +176,7 @@ test("0.43.0 purge of a current root leaves all live work state unchanged", asyn
   }
 });
 
-test("0.43.0 purge of a trashed root removes its stale live work state", async () => {
+test("0.44.0 purge of a trashed root removes its stale live work state", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   try {
@@ -191,7 +191,7 @@ test("0.43.0 purge of a trashed root removes its stale live work state", async (
   }
 });
 
-test("0.43.0 workbench complete index preserves current root live work state", async () => {
+test("0.44.0 workbench complete index preserves current root live work state", async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   let handle: WorkbenchHandle | undefined;
@@ -229,7 +229,7 @@ test("0.43.0 workbench complete index preserves current root live work state", a
   }
 });
 
-test("0.43.0 root lifecycle succeeds when work-state cleanup is busy", async () => {
+test("0.44.0 root lifecycle succeeds when work-state cleanup is busy", async () => {
   const trashFixture = await setup({ "seed.txt": "seed" });
   const trashQueue = new LiveWorkQueue(trashFixture.database);
   let trashBlocker: DatabaseSync | undefined;
@@ -306,7 +306,7 @@ test("0.43.0 root lifecycle succeeds when work-state cleanup is busy", async () 
   }
 });
 
-test("0.43.0 restored root accepts and processes new live work", { timeout: 20000 }, async () => {
+test("0.44.0 restored root accepts and processes new live work", { timeout: 20000 }, async () => {
   const fixture = await setup({ "seed.txt": "seed" });
   const queue = new LiveWorkQueue(fixture.database);
   const watcher = new EventEmitter() as EventEmitter & { close(): void };

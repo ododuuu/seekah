@@ -4,7 +4,7 @@
 - [x] 核准 TUI 規格與互動稿存入 [design/](design/SEEKAH-TUI.md)，交接集中 [handoff/CURRENT.md](handoff/CURRENT.md)。
 - [x] 在 0.36.1 落地核准的整體排版與完整焦點／鍵盤操作，不只增加 /select 或 /next；已以 80×24、120×40 render fixture 與真實 PTY 終端轉錄驗收。
 
-更新：2026-09-29。程式基線為 0.43.0（主索引 WAL、有上限 busy 等待、BUSY／復原固定訊息）。公司 Windows 未驗項保留。
+更新：2026-09-30。程式基線為 0.44.0（背景更新可靠性修正、磁碟根預設排除與排除可見性、手動重新檢查資料夾）。公司 Windows 未驗項保留。
 
 ## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
 

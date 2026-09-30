@@ -44,7 +44,7 @@ async function search(origin: string, headers: Record<string, string>, query: st
   return result.data.results as Array<{ path: string; reference: string }>;
 }
 
-test("0.43.0 workbench subtree refresh isolates siblings and reports counts", async () => {
+test("0.44.0 workbench subtree refresh isolates siblings and reports counts", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m66-subtree-"));
   const databasePath = path.join(temp, "data", "index.db");
   const root = path.join(temp, "docs");
@@ -91,7 +91,7 @@ test("0.43.0 workbench subtree refresh isolates siblings and reports counts", as
   }
 });
 
-test("0.43.0 workbench subtree refresh rejects an unregistered path before indexing", async () => {
+test("0.44.0 workbench subtree refresh rejects an unregistered path before indexing", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m66-boundary-"));
   const databasePath = path.join(temp, "data", "index.db");
   const root = path.join(temp, "docs");
@@ -118,7 +118,7 @@ test("0.43.0 workbench subtree refresh rejects an unregistered path before index
   }
 });
 
-test("0.43.0 duplicate manual subtree refresh returns 409 while indexing", async () => {
+test("0.44.0 duplicate manual subtree refresh returns 409 while indexing", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m66-busy-"));
   const databasePath = path.join(temp, "data", "index.db");
   const root = path.join(temp, "docs");

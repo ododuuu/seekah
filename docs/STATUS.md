@@ -1,10 +1,10 @@
 # 專案狀態
 
-最後更新：2026-09-30（package 仍為 0.43.0；整合分支 integrate/queue-fixes 含 SPEC §68～§71、§73～§75／D100～D103、D105～D107，尚未升版）
+最後更新：2026-09-30（package 0.44.0：背景更新可靠性修正、磁碟根預設排除與排除可見性、手動重新檢查資料夾；SPEC §68～§71、§73～§75／D100～D103、D105～D107）
 
 ## 目前狀態
 
-- **2026-09-30 第二階段（integrate/queue-fixes，未升版）**：使用者核准「整顆磁碟根目錄預設排除」，並要求「被略過的位置必須讓使用者知道、找不到檔案時要有地方查」；並要求繼續修「新檔案搜不到」。依 D093 三條分支各自實作、交叉審查後合併。
+- **2026-09-30 0.44.0 第二階段（integrate/queue-fixes）**：使用者核准「整顆磁碟根目錄預設排除」，並要求「被略過的位置必須讓使用者知道、找不到檔案時要有地方查」；並要求繼續修「新檔案搜不到」。依 D093 三條分支各自實作、交叉審查後合併。
   - §71／D103（`feat/default-exclusion`）：只對 Windows 本機磁碟根（如 `C:\`）預設排除 `Windows`、`Program Files`、`Program Files (x86)`、`ProgramData`、`Users\<profile>\AppData`、`PerfLogs`（另有既有 `$Recycle.Bin`、`System Volume Information`）；UNC 與非磁碟根不套用；built-in 不可由 `.localdocsearchignore` 重新納入。所有入口共用同一判定（`src/default-exclusions.ts`、`RootExclusion`）；既有索引在下次完整校正分批移除（§51），來源不動。審查修正兩點：監看事件先以字串判斷、不 `lstat`（恢復 §53.3，`lstat` 次數為 0 有測試）；使用者規則恢復祖先語意（`cache`、`/AppData/`、`skip/` 三種寫法一致）。已知限制：8.3 短檔名（`PROGRA~1`）不會被排除；`subst` 的磁碟會被當成磁碟根。
   - §74／D106（`feat/exclusion-visibility`）：「不可沉默」。CLI 新增 `exclusions`、`explain <路徑>`，`status` 顯示各根預設排除摘要與逐規則略過數；工作台根目錄頁顯示各根預設排除、設定頁政策說明、搜尋零結果提示與「檢查為何搜不到」輸入欄、加入整顆磁碟前先預覽會略過的位置；TUI `/explain`；MCP 新增唯讀 `explain_path`（工具數四個變五個）。審查修正：根外路徑不回報是否存在（避免探測整顆磁碟）、未登錄路徑預覽不讀 ignore 檔內容、Windows 大小寫不同的路徑仍判為已索引、各入口文案正確（CLI 提示 `explain`、TUI 提示 `/explain`）。
   - §75／D107（`feat/refresh-folder`）：工作台「重新檢查資料夾」與每根「重新檢查此根目錄」，`POST /api/index` 新增 `{ root, scope: "subtree" }`，伺服器端以 `realpath` 加涵蓋檢查驗證，只同步該子樹；這是監看漏事件時確定有效的手動補救。
@@ -14,7 +14,7 @@
   - 手動驗證：用 `subst` 建立假磁碟根（隔離資料目錄），`index`、`status`、`exclusions`、`explain`、`search` 輸出均符合預期：五個檔案只有 `Documents` 內的一個被索引，四個系統位置被略過並逐規則計數。**工作台前端只有靜態元素與 API 測試，沒有做過瀏覽器實際畫面檢視。**
   - **仍未解決**：`fs.watch` 在約 300 events/s 下有時不交付目標檔名（實測約 1/3），此時只能靠背景校正補，雜訊下校正很慢。預設排除移除了最大的雜訊來源（系統資料夾），手動重新檢查提供確定的補救，但這個底層問題沒有被解決。本機 win32 證據，不是公司 Windows 驗收。
 
-- **2026-09-30 未升版（integrate/queue-fixes）**：依 SPEC §68～§70／D100～D102，三條分支各自實作、審查後合併（D093）。起因：使用者在 `C:\Users\mains\Desktop\123.txt` 新增內容，開啟背景更新約 1 分鐘仍搜不到；登錄根目錄為整顆 `C:\`，coarse 單 watcher，3 分鐘約 59,000 個事件，局部更新 0。
+- **2026-09-30 0.44.0 第一階段（integrate/queue-fixes）**：依 SPEC §68～§70／D100～D102，三條分支各自實作、審查後合併（D093）。起因：使用者在 `C:\Users\mains\Desktop\123.txt` 新增內容，開啟背景更新約 1 分鐘仍搜不到；登錄根目錄為整顆 `C:\`，coarse 單 watcher，3 分鐘約 59,000 個事件，局部更新 0。
   - §68／D100（`fix/fix-fairness`）：背景模式下事件持續湧入時，防抖上限使每輪間隔約 15 秒，遠大於 5 秒的 `reconcileDue`，每輪都選校正、局部更新永遠輪不到（插樁實測 4 輪全走 batchReconcile）。改為校正批之後下一輪先走局部分支、局部批後清除；校正未完成時 `schedule()` 也受 5 秒約束。反向驗證：關掉 `forceLocal` 後 m61 第一項失敗。
   - §69／D101（`fix/fix-orphan-queue`）：`.work.sqlite` 中屬於已不在 roots 的根目錄的 work_items、reconcile_state、reconcile_seen 重啟後永遠殘留；engine 建構時清理，並在 trash／purge／merge／remove 入口清理，一律 best-effort（失敗不影響主操作，下次啟動補清）。審查修正兩點：`purgeTrashRoots` 不得清仍登錄的現根（`index-worker.ts:80`、`workbench.ts:528`／`694` 會傳入現根）、清理失敗不得讓已成功的主操作回報錯誤。
   - §70／D102（`fix/fix-reconcile-frontier`）：**資料完整性缺陷**。`runBackgroundReconcileBatch` 父目錄列舉後 frontier 頂端是剛 push 的子目錄，卻無條件 `pop()` 並以父目錄為範圍 `removeMissing`，尚未列舉的子樹索引被誤刪（24 檔情境 `removed=25`，來源檔不動）。修正為只有目錄仍在 frontier 頂端才收尾。使用者那台因佇列有待辦而被 `pendingBelow` 擋住（日誌移除 0），佇列安靜時第一批校正就可能清掉整個根目錄的索引，之後才慢慢重新解析。反向驗證：關掉守衛後 4 項新測試全失敗。
