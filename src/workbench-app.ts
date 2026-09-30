@@ -1,3 +1,4 @@
+import { formatZeroResultExclusionHint } from "./describe-exclusion.js";
 export function workbenchHtml(nonce: string): string {
   return `<!doctype html>
 <html lang="zh-Hant">
@@ -1192,7 +1193,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   function emptySearchState(emptyText) {
     const empty = make("div", "empty-state", "");
-    empty.append(make("strong", "", emptyText), make("p", "empty-exclusion-hint", "可能有位置依預設排除規則不索引；可檢查某個檔案為何搜不到。"));
+    empty.append(make("strong", "", emptyText), make("p", "empty-exclusion-hint", ${JSON.stringify(formatZeroResultExclusionHint("workbench"))}));
     const form = make("form", "empty-explain-form", "");
     form.id = "search-empty-explain-form";
     const label = make("label", "", "檢查某個檔案為何搜不到");

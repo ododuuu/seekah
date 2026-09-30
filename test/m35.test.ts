@@ -97,6 +97,8 @@ test("0.37.0 desktop workbench keeps the shell self-contained and safe", () => {
   for (const control of ["roots-refresh-folder", "root-refresh-action", "search-empty-explain-form", "search-empty-explain-path", "search-empty-explain-button",
     "root-exclusion-preview", "settings-exclusion-policy"]) assert.match(html, new RegExp(control, "u"));
   for (const endpoint of ["/api/state", "/api/index-status", "/api/exclusions", "/api/explain", "/api/select-folder", "/api/search", "/api/files", "/api/document-action", "/api/preview"]) assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
+  assert.match(html, /可能有位置依預設排除規則不索引；請在下方輸入檔案路徑檢查/u);
+  assert.doesNotMatch(html, /可執行 seekah explain|\/explain <路徑>/u);
   assert.match(html, /dataTransfer\.files/u);
   assert.match(html, /replaceChildren/u);
   assert.match(html, /textContent/u);

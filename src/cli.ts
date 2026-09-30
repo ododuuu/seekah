@@ -757,7 +757,7 @@ export async function main(args: readonly string[]): Promise<number> {
     if (session.originalTotal === 0) {
       console.log(Object.values(store.counts()).every(count => count === 0)
         ? "索引內沒有支援的文件；請確認根目錄、排除規則與同步狀態。" : "沒有符合的結果。");
-      console.log(formatZeroResultExclusionHint());
+      console.log(formatZeroResultExclusionHint("cli"));
       if (verbose) printSearchTrace(session.trace);
       if (!interactive) return 0;
     } else if (limitSpecified) {

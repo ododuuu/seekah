@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { formatExclusionExplanation, formatExclusionPolicyLines, type ExclusionPathResult } from "../src/describe-exclusion.js";
+import { formatExclusionExplanation, formatExclusionPolicyLines, formatZeroResultExclusionHint, type ExclusionPathResult } from "../src/describe-exclusion.js";
 import { explainPathSync } from "../src/exclusion-visibility.js";
 import { indexStatus, explainPath } from "../src/mcp-tools.js";
 import { MCP_TOOL_NAMES } from "../src/mcp.js";
@@ -89,6 +89,11 @@ test("M67 shared exclusion explanation covers every current path state and never
     assert.match(text, pattern);
     assert.doesNotMatch(text, /m67-secret-body|不應輸出這段錯誤原文/u);
   }
+  assert.match(formatZeroResultExclusionHint("cli"), /seekah explain <路徑>.*docsearch explain <路徑>/u);
+  assert.doesNotMatch(formatZeroResultExclusionHint("cli"), /\/explain/u);
+  assert.match(formatZeroResultExclusionHint("tui"), /\/explain <路徑>/u);
+  assert.doesNotMatch(formatZeroResultExclusionHint("tui"), /seekah explain/u);
+  assert.match(formatZeroResultExclusionHint("workbench"), /下方輸入檔案路徑/u);
   const policyText = formatExclusionPolicyLines({
     root: "C:/docs",
     rules: [{ id: "builtin:test", pattern: "test/**", name: "測試規則", reason: "測試理由", warning: "測試警告", source: "builtin" }],

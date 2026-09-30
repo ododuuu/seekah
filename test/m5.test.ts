@@ -320,6 +320,9 @@ test("M5 CLI distinguishes missing index, empty index, no matches and incomplete
     await exec(process.execPath, [cli, "index", root], { env });
     const missing = await exec(process.execPath, [cli, "search", "absent"], { env });
     assert.match(missing.stdout, /沒有符合的結果/);
+    assert.match(missing.stdout, /可執行 seekah explain <路徑> 檢查為何搜不到/u);
+    assert.match(missing.stdout, /相容別名：docsearch explain <路徑>/u);
+    assert.doesNotMatch(missing.stdout, /\/explain/u);
     const store = new IndexStore(path.join(data, "LocalDocSearch/index.db"));
     try { store.recordSync(root, false, ["failure"], []); } finally { store.close(); }
     const partial = await exec(process.execPath, [cli, "search", "needle"], { env });

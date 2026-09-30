@@ -14,6 +14,7 @@
   - TUI 新增 `/explain <path>`，`/status` 顯示排除摘要；MCP 新增標示 `readOnlyHint` 的 `explain_path`，並在 `index_status` 以新增欄位提供排除摘要，既有欄位與工具輸出保持相容。
   - 被排除結果必須附「若真的需要索引」替代做法與限制：可調整 user ignore 或另登錄適當窄根，但不承諾 `!` override、父 volume root 存在時的窄根 override、追蹤 link／junction 或刪除來源。
   - 不可沉默條款：凡因預設規則、user ignore、link／junction、索引內部檔案或格式限制而未進入正文搜尋的路徑，至少一個唯讀入口必須回報可理解原因與目前狀態，不得只回報搜尋零結果。
+  - 零結果提示沿用共同純函式但接受入口參數：CLI 顯示 `seekah explain <path>` 與 `docsearch` 相容別名，TUI 顯示 `/explain <path>`，工作台顯示路徑輸入提示；避免跨入口複製錯誤命令。
 - 理由：
   - 以一個純函式產生說明可避免 CLI、Web、TUI、MCP 漂移；以 server／store 重新查詢可避免把前端欄位或過期 skipped 摘要當成目前狀態。
   - 結構化規則、逐規則計數與清理進度同時滿足一般使用者理解與診斷需求；`未提供` 保留舊索引的不確定性，不製造虛假的零。

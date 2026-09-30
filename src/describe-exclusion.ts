@@ -171,6 +171,15 @@ export function formatExclusionPolicySummary(policy: ExclusionPolicy): string {
   return `預設排除：${names}；最近逐規則略過：${counts}；${cleanup}。`;
 }
 
-export function formatZeroResultExclusionHint(): string {
-  return "可能有位置依預設排除規則不索引；請使用 /explain <路徑> 或輸入檔案路徑檢查。";
+export type ZeroResultEntry = "cli" | "tui" | "workbench";
+
+export function formatZeroResultExclusionHint(entry: ZeroResultEntry): string {
+  switch (entry) {
+    case "cli":
+      return "可能有位置依預設排除規則不索引；可執行 seekah explain <路徑> 檢查為何搜不到（相容別名：docsearch explain <路徑>）。";
+    case "tui":
+      return "可能有位置依預設排除規則不索引；請使用 /explain <路徑> 檢查。";
+    case "workbench":
+      return "可能有位置依預設排除規則不索引；請在下方輸入檔案路徑檢查。";
+  }
 }
