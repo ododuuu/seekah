@@ -171,6 +171,7 @@ test("M47 workbench settings exposes autoupdate controls and summary elements", 
   for (const id of [
     "settings-autoupdate", "settings-autoupdate-startup", "settings-autoupdate-refresh",
     "settings-autoupdate-debounce", "settings-autoupdate-reconcile", "settings-autoupdate-summary",
+    "settings-exclusion-policy", "settings-exclusion-policy-list",
   ]) assert.match(html, new RegExp(id, "u"));
   assert.match(html, /登入 Windows 時自動啟動背景自動更新/u);
   assert.match(html, /僅 Windows 支援/u);

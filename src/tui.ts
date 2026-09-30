@@ -5,6 +5,8 @@ import { prepareSelectedContext, terminalText, type SelectedContextReference } f
 import type { SearchMode, SearchResult, SearchResultPage } from "./search.js";
 import { formatTotal, SearchIndexChangedError, SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
+import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.js";
+import { formatExclusionExplanation, formatExclusionPolicySummary, formatZeroResultExclusionHint } from "./describe-exclusion.js";
 import { describeIndexClientError } from "./index-errors.js";
 import { productVersion } from "./version.js";
 
@@ -149,7 +151,8 @@ export const tuiCommands: readonly CommandSpec[] = [
   { name: "selected", group: "選取籃／context", usage: "/selected", summary: "查看選取籃" },
   { name: "clear", group: "選取籃／context", usage: "/clear", summary: "清空選取籃" },
   { name: "context", group: "選取籃／context", usage: "/context [1～10]", summary: "預覽並確認複製" },
-  { name: "status", group: "狀態", usage: "/status", summary: "索引摘要" },
+  { name: "status", group: "狀態", usage: "/status", summary: "索引摘要與預設排除" },
+  { name: "explain", group: "狀態", usage: "/explain <路徑>", summary: "查詢檔案為何搜不到" },
   { name: "roots", group: "狀態", usage: "/roots", summary: "根目錄清單" },
   { name: "help", group: "說明／退出", usage: "/help", summary: "顯示命令" },
   { name: "quit", group: "說明／退出", usage: "/quit", summary: "離開" },
@@ -726,7 +729,7 @@ export async function runTui(
       { kind: "prompt", text: normalizedQuery, detail: modeLabel },
       { kind: "search", text: `找到 ${formatTotal(session.originalTotal, session.originalTotalRelation)} 份文件`, detail: `${modeLabel} · 真實索引結果` },
     );
-    message = session.originalTotal ? "↑↓ 移動、Space 選取、Enter 預覽、PgUp/PgDn 翻頁。" : "沒有符合的結果。";
+    message = session.originalTotal ? "↑↓ 移動、Space 選取、Enter 預覽、PgUp/PgDn 翻頁。" : `沒有符合的結果。${formatZeroResultExclusionHint()}`;
   };
   const movePage = (delta: number) => {
     if (!page) { message = "請先搜尋。"; return; }
@@ -1000,8 +1003,18 @@ export async function runTui(
         }
         if (command === "status") {
           const counts = store.counts();
-          const lines = ["目前索引文件狀態", ...Object.entries(counts).map(([status, count]) => `${status}: ${count}`), "", "此畫面只顯示真實索引統計；不假設背景監看正在執行。"];
+          const policies = readExclusionPolicies(store);
+          const policySummary = policies.length ? policies.map(formatExclusionPolicySummary).join("；") : "尚無已登錄根目錄。";
+          const lines = ["目前索引文件狀態", ...Object.entries(counts).map(([status, count]) => `${status}: ${count}`),
+            `預設排除摘要：${policySummary}`, "", "此畫面只顯示真實索引統計；不假設背景監看正在執行。"];
           openView("status", lines, "已讀取目前索引狀態。", "input");
+          continue;
+        }
+        if (command === "explain") {
+          if (!argument) { message = "用法：/explain <路徑>"; continue; }
+          const result = explainPathSync(store, argument);
+          openView("status", formatExclusionExplanation(result).split("\n"), "已重新計算目前路徑；Esc 返回。", "input");
+          continue;
         }
       } catch (error) {
         if (error instanceof SearchIndexChangedError) {

@@ -29,7 +29,7 @@ test("0.34 MCP App is self-contained and uses the portable bridge", () => {
   assert.doesNotMatch(MCP_APP_HTML, /WebSocket|innerHTML/iu);
 });
 
-test("0.34 stdio publishes one UI resource and four decoupled tools", async () => {
+test("0.34 stdio publishes one UI resource and five decoupled tools", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m34-protocol-"));
   const root = path.join(temp, "文件");
   const data = path.join(temp, "data");
@@ -67,7 +67,7 @@ test("0.34 stdio publishes one UI resource and four decoupled tools", async () =
     assert.equal(contents[0]?.mimeType, MCP_APP_MIME_TYPE);
     assert.match(String(contents[0]?.text), /Seekah 搜尋工作台/u);
     const tools = responses.find(item => item.id === 4)?.result?.tools as Array<{ name: string; _meta?: Record<string, unknown> }>;
-    assert.deepEqual(tools.map(tool => tool.name), ["search_documents", "prepare_context", "index_status", "open_search_app"]);
+    assert.deepEqual(tools.map(tool => tool.name), ["search_documents", "prepare_context", "index_status", "explain_path", "open_search_app"]);
     const renderTool = tools.find(tool => tool.name === "open_search_app");
     assert.equal((renderTool?._meta?.ui as { resourceUri?: string })?.resourceUri, MCP_APP_RESOURCE_URI);
     assert.equal(renderTool?._meta?.["openai/outputTemplate"], MCP_APP_RESOURCE_URI);
@@ -179,7 +179,7 @@ test("0.34 doctor is read-only and distinguishes missing prerequisites from a he
     const after = await stat(databasePath);
     assert.equal(after.size, before.size);
     assert.equal(after.mtimeMs, before.mtimeMs);
-    assert.match(output.join("\n"), /\[通過\] MCP／App：4 個工具與 1 個本機 UI resource 可註冊/u);
+    assert.match(output.join("\n"), /\[通過\] MCP／App：5 個工具與 1 個本機 UI resource 可註冊/u);
     assert.match(output.at(-1) ?? "", /全部通過/u);
   } finally {
     await rm(temp, { recursive: true, force: true });
