@@ -25,6 +25,8 @@ export const QUEUE_LIMIT = DEFAULT_QUEUE_LIMIT;
 export const DEFAULT_WATCH_HANDLE_LIMIT = 128;
 /** 事件不間斷時，防抖最長等待「防抖時間 × 此倍數」就開始處理（SPEC §53.4）。 */
 export const DEBOUNCE_MAX_WAIT_FACTOR = 10;
+/** 背景校正批次之間的公平到期時間（SPEC §68.1）。 */
+export const BACKGROUND_RECONCILE_INTERVAL_MS = 5_000;
 /** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
 export const LOCAL_BATCH_MAX_ITEMS = 500;
 export const LOCAL_BATCH_MAX_MS = 5_000;
@@ -129,6 +131,8 @@ type RootState = {
   root: string;
   pending: Set<string>;
   reconcile: boolean;
+  /** 校正批次處理過同時存在的事件後，下一輪優先走 local branch（SPEC §68.1）。 */
+  localPriority: boolean;
   dirty: boolean;
   running: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
@@ -292,7 +296,7 @@ export class LiveUpdateEngine {
 
   private newState(root: string): RootState {
     return {
-      root, pending: new Set(), reconcile: false, dirty: false, running: false,
+      root, pending: new Set(), reconcile: false, localPriority: false, dirty: false, running: false,
       timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), sweep: new Set(), walks: new Map(), failed: false, offline: false, syncFailed: false, removed: false,
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
@@ -452,9 +456,12 @@ export class LiveUpdateEngine {
     const pending = [...state.pending];
     const queued = this.queue.listPaths(state.root);
     const hasEvents = pending.length > 0 || queued.length > 0;
-    const reconcileDue = !state.lastReconcileBatchAt || this.now() - state.lastReconcileBatchAt >= 5_000;
+    const reconcileDue = !state.lastReconcileBatchAt
+      || this.now() - state.lastReconcileBatchAt >= BACKGROUND_RECONCILE_INTERVAL_MS;
+    const forceLocal = state.localPriority && hasEvents;
     const initialForegroundSync = this.options.mode !== "background" && this.options.syncNow !== false && !state.lastReconcileAt;
-    const batchReconcile = this.options.mode === "background" && reconcileRequested && (!hasEvents || reconcileDue);
+    const batchReconcile = this.options.mode === "background" && reconcileRequested
+      && (!hasEvents || (reconcileDue && !forceLocal));
     const fullReconcile = reconcileRequested && this.options.mode !== "background";
     if (!reconcileRequested && !hasEvents) {
       state.running = false;
@@ -510,6 +517,7 @@ export class LiveUpdateEngine {
         }
         state.lastReconcileBatchAt = this.now();
         state.reconcile = !result.done || result.pendingAfter;
+        state.localPriority = hasEvents || state.dirty;
         state.syncFailed = !result.complete;
         if (result.done) {
           this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: result.complete };
@@ -569,6 +577,7 @@ export class LiveUpdateEngine {
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
         if (batch.busy) throw batch.busy;
+        if (state.localPriority) state.localPriority = false;
         moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
@@ -603,8 +612,9 @@ export class LiveUpdateEngine {
       else {
         // 同一批沒處理完的待辦立即接續，不再等防抖（SPEC §54.1）。
         if (moreLocal) this.scheduleNow(state);
-        else if (state.dirty || state.pending.size || state.reconcile) {
-          if (state.reconcile && batchReconcile && !state.dirty) this.scheduleNow(state);
+        else if (state.localPriority || state.dirty || state.pending.size || state.reconcile) {
+          if (batchReconcile && state.localPriority) this.scheduleNow(state);
+          else if (state.reconcile && batchReconcile && !state.dirty) this.scheduleNow(state);
           else this.schedule(state);
         }
         this.armRescan(state);
@@ -983,15 +993,20 @@ export class LiveUpdateEngine {
     if (this.stopping || state.removed || (state.failed && this.reconcileMs === 0)) return;
     state.dirty = true;
     if (state.running) return;
+    // 校正批次已讓 local 待辦取得優先權時，不能被後續事件重新延後。
+    if (state.localPriority && state.timer) return;
     if (state.timer) this.clearTimer(state.timer);
     const now = this.now();
     state.firstScheduledAt ??= now;
     const remaining = state.firstScheduledAt + this.debounceMs * DEBOUNCE_MAX_WAIT_FACTOR - now;
+    const reconcileRemaining = state.reconcile && state.lastReconcileBatchAt !== undefined
+      ? Math.max(0, state.lastReconcileBatchAt + BACKGROUND_RECONCILE_INTERVAL_MS - now)
+      : Number.POSITIVE_INFINITY;
     state.timer = this.setTimer(() => {
       state.timer = undefined;
       state.firstScheduledAt = undefined;
       this.enqueueReady(state.root);
-    }, Math.max(0, Math.min(this.debounceMs, remaining)));
+    }, Math.max(0, Math.min(this.debounceMs, remaining, reconcileRemaining)));
   }
 
   private armRescan(state: RootState): void {

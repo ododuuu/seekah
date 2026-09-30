@@ -1,5 +1,30 @@
 # 設計決策紀錄
 
+## D100：背景校正與局部事件更新公平輪替
+
+- 日期：2026-09-30。
+- 事實：
+  - 第二輪隔離 event-noise 實驗在 coarse root、`persistScope(reason="unknown-filename")` 與大量 path 事件下，`runRoot` 每約 15 秒呼叫一次；4 次均選 `batchReconcile`，`localUpdateCount` 維持 0，目標檔不可搜尋。
+  - 原條件 `background && reconcile && (!hasEvents || reconcileDue)` 在防抖上限（約 15 秒）大於校正到期（5 秒）時，每次開始都同時滿足 `hasEvents=true` 與 `reconcileDue=true`，因此校正批次重複取得執行權。校正本身每批有返回與 frontier／checked 進度，根因是 branch fairness，不是單批卡死。
+- 決定：
+  - `RootState` 增加只存在記憶體的 local-priority 輪替標記。背景校正批次在同時有事件待辦時完成後，下一輪強制先走 local branch；local 成功後清除此標記。
+  - 背景 `schedule()` 在仍有未完成校正時，除既有 debounce deadline 外，再取 `lastReconcileBatchAt + 5 秒` 的較早時點，讓校正持續事件時仍約每 5 秒取得一次機會；事件 debounce 仍保留 10 倍上限。
+  - local-priority 的立即 timer 建立後，後續事件不得清除並改設 debounce timer；local branch 執行期間新事件仍留待後續輪次，避免事件風暴延後既定的公平輪替。
+- 理由：
+  - 只改 root branch 選擇與下一輪排程，保留既有 reconcile checkpoint、local batch、writer lock、queue ack 與搜尋語意；不需 schema migration，也不需並行 writer。
+  - 校正後立即讓出一輪給 local，可在有限輪內處理普通事件；5 秒 deadline cap 讓校正不必等到 15 秒 debounce 才前進。
+- 否決：
+  - 永久 local 優先：事件湧入或大型 local queue 會反過來餓死校正。
+  - 每次事件都直接觸發完整校正：會放大 IO、重複掃描並破壞既有 debounce／批次邊界。
+  - 只降低 reconcile batch 大小或吞掉 dirty scope：沒有修正 branch starvation，且可能破壞 at-least-once／刪除安全。
+  - 以平行 local／reconcile writer 解決：增加 SQLite writer 競爭與順序複雜度，不符合單一 writer 與本機處理邊界。
+- 測試計畫：
+  - background engine 不使用真實 watcher，模擬 15 秒 root 呼叫、未完成 reconcile、多筆 path 與持續事件；斷言 local 更新與搜尋結果，以及 checked／frontier 進度。
+  - 以真實 timer 和低 debounce smoke 驗證到期、輪替與搜尋。
+  - 暫時恢復舊 branch 條件時公平測試必須失敗，修正還原後通過；另跑完整 `npm test` 與隔離 event-noise。
+- 相容：不改 schema、package 版本、資料目錄／`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／docsearch 識別或文件內容外傳邊界。
+- 版本：0.43.0（待審查合併者決定升版）。
+
 ## D099：工作台與索引 worker 不以 SQLite 原文呈現 BUSY
 
 - 日期：2026-09-29。
