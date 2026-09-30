@@ -159,6 +159,24 @@ export function blocksContaining(text: Uint8Array, layout: Uint8Array, terms: re
   return hits;
 }
 
+/** First exact block ordinal for one phrase; avoids per-term Map/array allocation on the no-hit path. */
+export function firstBlockContaining(text: Uint8Array, layout: Uint8Array, term: string): number | undefined {
+  const joined = decompressChunk(text);
+  const ascii = ASCII.test(joined);
+  if (!ascii) return blocksContaining(text, layout, [term], true).get(term)?.[0];
+  const normalizedJoined = joined.toLowerCase();
+  let from = 0, block = 0;
+  const { starts, ordinals } = decodeLayout(layout);
+  while (true) {
+    const at = normalizedJoined.indexOf(term, from);
+    if (at < 0) return undefined;
+    while (block + 1 < starts.length && starts[block + 1]! <= at) block++;
+    const end = block + 1 < starts.length ? starts[block + 1]! - 1 : joined.length;
+    if (at + term.length <= end) return ordinals[block];
+    from = at + 1;
+  }
+}
+
 /** Original block contents of one chunk, in ordinal order. */
 export function decodeChunk(text: Uint8Array, layout: Uint8Array): ChunkBlock[] {
   const joined = decompressChunk(text);

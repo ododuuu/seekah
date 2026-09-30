@@ -543,16 +543,34 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     try { return work(); } finally { trace.endPhase(phase); }
   };
 
-  // These caches contain only documents that the cursor has reached, not the
-  // complete posting lists for every term.
+  // These caches contain only documents that the cursor has reached, except
+  // for the phrase posting map used to amortise long-query payload reads.
   const headingRows = new Map<string, Map<number, HeadingRow[]>>();
   const contentChunks = new Map<string, Map<number, number[]>>();
+  const phraseHeadingCandidates = !restrict && mode === "phrase" && field !== "filename"
+    ? store.chunkHeadingCandidates(query, types, root, subtree, statuses, trace)
+    : undefined;
+  const phraseContentCandidates = !restrict && mode === "phrase" && field !== "filename"
+    ? store.chunkCandidateChunks(query, types, root, subtree, statuses, trace)
+    : undefined;
+  const longPhrase = mode === "phrase" && [...query].length >= 8;
+  const phraseChunkHits = phraseContentCandidates && longPhrase ? new Map<number, number[]>() : undefined;
+  let phraseChunkHitsLoaded = false;
+  const loadPhraseChunkHits = (): void => {
+    if (!phraseContentCandidates || !phraseChunkHits || phraseChunkHitsLoaded) return;
+    const hits = store.chunkTermHitsForCandidateChunks(query, types, root, subtree, statuses, trace);
+    for (const [chunkId, ordinals] of hits) phraseChunkHits.set(chunkId, ordinals);
+    phraseChunkHitsLoaded = true;
+  };
   const headingRowsFor = (term: string, documentId: number): HeadingRow[] => {
     let byDocument = headingRows.get(term);
     if (!byDocument) headingRows.set(term, byDocument = new Map());
     const cached = byDocument.get(documentId);
     if (cached !== undefined) return cached;
-    const rows = store.chunkHeadingCandidatesForDocument(term, documentId, trace)
+    const candidates = phraseHeadingCandidates
+      ? phraseHeadingCandidates.get(documentId) ?? []
+      : store.chunkHeadingCandidatesForDocument(term, documentId, trace);
+    const rows = candidates
       .map(row => ({ ...row, normalized: normalize(row.heading) }))
       .filter(row => row.normalized.includes(term));
     byDocument.set(documentId, rows);
@@ -563,7 +581,10 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     if (!byDocument) contentChunks.set(term, byDocument = new Map());
     const cached = byDocument.get(documentId);
     if (cached !== undefined) return cached;
-    const chunks = store.chunkCandidatesForDocument(term, documentId, trace);
+    const chunks = phraseContentCandidates
+      ? phraseContentCandidates.get(documentId) ?? []
+      : store.chunkCandidatesForDocument(term, documentId, trace);
+    if (phraseChunkHits) loadPhraseChunkHits();
     byDocument.set(documentId, chunks);
     return chunks;
   };
@@ -592,7 +613,9 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     if (mode === "phrase") {
       // Candidate chunks are in block order, so the first hit is the smallest matching ordinal.
       for (const chunk of contentChunksFor(query, id)) {
-        const first = store.chunkTermHits(chunk, [query], true, trace).get(query)![0];
+        const first = phraseChunkHits
+          ? phraseChunkHits.get(chunk)?.[0]
+          : store.chunkTermHits(chunk, [query], true, trace).get(query)![0];
         if (first !== undefined) return { rank: 1, sourceKind: "content", ordinal: first };
       }
       return undefined;

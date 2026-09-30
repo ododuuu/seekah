@@ -2468,3 +2468,43 @@ docsearch doctor
 - 不把「重新檢查資料夾」改成每次完整掃描所有根目錄，不以全域重建取代明確子樹。
 - 不讓 client 單獨決定可同步範圍，不以字串前綴取代平台正確的路徑涵蓋判斷，不接受未驗證的任意 `root` 作為子樹。
 - 不新增另一個平行 index endpoint、另一套進度／停止狀態或對背景 daemon 的強制停止；不讀寫使用者真實資料目錄以外的資料。
+
+## 76. 搜尋長精確片語候選查詢批次化與 filename-only 隔離
+
+依 D108。本節是純搜尋效能修正；搜尋結果集合、順序、rank、代表區段、片段、總數及 `totalRelation` 維持第 14、46、48、50、52、62 節語意。
+
+### 76.1 長精確片語候選查詢
+
+- `phrase` 模式的正規化查詢仍由既有 chunk trigram index 提供安全候選。現有 chunk FTS 使用 `detail=none`，不使用不受支援的 phrase `MATCH`；三個以上 code point 維持 trigram `AND` superset。搜尋 stream 對同一個 phrase 一次讀取符合的 chunk／heading posting rows 並依文件分組，exact verification 重用這些候選，避免對每個文件重複執行相同 FTS 查詢；正規化查詢達 8 個 code point 時，候選 chunk 的 exact text verification 可再用同一個 FTS-filtered payload cursor 批次讀取，仍逐 chunk／逐 block 驗證。短查詢、`all-terms` 及含 U+0000 的既有保守路徑維持原本候選規則。
+- chunk 內的索引文字仍是各段落以換行串接的正規化文字。candidate 允許跨段落的 false positive，必須由既有 exact verification 逐段確認；不得因候選查詢而把跨段落命中當成結果，也不得漏掉段落內的精確子字串。
+- 候選查詢只負責提供 exact verification 的安全 superset；檔名／標題優先級、內容是否跨段落、`all-terms` 覆蓋度與代表 block 仍由既有搜尋程式決定。
+
+### 76.2 filename-only 候選隔離
+
+- `sort=relevance` 的 filename／heading／content 分級流程中，`phrase` 檔名階段已處理 rank 4／3 後，`possible` 內容候選階段在 `field=all` 不再重複納入 filename source；檔名命中仍由前面的 filename phases 保留，filename 與內容分散命中仍由 heading／chunk source 提供候選。`all-terms` 保留 filename source，因為不同 term 可能分散在 filename 與內容。
+- `field=filename`、`sort=filename`、`sort=modified` 及 `within` 的既有欄位／排序／上一層順序不得因隔離而改變；需要檔名候選的路徑仍保留 filename source。
+- `field=content` 不得對 filename-only 文件執行內容候選、區段解壓或 exact verification；原本的內容欄位範圍維持。
+
+### 76.3 診斷與語意邊界
+
+- `SEARCH_TRACE` schema、`phasesMs`／`phaseSelfMs`、candidate source 與既有 counts 欄位不變；候選剪枝後 counts 必須反映實際未枚舉／未驗證的文件與 chunk，不以預算截斷冒充「沒有結果」。
+- 精確片語沒有結果時仍必須完成安全候選判斷並回報精確 `total=0`、`totalRelation="eq"`；快速模式仍遵守第 52.3 節的 500 份下限語意。
+- 不新增索引 schema、資料目錄、外部服務、網路傳輸、OCR、embedding、格式支援或查詢逾時錯誤；所有文件內容仍留在本機。
+
+### 76.4 效能目標與驗收
+
+- 以隔離合成索引驗收：約 40,000 份含內文的 `indexed` 文件，加約 500,000 筆 `unsupported`、僅檔名可搜尋的 metadata 紀錄；內容需包含大量數字與英文詞，並保留長數字候選爆量形狀。
+- 暖機後同一資料集的主要查詢目標為：19 位數字精確片語無結果、一般詞 `field=content`、一般詞 `field=all` 各自 p95 小於 2 秒；只搜檔名不得因本節退步。報告必須同時列出 wall time、`SEARCH_TRACE` phase 與 candidate／verification counts。
+- `test/m70.test.ts` 必須以固定語料比對新 chunk 路徑與既有 block／逐文件路徑的完整結果集合與順序，涵蓋精確片語、`all-terms`、欄位、排序、檔名命中、內容命中與無結果；另斷言長片語無結果不會驗證爆量候選。
+- 反向驗證必須暫時還原長片語候選查詢或 filename source 隔離，使新增效能 regression 至少一項失敗；還原後執行 build、聚焦測試與完整 `npm test`。
+
+### 76.5 工作台邊界
+
+- 工作台搜尋仍以既有 `/api/search` 回應完成後更新結果；本節不新增 UI 進度、取消 endpoint 或 server-side query cancellation。
+- 實作與報告必須檢查工作台是否以 `AbortSignal` 中止前一次搜尋，以及慢搜尋是否有進度／取消提示；若目前只有 sequence stale-response guard，取消與進度改動另案提出，不在本節擴大。
+
+### 76.6 明確不做
+
+- 不以固定候選數上限、固定時間逾時、丟棄未驗證候選或「無結果」猜測取代安全 exact verification；這些做法會改變總數或漏掉有效片語。
+- 不另建 n-gram 頻率表或全文 cache；若可由既有 phrase candidate 安全剪枝達成目標，不引入新的持久化資料與失效語意。
+- 不把所有 filename-only 紀錄從全域索引移除，也不把 `field=all` 改成只搜內容；檔名搜尋與既有 filename rank 必須保留。
