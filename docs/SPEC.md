@@ -2188,6 +2188,40 @@ docsearch doctor
 - `test/m60.test.ts` 以注入錯誤模擬 MCP 工具路徑、TUI 與 autoupdate 分類。
 - package 版本維持 0.42.0。
 
+## 68. 背景自動更新的校正／事件公平輪替
+
+依 D100。§53.4 的防抖上限能讓事件持續湧入時開始新一輪，但背景模式若每次都因 `reconcileDue` 選擇校正，校正批次會在約 15 秒的事件防抖週期中反覆取得執行權，局部事件待辦可能永遠不進入 local branch。本節只修正背景模式的排程公平，不改文件排除、穩定確認、佇列 durability 或索引語意。
+
+### 68.1 公平輪替規則
+
+- 背景模式同時有未完成校正與事件待辦時，若本輪因 `reconcileDue` 執行校正批次，必須標記下一輪優先處理 local branch；下一輪不得再次因 `reconcileDue` 直接選校正（除非已沒有事件待辦）。
+- local branch 完成後仍保留未完成的校正，事件持續期間依校正批次最後完成時間安排下一次可執行時點；校正到期時間為最後一批校正後約 5 秒，且不得被事件 debounce 的 15 秒上限推遲。
+- local 優先輪的立即排程一旦建立，後續事件不得以重新設定 debounce timer 將該輪延後；事件仍可在該輪執行時累積到下一輪。
+- local branch 若仍有超過單輪上限的待辦，可依 §54.1 立即接續；每次新一輪仍重新判斷校正是否到期，不得讓無界的 local continuation 永久餓死校正。
+- 沒有事件待辦時，背景校正可依既有可接續批次立即接續；只有同時存在事件待辦時才套用上述優先輪替。
+- `persistScope` 產生的未知檔名／dirty scope 仍表示整個範圍需要校正；它本身沒有可交給 local branch 的檔案路徑，不得捏造路徑。若另有事件 path，仍依本節公平輪替。
+
+### 68.2 狀態與相容性
+
+- 公平輪替狀態只存在程序記憶體，不新增 work state、索引或佇列 schema；程序重啟後依既有 at-least-once 佇列與校正 checkpoint 接續。
+- `localUpdateCount`、校正 `checked`／`frontier`、`lastReconcileBatchAt`、status 欄位與搜尋結果維持既有語意；只改背景 root branch 的選擇與下一輪排程時點。
+- 局部更新仍遵守 §54 的每輪上限、一次穩定等待、延後與 writer lock 釋放；背景校正仍遵守 §60、§64 的 checkpoint、失敗分類與刪除安全前提。
+
+### 68.3 驗收與測試計畫
+
+- 新增公平輪替單元測試：不使用真實 watcher，以 background engine、未完成 reconcile、多筆 path queue、持續事件及模擬每 15 秒呼叫 root，驗證有限輪內 local branch 執行、`localUpdateCount` 增加且目標可搜尋。
+- 同一測試驗證持續事件期間校正 `checked` 或 `frontier` 持續前進，不能被 local 更新餓死。
+- 新增真實 timer、低 debounce 值的 smoke，驗證事件持續時 timer 到期後的 branch 順序與搜尋結果。
+- 反向驗證暫時恢復 §68 前的 branch 選擇邏輯；公平測試至少一項必須失敗，還原修正後全部通過。
+- 執行完整 `npm test` 與隔離 TEMP event-noise 實驗；報告 local update 次數、目標搜尋延遲、校正進度及 win32 平台既有失敗。
+
+### 68.4 明確不做
+
+- 不讓 local branch 永久優先、不等所有事件處理完才校正、不以平行 root／平行 writer 取代公平排程。
+- 不縮短或取消 §46.6／§54 的穩定確認，不提前 ack 未成功寫入的事件，不把 dirty scope 猜成單一路徑。
+- 不以降低校正批次上限、吞掉錯誤、重置 checkpoint、刪除舊待辦或改變防抖上限來掩蓋 branch starvation。
+- 不改 schema、package 版本、資料目錄相容性、外部服務或本機文件處理邊界。
+
 ## 69. 背景更新清理已失效根目錄的工作狀態
 
 依 D101。起因：工作狀態庫以 `root` 保存事件待辦與背景校正游標；根目錄移除、移至垃圾桶、被父根合併或舊版留下資料後，`work_items`、`reconcile_state` 與 `reconcile_seen` 可能屬於已不在目前 `store.roots()` 的根目錄。重啟後 engine 只建立目前根目錄的 state，這些列沒有 consumer 會確認完成，卻仍被全域 status COUNT、最舊待辦時間與 queue overflow 判斷計入。
