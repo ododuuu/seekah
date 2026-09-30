@@ -30,6 +30,30 @@
 - 版本：待合併時決定；本分支不修改 `package.json` 版本。
 
 
+## D101：清理已不在 roots 的孤兒工作狀態
+
+- 日期：2026-09-30。依 SPEC §69；問題由背景更新調查確認：重啟後 engine 只為目前 `store.roots()` 建立 state，舊 root 的 `work_items`／`reconcile_state` 沒有 consumer，卻污染全域 queue status、最舊時間與 overflow 計數。
+- 決定：
+  - `LiveWorkQueue` 在 engine 啟動前以目前 roots 清理 `work_items`、`reconcile_state`、`reconcile_seen` 中不屬於現有 root 的資料，並由 engine 記錄 root 數與各表筆數至 autoupdate log。
+  - `isolateRoot` 擴大為清理同一 root 的三類工作狀態；`dropRoot` 沿用這個入口。
+  - `IndexStore.moveRootsToTrash`、`removeRoot`、`mergeChildRoots` 成功移除／合併 root 後清理舊 root 工作狀態；`purgeTrashRoots` 也清理指定已移除 root 的殘留列。parent root 的工作狀態保留。
+  - 清理後沿用既有全域 queue count；因孤兒列已被實際刪除，status／oldest／overflow 不另造第二套 root 篩選查詢。
+  - 垃圾桶還原不搬回舊工作狀態；重新 index 產生新的現有 root 工作狀態，維持 generation 與 at-least-once 語意。
+  - lifecycle 清理在主索引交易 COMMIT 後執行但不是主操作成功條件；`.work.sqlite` 的 busy／清理錯誤由 store 入口吞掉，沒有 logger 時靜默，下一次 engine 的 `cleanupOrphanRoots` 補清。
+  - `purgeTrashRoots` 只有在本次確實刪除 `root_trash` 列且該 path 已不在 `this.roots()` 時才清理三表；傳入現根或沒有刪除列一律保留工作狀態，其他 lifecycle 入口也先以 `samePath` 過濾現有 roots。
+- 理由：
+  - 舊 root 沒有合法 consumer，實際刪除比只在 status 隱藏更能消除 overflow 與最舊時間的錯誤來源。
+  - 三表同時清理避免只刪 path row 後留下 active／failed reconcile cursor 或 seen scope；清理 root state 不涉及來源檔案與索引文件。
+  - 沿用 `isolateRoot` 與根目錄生命週期入口，避免在 `runRoot` 分支選擇之外建立另一套 ack／清理語意。
+- 否決：
+  - 否決只修改 `pendingCount()`／`oldestCreatedAtMs()` 的 SQL 篩選；這會保留 stale path row，仍可能觸發 overflow。
+  - 否決重啟時清空整個 work state 或將 orphan row 改掛到 parent；會破壞現有 root 的 at-least-once 與 root 邊界。
+  - 否決在 restore 時復原舊列；還原後應以新 generation 重新發現目前檔案。
+  - 否決修改 §68／D100 的 `runRoot` 公平排程；本決策只修 root lifecycle 的 persistence 邊界。
+- 驗證：
+  - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新、busy-lock 主操作成功與釋放鎖後 startup 補清測試，並對 best-effort 前版本反向驗證。
+  - `npm run build`、聚焦測試與完整 `npm test`；如 M26 path coverage、M36 profile chmod 仍為 win32 環境失敗，單獨記錄。
+- 相容：不改 work state schema、索引 schema、文件內容、搜尋結果、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 `docsearch` 相容入口。
 ## D100：背景校正與局部事件更新公平輪替
 
 - 日期：2026-09-30。
@@ -805,13 +829,14 @@
 - 批次同步根目錄失敗仍繼續其他位置，保存失敗紀錄並回傳 3。掃描不完整的重建保留未確認舊資料，已可讀的文件仍強制重解析。M7 開啟動作驗證文件自己的歸屬。
 
 
-## D022：M9 人選上下文只匯出確認過的搜尋片段
+## D022：M9 先提供人選上下文檔，不自動接模型
 
-- 日期：2026-09-17。依 ROADMAP／SPEC §19 進入 M9，版本 0.12.0；Windows 仍採 INTEGRATED-ACCEPTANCE 集中驗收。
-- 決策：提供 `context` 互動命令，沿用既有關鍵字搜尋與文件代碼，不呼叫模型、不改寫查詢、不自動灌整庫。候選預設 100、每頁 10、最多選 20；匯出前完整預覽且必須輸入 `yes`。
-- 決策：輸出為新 UTF-8 JSON（exclusive create），只含選取文件的路徑、代碼、狀態、位置、≤160 code point 片段與同步資訊；禁止覆寫；超過 256 KiB 拒絕。確認前後重新核對搜尋快照與來源 mtime／存在性，變更即拒絕靜默帶入舊預覽。
-- 決策：非 TTY／EOF／取消不建立檔案。附 `docsearch.cmd` 僅方便呼叫，不改索引位置或 PATH。尚未連接 AI／IDE／MCP；BU 聊天專用匯入另定規格。
-- 驗證：macOS Node.js 26.7.0 的 88 項測試通過、1 項 Windows cmd 略過；公司互動終端與 cmd 入口待集中驗收。
+- 日期：2026-09-17。沿用使用者要求的精準上下文方向，透過 CLI 互動清單實作模式 A 的預選代碼與模式 B 的查詢輸入，共用分頁、選取、完整預覽及確認。
+- 僅匯出已選結果的原文命中片段與來源資訊，JSON 方便手動帶入或未來整合；不讀取整份正文、不匯出未選結果，不操作剪貼簿或任何 AI／聊天連線。檔名命中保留明確標示。
+- 確認不接受管線或 --yes，避免非互動批次把整批結果自動帶走；產品中的人選是本功能本身，不影響使用者已授權持續開發。
+- 預覽後核對原結果與當前索引，並檢查來源可讀性、大小與修改時間；偵測改變就拒絕，不靜默更換內容。這不是來源文件內容雜湊驗證，不承諾偵測刻意保持大小與 mtime 的變更。
+- 輸出採 exclusive create 防止覆寫，最多 256 KiB。控制字元在終端跳脫顯示，JSON 正確保存原始值；來源文字標註為資料而非操作指令。選取功能不代表外傳公司文件已獲許可。
+- 附加 docsearch.cmd，使用相對於腳本的 CLI 入口並傳回結束碼，不安裝服務或修改 PATH。Windows 實際批次檔測試在 macOS 明確略過，保留集中驗收。
 
 ## D023：M10 以多段命中與 Markdown 服務「可貼上的精準上下文」
 
@@ -1006,27 +1031,3 @@
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
 
-## D101：清理已不在 roots 的孤兒工作狀態
-
-- 日期：2026-09-30。依 SPEC §69；問題由背景更新調查確認：重啟後 engine 只為目前 `store.roots()` 建立 state，舊 root 的 `work_items`／`reconcile_state` 沒有 consumer，卻污染全域 queue status、最舊時間與 overflow 計數。
-- 決定：
-  - `LiveWorkQueue` 在 engine 啟動前以目前 roots 清理 `work_items`、`reconcile_state`、`reconcile_seen` 中不屬於現有 root 的資料，並由 engine 記錄 root 數與各表筆數至 autoupdate log。
-  - `isolateRoot` 擴大為清理同一 root 的三類工作狀態；`dropRoot` 沿用這個入口。
-  - `IndexStore.moveRootsToTrash`、`removeRoot`、`mergeChildRoots` 成功移除／合併 root 後清理舊 root 工作狀態；`purgeTrashRoots` 也清理指定已移除 root 的殘留列。parent root 的工作狀態保留。
-  - 清理後沿用既有全域 queue count；因孤兒列已被實際刪除，status／oldest／overflow 不另造第二套 root 篩選查詢。
-  - 垃圾桶還原不搬回舊工作狀態；重新 index 產生新的現有 root 工作狀態，維持 generation 與 at-least-once 語意。
-  - lifecycle 清理在主索引交易 COMMIT 後執行但不是主操作成功條件；`.work.sqlite` 的 busy／清理錯誤由 store 入口吞掉，沒有 logger 時靜默，下一次 engine 的 `cleanupOrphanRoots` 補清。
-  - `purgeTrashRoots` 只有在本次確實刪除 `root_trash` 列且該 path 已不在 `this.roots()` 時才清理三表；傳入現根或沒有刪除列一律保留工作狀態，其他 lifecycle 入口也先以 `samePath` 過濾現有 roots。
-- 理由：
-  - 舊 root 沒有合法 consumer，實際刪除比只在 status 隱藏更能消除 overflow 與最舊時間的錯誤來源。
-  - 三表同時清理避免只刪 path row 後留下 active／failed reconcile cursor 或 seen scope；清理 root state 不涉及來源檔案與索引文件。
-  - 沿用 `isolateRoot` 與根目錄生命週期入口，避免在 `runRoot` 分支選擇之外建立另一套 ack／清理語意。
-- 否決：
-  - 否決只修改 `pendingCount()`／`oldestCreatedAtMs()` 的 SQL 篩選；這會保留 stale path row，仍可能觸發 overflow。
-  - 否決重啟時清空整個 work state 或將 orphan row 改掛到 parent；會破壞現有 root 的 at-least-once 與 root 邊界。
-  - 否決在 restore 時復原舊列；還原後應以新 generation 重新發現目前檔案。
-  - 否決修改 §68／D100 的 `runRoot` 公平排程；本決策只修 root lifecycle 的 persistence 邊界。
-- 驗證：
-  - 新增預埋 orphan 三表、現有 root 保留、啟動 log／status、trash／merge／remove、restore 更新、busy-lock 主操作成功與釋放鎖後 startup 補清測試，並對 best-effort 前版本反向驗證。
-  - `npm run build`、聚焦測試與完整 `npm test`；如 M26 path coverage、M36 profile chmod 仍為 win32 環境失敗，單獨記錄。
-- 相容：不改 work state schema、索引 schema、文件內容、搜尋結果、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 `docsearch` 相容入口。
