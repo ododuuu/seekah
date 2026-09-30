@@ -1032,7 +1032,7 @@ export class IndexStore {
         }
         this.db.exec("COMMIT");
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-      bestEffortPurgeWorkStateRoots(this.databasePath, result.map(item => item.path));
+      this.bestEffortPurgeRemovedWorkStateRoots(result.map(item => item.path));
       return result;
     } finally { release(); }
   }
@@ -1042,17 +1042,27 @@ export class IndexStore {
     const unique = [...new Set(roots)];
     if (!unique.length) return 0;
     let removed = 0;
+    const removedRoots: string[] = [];
     if (this.hasTable("root_trash")) {
       const release = acquireWriteLock(this.databasePath);
       try {
         const statement = this.db.prepare("DELETE FROM root_trash WHERE path = ?");
-        for (const root of unique) removed += Number(statement.run(root).changes);
+        for (const root of unique) {
+          const changes = Number(statement.run(root).changes);
+          removed += changes;
+          if (changes > 0) removedRoots.push(root);
+        }
       } finally { release(); }
     }
-    bestEffortPurgeWorkStateRoots(this.databasePath, unique);
+    this.bestEffortPurgeRemovedWorkStateRoots(removedRoots);
     return removed;
   }
 
+  private bestEffortPurgeRemovedWorkStateRoots(roots: readonly string[]): void {
+    const activeRoots = this.roots();
+    const removedRoots = roots.filter(root => !activeRoots.some(active => samePath(active, root)));
+    bestEffortPurgeWorkStateRoots(this.databasePath, removedRoots);
+  }
 
   registerRoot(root: string): void { this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(root); }
 
@@ -1150,7 +1160,7 @@ export class IndexStore {
       options.beforeCommit?.();
       this.db.exec("COMMIT");
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
-    bestEffortPurgeWorkStateRoots(this.databasePath, children);
+    this.bestEffortPurgeRemovedWorkStateRoots(children);
     return { transferred };
   }
 
@@ -1162,7 +1172,7 @@ export class IndexStore {
     const release = acquireWriteLock(this.databasePath);
     try {
       const removed = this.removeRootLocked(root);
-      bestEffortPurgeWorkStateRoots(this.databasePath, [root]);
+      this.bestEffortPurgeRemovedWorkStateRoots([root]);
       return removed;
     } finally { release(); }
   }

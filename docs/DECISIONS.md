@@ -1016,6 +1016,7 @@
   - 清理後沿用既有全域 queue count；因孤兒列已被實際刪除，status／oldest／overflow 不另造第二套 root 篩選查詢。
   - 垃圾桶還原不搬回舊工作狀態；重新 index 產生新的現有 root 工作狀態，維持 generation 與 at-least-once 語意。
   - lifecycle 清理在主索引交易 COMMIT 後執行但不是主操作成功條件；`.work.sqlite` 的 busy／清理錯誤由 store 入口吞掉，沒有 logger 時靜默，下一次 engine 的 `cleanupOrphanRoots` 補清。
+  - `purgeTrashRoots` 只有在本次確實刪除 `root_trash` 列且該 path 已不在 `this.roots()` 時才清理三表；傳入現根或沒有刪除列一律保留工作狀態，其他 lifecycle 入口也先以 `samePath` 過濾現有 roots。
 - 理由：
   - 舊 root 沒有合法 consumer，實際刪除比只在 status 隱藏更能消除 overflow 與最舊時間的錯誤來源。
   - 三表同時清理避免只刪 path row 後留下 active／failed reconcile cursor 或 seen scope；清理 root state 不涉及來源檔案與索引文件。

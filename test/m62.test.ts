@@ -10,6 +10,7 @@ import { LiveWorkQueue, workStatePath } from "../src/live-queue.js";
 import { LiveUpdateEngine } from "../src/live-update.js";
 import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
+import { createWorkbench, type WorkbenchHandle } from "../src/workbench.js";
 import { sync } from "../src/sync.js";
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
@@ -150,6 +151,78 @@ test("0.43.0 removing a root clears every live state table", async () => {
     assert.deepEqual(fixture.store.roots(), []);
     assertRootStateCleared(queue, fixture.root);
   } finally {
+    queue.close();
+    fixture.store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("0.43.0 purge of a current root leaves all live work state unchanged", async () => {
+  const fixture = await setup({ "seed.txt": "seed" });
+  const queue = new LiveWorkQueue(fixture.database);
+  try {
+    seedState(queue, fixture.root);
+    const beforeItems = queue.list(fixture.root);
+    const beforeState = queue.reconcileStatus(fixture.root);
+    const beforeSeen = queue.reconcileSeenPaths(fixture.root, beforeState!.generation);
+    assert.equal(fixture.store.purgeTrashRoots([fixture.root]), 0);
+    assert.deepEqual(queue.list(fixture.root), beforeItems);
+    assert.deepEqual(queue.reconcileStatus(fixture.root), beforeState);
+    assert.deepEqual(queue.reconcileSeenPaths(fixture.root, beforeState!.generation), beforeSeen);
+  } finally {
+    queue.close();
+    fixture.store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("0.43.0 purge of a trashed root removes its stale live work state", async () => {
+  const fixture = await setup({ "seed.txt": "seed" });
+  const queue = new LiveWorkQueue(fixture.database);
+  try {
+    fixture.store.moveRootsToTrash([fixture.root]);
+    seedState(queue, fixture.root);
+    assert.equal(fixture.store.purgeTrashRoots([fixture.root]), 1);
+    assertRootStateCleared(queue, fixture.root);
+  } finally {
+    queue.close();
+    fixture.store.close();
+    await rm(fixture.temp, { recursive: true, force: true });
+  }
+});
+
+test("0.43.0 workbench complete index preserves current root live work state", async () => {
+  const fixture = await setup({ "seed.txt": "seed" });
+  const queue = new LiveWorkQueue(fixture.database);
+  let handle: WorkbenchHandle | undefined;
+  try {
+    seedState(queue, fixture.root);
+    const beforeItems = queue.list(fixture.root);
+    const beforeState = queue.reconcileStatus(fixture.root);
+    const beforeSeen = queue.reconcileSeenPaths(fixture.root, beforeState!.generation);
+    handle = await createWorkbench({
+      databasePath: fixture.database,
+      token: "m62-token",
+      secret: Buffer.alloc(32, 4),
+      environment: {},
+      tempParent: fixture.temp,
+      indexHold: async () => {},
+    });
+    const origin = handle.url.split("/#")[0]!;
+    const response = await fetch(origin + "/api/index", {
+      method: "POST",
+      headers: { "X-LocalDocSearch-Token": "m62-token", origin, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(response.status, 202);
+    await handle.waitForIndex();
+    const status = await fetch(origin + "/api/index-status", { headers: { "X-LocalDocSearch-Token": "m62-token" } });
+    assert.equal((await status.json() as { indexing: { state: string } }).indexing.state, "complete");
+    assert.deepEqual(queue.list(fixture.root), beforeItems);
+    assert.deepEqual(queue.reconcileStatus(fixture.root), beforeState);
+    assert.deepEqual(queue.reconcileSeenPaths(fixture.root, beforeState!.generation), beforeSeen);
+  } finally {
+    await handle?.close();
     queue.close();
     fixture.store.close();
     await rm(fixture.temp, { recursive: true, force: true });

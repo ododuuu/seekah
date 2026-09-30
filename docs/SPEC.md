@@ -2239,6 +2239,7 @@ docsearch doctor
 - `moveRootsToTrash`、`removeRoot` 與 `mergeChildRoots` 成功提交後，必須清理被移除或被合併的舊 root 工作狀態；合併保留的 parent root 工作狀態不得清理。垃圾桶永久清除入口也不得重新留下被清除 root 的工作狀態。
 - 垃圾桶只保存 root metadata；還原以同一路徑重新 index／register 後，該 root 視為新的現有 root，可重新建立新的 generation、reconcile scope 與局部更新待辦，不得因先前清理而拒絕更新。
 - 根目錄生命週期後的工作狀態清理是 best-effort 整理，不屬於主索引交易的成功條件；`.work.sqlite` 忙碌或清理失敗不得讓已成功的 trash／merge／remove 呼叫回傳錯誤。沒有可用 logger 的 store 入口靜默略過，下一次 engine 啟動的 `cleanupOrphanRoots` 必須補清。
+- `purgeTrashRoots` 只可清理本次實際從 `root_trash` 刪除、且目前不在 `this.roots()` 的 root；傳入仍登錄的現根或沒有刪除 `root_trash` 列時不得修改其三表。其他 lifecycle 入口同樣只清理已離開 `roots()` 的路徑。
 - 清理只依 root 歸屬判斷，不以「目前沒有文件」或來源資料夾是否存在判斷；來源檔案與索引文件內容不因工作狀態清理而刪除。
 
 ### 69.3 明確不做
