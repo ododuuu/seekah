@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { formatExclusionExplanation, formatExclusionPolicyLines, type ExclusionPathResult } from "../src/describe-exclusion.js";
+import { formatExclusionExplanation, formatExclusionPolicyLines, formatZeroResultExclusionHint, type ExclusionPathResult } from "../src/describe-exclusion.js";
 import { explainPathSync } from "../src/exclusion-visibility.js";
 import { indexStatus, explainPath } from "../src/mcp-tools.js";
 import { MCP_TOOL_NAMES } from "../src/mcp.js";
@@ -89,6 +89,11 @@ test("M67 shared exclusion explanation covers every current path state and never
     assert.match(text, pattern);
     assert.doesNotMatch(text, /m67-secret-body|不應輸出這段錯誤原文/u);
   }
+  assert.match(formatZeroResultExclusionHint("cli"), /seekah explain <路徑>.*docsearch explain <路徑>/u);
+  assert.doesNotMatch(formatZeroResultExclusionHint("cli"), /\/explain/u);
+  assert.match(formatZeroResultExclusionHint("tui"), /\/explain <路徑>/u);
+  assert.doesNotMatch(formatZeroResultExclusionHint("tui"), /seekah explain/u);
+  assert.match(formatZeroResultExclusionHint("workbench"), /下方輸入檔案路徑/u);
   const policyText = formatExclusionPolicyLines({
     root: "C:/docs",
     rules: [{ id: "builtin:test", pattern: "test/**", name: "測試規則", reason: "測試理由", warning: "測試警告", source: "builtin" }],
@@ -147,7 +152,18 @@ test("M67 workbench exclusions and explain validate token, origin, length and cu
     assert.match(exclusionData.roots[0]!.summary, /預設排除/u);
     const preview = await fetch(origin + "/api/exclusions?root=" + encodeURIComponent(item.root), { headers });
     assert.equal(preview.status, 200);
-    assert.equal((await preview.json() as { requested: { root: string } }).requested.root, path.resolve(item.root));
+    const registeredPreview = await preview.json() as { requested: { root: string; ignoreFiles: Array<{ patterns: string[] }> } };
+    assert.equal(registeredPreview.requested.root, path.resolve(item.root));
+    assert.ok(registeredPreview.requested.ignoreFiles.some(file => file.patterns.includes("private/")));
+    const unregisteredRoot = path.join(item.temp, "unregistered-preview");
+    await mkdir(unregisteredRoot, { recursive: true });
+    await writeFile(path.join(unregisteredRoot, ".localdocsearchignore"), "m67-preview-secret/**\n");
+    const unregisteredPreview = await fetch(origin + "/api/exclusions?root=" + encodeURIComponent(unregisteredRoot), { headers });
+    assert.equal(unregisteredPreview.status, 200);
+    const unregisteredData = await unregisteredPreview.json() as { requested: { root: string; ignoreFiles: Array<{ patterns: string[] }> } };
+    assert.equal(unregisteredData.requested.root, path.resolve(unregisteredRoot));
+    assert.deepEqual(unregisteredData.requested.ignoreFiles, []);
+    assert.doesNotMatch(JSON.stringify(unregisteredData), /m67-preview-secret/u);
     const excluded = await fetch(origin + "/api/explain", { method: "POST", headers: postHeaders, body: JSON.stringify({ path: item.excluded, state: "indexed" }) });
     assert.equal(excluded.status, 200);
     const excludedData = await excluded.json() as { state: string; message: string; errorMessage?: string };
@@ -156,6 +172,12 @@ test("M67 workbench exclusions and explain validate token, origin, length and cu
     assert.equal("errorMessage" in excludedData, false);
     const unindexed = await fetch(origin + "/api/explain", { method: "POST", headers: postHeaders, body: JSON.stringify({ path: item.unindexed }) });
     assert.equal((await unindexed.json() as { state: string }).state, "unindexed");
+    const outside = await fetch(origin + "/api/explain", { method: "POST", headers: postHeaders, body: JSON.stringify({ path: item.outside }) });
+    assert.equal(outside.status, 200);
+    const outsideData = await outside.json() as { state: string; message: string; exists?: boolean };
+    assert.equal(outsideData.state, "outside-root");
+    assert.match(outsideData.message, /不在任何已登錄根目錄內/u);
+    assert.equal("exists" in outsideData, false);
     const wrongToken = await fetch(origin + "/api/exclusions");
     assert.equal(wrongToken.status, 403);
     const wrongOrigin = await fetch(origin + "/api/explain", { method: "POST", headers: { ...headers, origin: "http://127.0.0.1:1", "content-type": "application/json" }, body: JSON.stringify({ path: item.indexed }) });
@@ -165,6 +187,19 @@ test("M67 workbench exclusions and explain validate token, origin, length and cu
     const tooLong = await fetch(origin + "/api/explain", { method: "POST", headers: postHeaders, body: JSON.stringify({ path: "x".repeat(16_385) }) });
     assert.equal(tooLong.status, 400);
   } finally { await handle.close(); await closeFixture(item); }
+});
+
+test("M67 Windows explain matches indexed paths case-insensitively", { skip: process.platform === "win32" ? false : "Windows-only path semantics" }, async () => {
+  const item = await fixture();
+  const store = new IndexStore(item.databasePath);
+  try {
+    const explained = explainPathSync(store, item.indexed.toLowerCase());
+    assert.equal(explained.state, "indexed");
+    assert.equal(explained.documentStatus, "indexed");
+  } finally {
+    store.close();
+    await closeFixture(item);
+  }
 });
 
 test("M67 TUI status and explain show the shared current explanation and zero-result hint", async () => {
@@ -194,6 +229,10 @@ test("M67 MCP index_status adds exclusion policy and explain_path stays read-onl
     assert.equal(explained.state, "excluded");
     assert.match(explained.message, /\.localdocsearchignore|使用者/u);
     assert.doesNotMatch(JSON.stringify(explained), /m67-private-body|errorMessage/u);
+    const outside = explainPath(store, item.outside);
+    assert.equal(outside.state, "outside-root");
+    assert.equal("exists" in outside, false);
+    assert.match(outside.message, /不在任何已登錄根目錄內/u);
     assert.ok(MCP_TOOL_NAMES.includes("explain_path"));
   } finally { store.close(); await closeFixture(item); }
 });

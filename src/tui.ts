@@ -729,7 +729,7 @@ export async function runTui(
       { kind: "prompt", text: normalizedQuery, detail: modeLabel },
       { kind: "search", text: `找到 ${formatTotal(session.originalTotal, session.originalTotalRelation)} 份文件`, detail: `${modeLabel} · 真實索引結果` },
     );
-    message = session.originalTotal ? "↑↓ 移動、Space 選取、Enter 預覽、PgUp/PgDn 翻頁。" : `沒有符合的結果。${formatZeroResultExclusionHint()}`;
+    message = session.originalTotal ? "↑↓ 移動、Space 選取、Enter 預覽、PgUp/PgDn 翻頁。" : `沒有符合的結果。${formatZeroResultExclusionHint("tui")}`;
   };
   const movePage = (delta: number) => {
     if (!page) { message = "請先搜尋。"; return; }
