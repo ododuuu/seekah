@@ -29,6 +29,41 @@
   - 不改 IPC／MCP 工具名稱、`docsearch` 入口、LocalDocSearch 資料目錄。
 - 版本：待合併時決定；本分支不修改 `package.json` 版本。
 
+## D108：長精確片語候選查詢批次化與 filename-only 隔離
+
+- 日期：2026-10-01。依 SPEC §76；本分支只處理搜尋候選查詢、批次驗證與 `test/m70.test.ts`，不修改 package 版本、索引 schema 或使用者資料。
+- 事實：
+  - 使用者回報的真實形狀是約 542,262 筆文件，其中約 39,020 筆有正文、約 501,541 筆是 `unsupported` 僅檔名紀錄；真實索引不讀取、不複製、不作為本次測試資料。
+  - 隔離合成索引以 40,000 筆 `indexed` 內容加 500,000 筆 `unsupported` metadata 重現。基線四種查詢：`notes`／`filename` 約 2.03 秒、`notes`／`content` 約 1.69 秒、`seekah`／`all` 約 2.19 秒、19 位數字精確片語無結果約 125.88 秒。
+  - 長數字基線 trace 顯示 `documentsInScope=540000`、`documentsConsidered=40000`、`documentsExactVerified=40000`、`indexPostingRows=80000`、`indexCandidateChunks=40000`、`indexVerifiedChunks=40000`、`documentsMatched=0`；`postingsLookup` inclusive 約 238.18 秒、`exactVerification` inclusive 約 124.39 秒。
+  - 獨立 `node --cpu-prof` 基線執行 81.69 秒，45,308／51,609 samples（87.79%）落在 `cachedIndexRows`；因此主要成本是每個候選文件重複執行相同的 chunk／heading FTS lookup，不是 phrase exact verification 本身。
+- 決定：
+  - chunk FTS 使用 `detail=none`，不使用 SQLite 不支援的 phrase `MATCH`。phrase candidate 保持既有 trigram `AND` superset；對未受 `restrict` 限制的 phrase search，新增一次性的 chunk／heading posting query，依 document id 分組，`rankOne` 重用候選 chunk／heading rows。正規化 query 達 8 個 code point 時，改以同一個 FTS-filtered payload cursor 逐 chunk exact verify 並直接依 document id 保存第一個命中 ordinal，避免另做第二次 chunk candidate scan；仍逐 chunk／逐 block 驗證。
+  - 每個 unrestricted phrase 的 chunk／heading posting batch 以 `200,000` rows 為 materialization 安全上限，SQLite cursor 超限即停止讀取並回到既有逐文件 FTS lookup；這不是候選丟棄，不能改變 exact verification、total 或排序。批次 map 只在第一次真正需要 heading／content 時建立；少於 3 個 normalized code point、U+0000、`restrict` 與 `all-terms` 維持保守舊路徑。
+  - `restrict` search 與 `all-terms` 維持逐文件／逐 term 的既有路徑，避免批次候選 map 改寫 restricted id 或跨 term coverage 語意。phrase 批次 map 只存在單次 search，不是持久化全文 cache。
+  - `sort=relevance` 的 `possible` phase 在 `field=all` 僅對 phrase 排除已由 filename rank 4／3 處理的 filename source；`all-terms` 保留 filename source 以支援 filename／內容分散 term。`field=filename`、`field=content`、`sort=filename`、`sort=modified` 與 restricted search 保留原欄位及順序來源。
+  - 不新增表、欄位、migration、頻率統計、固定時間逾時或猜測式無結果；安全上限只限制一次 materialization 的暫存量，超限仍走完整逐文件 fallback。不改 `rankOne` 的排名、排序、頁面、快速／精確總數或片段語意。
+- 理由：
+  - 批次 query 回傳的 rows 與既有每文件 `indexMatch(term, false)` 使用相同 trigram superset；只改 FTS／payload lookup 的重用方式，exact verification 仍逐 chunk、逐 block 執行，因此不會把 false positive 當成結果或漏掉跨段落邊界。
+  - filename-only 文件只需要檔名 phase；在 relevance 內容 phase 移除重複 filename source 可避免 500,000 筆 metadata 參與第二次 candidate UNION／排序，而不影響 filename rank 或 filename／modified sort。
+- 否決：
+  - 不使用 `indexMatch(term, true)` 的連續 phrase candidate；目前 chunk FTS 的 `detail=none` 對 phrase `MATCH` 直接回報 `fts5: phrase queries are not supported`，改用它會使搜尋失敗。
+  - 不新增「最稀有 n-gram」頻率表或 migration；需要新統計、失效與舊索引回退，現有安全 superset 加上批次 lookup 已能消除本案例的重複查詢。
+  - 不以固定候選上限丟棄未驗證候選；本次採用的上限只保護 JavaScript materialization，超限必須完整回退逐文件 lookup。也不新增 wall-time timeout 或無結果猜測，避免漏掉有效片語、改變精確總數或把 `gte` 誤報為 `eq`。
+  - 不在搜尋結果層把 filename-only 文件全部排除，也不把 `field=all` 改成內容搜尋；檔名可搜尋與既有 rank 仍是產品契約。
+  - 不在本分支改工作台 UI；目前前端只有 `searchSeq` stale-response guard，`api()` 的 `fetch` 沒有 `AbortSignal`，server `/api/search` 也沒有查詢取消／逾時或進度回報。此項列為另案建議，避免以 UI 改動掩蓋後端候選瓶頸。
+- 驗證：
+  - `test/m70.test.ts` 以 current chunk store 與既有 block／逐文件路徑比對多組 query、mode、field、sort 的完整結果集合與順序；`test/m70b.test.ts` 再覆蓋 types／root／subtree／statuses、restrict、Unicode／NFKC／代理對／U+0000、7／8／9 code point、fast 499／500／501、跨 64 KiB chunk、filename lazy build 與低上限 fallback。
+  - 低上限測試直接驗證 chunk／heading batch 回傳 fallback sentinel（不建立 materialized map），並比較 default batch、低上限逐文件 fallback、`createBlockIndexStore`、`createLegacyStore` 的結果集合與順序。
+  - 反向暫時移除批次 candidate reuse、filename source isolation、延遲建立或安全上限時，m70／m70b 至少一項應失敗；還原後重跑 build、聚焦測試、批次／逐文件反向驗證、`node --cpu-prof`、合成 540,000 筆量測與完整 `npm test`。
+  - 本機 win32 合成資料證據不代表公司 Windows 人工驗收；報告保留基線、CPU profile、SEARCH_TRACE、修正後 wall time、counts、materialization fallback 與 sustained p95 原因量測。
+  - 驗收後長片語改用單一 `chunkPhraseDocumentHits` payload cursor 直接依 document 保存 exact ordinal；修正後單輪 `filename=645.5ms`、`content=238.4ms`、`all=216.3ms`、長數字無結果 `1323.9ms`，長查詢 `indexPostingRows` 由 80,000 降為 40,000。10 輪 p95 為 `1775.0ms`、`700.2ms`、`686.8ms`、`4052.1ms`；前三項達 2 秒，長數字仍未達 sustained p95 目標。
+  - 原因量測：`--expose-gc` 每次查詢前強制 GC，長查詢五輪為 `1515.1/3780.9/3835.3/3833.8/3809.9ms`，RSS 約 319～326 MiB；combined cursor 的 CPU profile 為 1,160 samples，其中 GC 219、`processChunkSync` 170、`chunkPhraseDocumentHits` 146、`chunkCandidateDocuments` 164、Zstd 135。故仍是重複 zstd 解壓／native allocation 與 sustained CPU 負載，非未受限 candidate Map 或 cursor 未關閉；不新增全文 cache、timeout 或猜測式剪枝。
+- 相容與風險：
+  - 不改 `LocalDocSearch` 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／`docsearch` 識別、文件內容與來源檔案；讀取仍完全在本機。
+  - 批次候選 map 若沒有某文件 row，等價於既有逐文件 FTS 查詢得到空候選；scope、status 與 root/subtree 在 batch SQL 先套用，exact verification 仍保留。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D107：工作台手動重新檢查已登錄根目錄內的資料夾
 
 - 日期：2026-09-30。依 SPEC §75；本分支只處理工作台重新檢查入口、server 範圍驗證、索引報告與相關測試，不修改版本、STATUS、handoff 或 NEXT-TODO。

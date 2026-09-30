@@ -108,6 +108,7 @@ export function decodeLayout(layout: Uint8Array): { starts: number[]; ordinals: 
 }
 
 const ASCII = /^[\x00-\x7f]*$/u;
+const ASCII_CASE_NEUTRAL = /^[^A-Za-z]*$/u;
 
 /** A chunk holds at most 64 Ki UTF-16 units (≤192 KiB UTF-8), so one 256 KiB output buffer avoids re-chunking (~30% faster). */
 function decompressChunk(text: Uint8Array): string {
@@ -157,6 +158,36 @@ export function blocksContaining(text: Uint8Array, layout: Uint8Array, terms: re
     if (firstOnly && wanted.every(term => hits.get(term)!.length)) break;
   }
   return hits;
+}
+
+/** First exact block ordinal for one phrase; avoids per-term Map/array allocation on the no-hit path. */
+export function firstBlockContaining(text: Uint8Array, layout: Uint8Array, term: string): number | undefined {
+  const joined = decompressChunk(text);
+  const ascii = ASCII.test(joined);
+  if (!ascii) {
+    const { starts, ordinals } = decodeLayout(layout);
+    for (let index = 0; index < starts.length; index++) {
+      const end = index + 1 < starts.length ? starts[index + 1]! - 1 : joined.length;
+      if (normalizeText(joined.slice(starts[index], end)).includes(term)) return ordinals[index];
+    }
+    return undefined;
+  }
+  // For digits, whitespace and punctuation, lower-casing the chunk cannot
+  // change whether the normalized query is present; avoid that allocation in
+  // the common long numeric no-hit scan.
+  const normalizedJoined = ASCII_CASE_NEUTRAL.test(term) ? joined : joined.toLowerCase();
+  let from = 0;
+  let block = 0;
+  let layoutData: { starts: number[]; ordinals: number[] } | undefined;
+  while (true) {
+    const at = normalizedJoined.indexOf(term, from);
+    if (at < 0) return undefined;
+    const positions = layoutData ??= decodeLayout(layout);
+    while (block + 1 < positions.starts.length && positions.starts[block + 1]! <= at) block++;
+    const end = block + 1 < positions.starts.length ? positions.starts[block + 1]! - 1 : joined.length;
+    if (at + term.length <= end) return positions.ordinals[block];
+    from = at + 1;
+  }
 }
 
 /** Original block contents of one chunk, in ordinal order. */
