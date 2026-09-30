@@ -2188,3 +2188,36 @@ docsearch doctor
 - `test/m60.test.ts` 以注入錯誤模擬 MCP 工具路徑、TUI 與 autoupdate 分類。
 - package 版本維持 0.42.0。
 
+## 70. 背景校正 frontier 的 scope 收尾安全
+
+依 D102。背景校正以 stack 形式保存 `state.frontier`；目前 `directory` 只有在其所有子目錄都已完成時，才可作為刪除核對的 scope。這是資料完整性規則，不是效能最佳化。
+
+### 70.1 Frontier 與刪除核對規則
+
+- `directory` 必須是 `state.frontier` 的頂端，才可從 frontier pop，並以該 `directory` 呼叫 `removeMissing`。
+- 處理父目錄 entries 時若 push 了子目錄，父目錄不再是 frontier 頂端；必須先 flush 目前 pending seen／state，保留父目錄與子目錄 frontier，下一輪處理子目錄。子目錄完成後回到父目錄，父目錄重新列舉時以 durable／pending `hasSeen` 略過已處理 entries，再由父目錄收尾。
+- 若 entry／時間 budget 在子目錄中間中斷，未完成的子目錄不得 pop；持久化 frontier 與 durable seen 必須讓下一次 batch／程序重啟從該子目錄接續，重播已提交 entries 可接受但不得把未見路徑當成消失。
+- 只有 scope 真的完成、seen 已 durable，且該 scope 沒有 `readFailures`、`deferredChecks` 或未捕獲 work item 時，才可對該 scope 執行 `removeMissing`。`complete=false` 不得回溯已提交的合法 sibling scope，也不得放寬未完成 scope 的刪除前提。
+- §60 的讀取失敗／延後核對分類、§64 的 flush-before-pop／at-least-once、§56.2 的子樹刪除安全全部維持。來源文件永遠不因索引刪除而被刪除。
+
+### 70.2 明確否決
+
+- 不把所有 `removeMissing` 延後到整個 root frontier 耗盡；已完整完成且獨立安全的 sibling scope 仍可分批刪除，避免大型 root 的刪除進度與中斷接續退化。
+- 不在 `store.removeMissing` 內猜測 traversal frontier、重建不完整 known 集合或以全 root 強制保護取代 scope 判定；store 只依呼叫者提供的 root／subtree／known／protected scope 執行既有刪除契約。
+- 不改 work state schema、reconcile generation、`reconcile_seen` durability、`sync.ts`、`scanner.ts` 或 root 範圍語意；本節只修背景校正的 frontier／scope 收尾。
+- 不以刪除索引、清空 queue、重建資料庫、關閉 durability 或吞掉讀取錯誤掩蓋問題。
+
+### 70.3 測試與驗證
+
+- nested root 的既有 25 份文件：背景 batch 不完整時 `removed=0`，safe 文件索引與來源都保留。
+- nested subtree 中真正消失的檔案仍會被 `removeMissing` 移除，其他檔案保留。
+- 在子目錄中間中斷後關閉並重啟 queue／reconcile，接續結果與不中斷結果相同，且全程沒有誤刪。
+- 子目錄 `readdir` 讀取失敗時保留該子樹既有索引，正常 sibling 仍可依既有 §60 語意處理。
+- 反向驗證必須以未修正的 `src/reconcile.ts` 使 nested regression 失敗，還原後通過；另執行完整 `npm test`、記錄既有 win32 M26 path coverage 與 M36 profile chmod 失敗，不得把它們誤歸因於本修正。
+- 以隔離資料目錄、先索引再啟動 autoupdate、140 個頂層資料夾重跑 pi 事件雜訊形狀，記錄第一批背景 `移除` 與索引文件數；不得接觸使用者 daemon／資料。
+
+### 70.4 相容性
+
+- 不改搜尋結果、文件 ID、索引 schema、work state schema、事件 queue durability、root／ignore 語意或 package 版本。
+- 只改背景校正何時可把已確認完成的 scope 交給既有 `removeMissing`；未完成或失敗範圍維持保守保留。
+

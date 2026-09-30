@@ -232,6 +232,10 @@ export async function runBackgroundReconcileBatch(
         break;
       }
       flush(); // all seen for this dir must be durable before pop
+      if (state.frontier[state.frontier.length - 1] !== directory) {
+        // A child directory is still on top; finish it before this scope.
+        continue;
+      }
       state.frontier.pop();
       const readFailureBelow = state.readFailures.some(item => coversPath(directory, item));
       const deferredBelow = state.deferredChecks.some(item => coversPath(directory, item));
