@@ -6,7 +6,7 @@ import { RootExclusion } from "./root-exclusion.js";
 import { classifyReprocess, emptyStatusCounts, reprocessAction, supportedExtensions, type Diagnostic, type DocumentRecord } from "./model.js";
 import { parseDocument } from "./parser.js";
 import { throwIfAborted } from "./progress.js";
-import { samePath } from "./root-plan.js";
+import { runtimePathPlatform, samePath } from "./root-plan.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
@@ -217,7 +217,7 @@ export async function prepareFileUpdate(
   if (!info.isFile()) return { kind: "result", result: skippedResult(filePath, root) };
 
   const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
-  if (shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, false)) {
+  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, false)) {
     return { kind: "result", result: skippedResult(filePath, root) };
   }
 
@@ -304,7 +304,7 @@ export async function commitPreparedFileUpdateLocked(
     return deferredResult(prepared.filePath, prepared.root, "FILE_UNSTABLE");
   }
   const exclusion = options.exclusion ?? await RootExclusion.load(prepared.root, store);
-  if (shouldIgnoreWatchPath(prepared.filePath, prepared.root) || exclusion.excludes(prepared.filePath, false)) {
+  if (shouldIgnoreWatchPath(prepared.filePath, prepared.root, runtimePathPlatform()) || exclusion.excludes(prepared.filePath, false)) {
     result.kind = "skipped";
     return result;
   }
@@ -388,7 +388,7 @@ async function applyFileUpdateLocked(
   const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
   const ignore = {
     match(filePath: string, isDirectory: boolean) {
-      return shouldIgnoreWatchPath(filePath, root) || exclusion.excludes(filePath, isDirectory);
+      return shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, isDirectory);
     },
   };
   const lstatFn = options.lstat ?? lstat;
@@ -557,6 +557,11 @@ async function applyPathDeleteLocked(
 ): Promise<LocalUpdateResult> {
   const result = emptyResult("file-delete", filePath, root);
   if (!store.roots().includes(root)) {
+    result.kind = "skipped";
+    return result;
+  }
+  const exclusion = options.exclusion ?? await RootExclusion.load(root, store);
+  if (shouldIgnoreWatchPath(filePath, root, runtimePathPlatform()) || exclusion.excludes(filePath, undefined)) {
     result.kind = "skipped";
     return result;
   }

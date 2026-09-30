@@ -2292,3 +2292,54 @@ docsearch doctor
 - 不改搜尋結果、文件 ID、索引 schema、work state schema、事件 queue durability、root／ignore 語意或 package 版本。
 - 只改背景校正何時可把已確認完成的 scope 交給既有 `removeMissing`；未完成或失敗範圍維持保守保留。
 
+
+## 71. 整顆本機磁碟根目錄的預設排除與可見性
+
+依 D103。起因：使用者把整顆 Windows 本機磁碟（例如 `C:\`）登錄為根目錄時，系統目錄、程式資料、快取與權限受限範圍會造成大量無關事件、讀取錯誤與索引噪音；排除若沒有可查詢的摘要，使用者會把「搜尋不到」誤認為索引失敗。本節只定義政策核心與穩定診斷介面，CLI／工作台的呈現由後續入口實作依本節資料契約完成。
+
+### 71.1 作用範圍與規則
+
+- 只有 Windows `win32` 平台且 effective root 是本機磁碟代號的精確 volume root 時啟用 volume-default policy，例如 `C:\`、`D:\`；`C:` 的既有正規化沿用。UNC root、非磁碟根（例如 `C:\Users\mains`、`C:\work`）、POSIX root 與其他平台不得套用本節新增清單。
+- volume root 的第一版預設排除為：`Windows\`、`Program Files\`、`Program Files (x86)\`、`ProgramData\`、`Users\<profile>\AppData\`、`PerfLogs\`；既有 `$Recycle.Bin\` 與 `System Volume Information\` 排除規則保留。
+- `Users` 本身、`Desktop`、`Documents`、`Downloads` 與其他未列入清單的子目錄仍可掃描。`Users\<profile>\AppData` 只匹配 `Users` 直屬的一層 profile 再接 `AppData`，不得把任意層級名為 `AppData` 的目錄排除。
+- 比對使用 root-relative 的完整 path segment、Windows 不分大小寫；`Windows-old`、`ProgramData2`、`AppData-notes`、`C:\work\Windows` 與 `C:\Users\<profile>\Documents\AppData` 不得因名稱相似而排除。根目錄本身不因名稱命中而被排除。
+- 內建規則不得由 `.localdocsearchignore` 重新納入。現行 `!` 語法仍回報 `IgnoreConfigurationError`；普通 ignore 只能追加排除，不得降低 volume-default 或既有 built-in 的優先序。程式不得建立、修改或刪除使用者 ignore 檔。
+- 使用者若確實需要索引被排除位置，替代做法是先移除／移至垃圾桶該 volume root，再直接登錄需要的較窄目錄，例如 `C:\ProgramData\Vendor\Docs`；來源檔案不需搬動。若 `C:\` 仍是有效父根，依根目錄涵蓋／合併語意，新增窄根目錄不是 override，不能藉此繞過 volume-default；保留父根時的明確 per-root opt-in 必須另立規格，不提供隱藏旗標或 `--include-system-paths`。
+- 直接指定 `$Recycle.Bin` 或 `System Volume Information` 作為 root 的既有拒絕行為不變；本節不加入 `Recovery`、`Boot`、`Config.Msi`、`MSOCache`、`Windows.old` 或任意 `AppData` 名稱。
+
+### 71.2 唯一判定來源與穩定診斷介面
+
+- `src/default-exclusions.ts` 是預設排除政策與診斷的唯一公開核心。必須匯出：
+  - `listDefaultExclusions(root, platform?)`：回傳該 root 目前生效的預設規則，每筆至少包含穩定 `id`、root-relative `pattern`、繁體中文 `name`、`reason` 與 `warning`；volume-default 只在本節作用範圍出現，既有 built-in 仍依 root／平台出現。
+  - `explainExclusion(root, absPath, store)`：回傳 `excluded`、`source`（`builtin`／`volume-default`／`user-rule`／`link`／`index-artifact`／`not-excluded`）、`matchedRule` 與 `base`；沒有命中時兩個規則欄位回傳 `null`。`user-rule` 的 `base` 必須是實際規則檔所在 root，不能只回 effective root。
+  - `source`、規則 id 與摘要欄位必須可供 CLI／工作台直接轉換，不得要求入口重新解析路徑或複製清單；診斷不得讀取或回傳文件正文。
+- 完整掃描、前景 watch、背景 autoupdate、背景 reconcile、局部更新、資料夾展開、root-exclusion 與 root plan／同步入口，必須透過同一個 effective `RootExclusion` 判定。`scanner` 不得保留另一份 Windows 名稱清單；`watch-path` 的快速 callback 只能呼叫同一純函式結果。無法定位的 watcher 事件不得猜成未排除，改走既有 dirty-scope／完整校正保守路徑。
+- `scanner`、`reconcile`、`watch-path`、`local-update`、`live-update`、`root-exclusion` 六個入口對相同 `(root, absolutePath, kind)` 必須得到相同排除結果；`index-artifact` 與 link 也必須使用同一分類優先序。使用者規則錯誤時，built-in／volume-default 仍有效，但整體同步依既有錯誤契約回報失敗。
+
+### 71.3 不可沉默的略過與摘要
+
+- 預設排除不是沉默行為。完整掃描 report 的 `skipped` 必須保留既有 aggregate 欄位，並新增以穩定 rule id／規則文字索引的 per-rule 計數；每個排除規則命中的目錄／檔案 entry 至少計一次，不得把被略過子樹內部文件偽造成 parser 或讀取錯誤。
+- 背景 reconcile result 與背景／前景同步 log 必須回報每個命中規則的略過數；摘要不得寫入文件正文、正文片段或不必要的敏感資料。局部事件對可辨識的排除路徑不得寫入 queue，但必須累加可查的排除事件／規則計數。
+- 每次完整同步的 per-rule skipped 與既有索引清理進度必須持久化在該 root 的最後同步摘要；舊摘要缺少新欄位時以「未提供」解讀，不得假造 0。`status` 後續必須能顯示生效規則、命中數，以及既有索引清理的「已移除／待移除」數。
+- 既有索引清理進度是衍生索引的可見狀態，不是來源刪除狀態；取消、忙碌或讀取失敗時已提交批次保留，待移除數不得被顯示成已完成。來源檔案、資料夾、WAL、journal 與使用者設定永遠不因本政策刪除。
+
+### 71.4 完整校正與既有索引清理
+
+- volume root 首次套用本政策後的下一次完整校正，必須把目前生效預設排除範圍視為來源範圍之外，移除其中既有索引文件；其他可確認存在且未被排除的文件保留。普通局部事件不得以單檔 delete 取代這次 scope-safe 清理。
+- 清理重用 §51 的刪除契約：每批最多 1,000 份文件、有限 transaction、批次間檢查取消並讓出事件迴圈；外鍵／搜尋索引清理與既有 `removeMissing` 語意不變，不把文件重新排成 live queue event。
+- 校正只在該 scope 已完整列舉、seen 已 durable 且沒有 §60 的 `readFailures`／`deferredChecks` 時執行 `removeMissing`；其他失敗不得被 volume-default 清理掩蓋。批次中斷後下次校正冪等接續，並可從 status 看到已移除／待移除。
+- 清理完成不代表來源不可再索引；若未來另案提供明確 opt-in，仍須由所有入口重新驗證同一 policy。當前替代做法是移除父 volume root 後登錄窄根目錄。
+
+### 71.5 相容性與明確不做
+
+- 不改索引 schema、work state schema、generation、queue durability、文件 id、搜尋排序、來源文件、LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、IPC／MCP／`docsearch` 識別或 package 版本。
+- 不把清單套用到所有 root，不因任意目錄名稱是 `Windows`、`ProgramData` 或 `AppData` 就排除；不支援 ignore `!`、隱藏 bypass、管理員權限、raw volume access、USN Journal、原生 watcher、Windows Service、LAN 或外部服務。
+- 不以 status 顯示過濾取代持久化清理，不清空資料庫、不刪 WAL／journal、不使用無界 transaction，不把本機測試結果宣稱為公司 Windows 驗收。
+
+### 71.6 驗收與測試
+
+- `test/m64.test.ts` 必須覆蓋：win32 volume root／非 volume root／UNC／POSIX 與大小寫、`C:` 正規化及尾端分隔符；精確規則、後代、相似名稱、profile 結構、root 本身、link／junction、index artifact 與既有 `$Recycle.Bin`／`System Volume Information` 邊界。
+- 以同一合成樹驗證 `RootExclusion`、scanner、reconcile、watch-path、local-update、live-update、root plan 的 parity；被排除 subtree 不呼叫 parser、不寫 queue，`skipped.byRule` 與最後摘要保留規則計數，一般 `Users` 文件仍可搜尋。
+- 預先索引被排除路徑後執行完整校正，驗證來源仍在、只移除 excluded rows、sibling 保留、清理可取消並以 §51 分批接續；大量 synthetic metadata 必須證明批次不是單一超大 transaction，不能以小 fixture 宣稱解決真實 175,324 份規模。
+- 驗證 `!Windows/`／`!ProgramData/` 仍拒絕、父 volume root 存在時窄根目錄不是 override、移除父根後窄根目錄可索引；補上規則 API、背景 reconcile 摘要與 status 資料契約測試。
+- 反向驗證至少暫時繞過 central policy 或還原一個入口，使 parity、事件略過或既有索引清理測試失敗；還原後執行 `npm run build`、聚焦測試與完整 `npm test`。

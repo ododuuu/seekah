@@ -9,7 +9,7 @@ import {
   isIgnoreFile, prepareFileUpdate, sleepMs, UNSTABLE_BACKOFF_MS, WRITER_BACKOFF_MS, withWriterBackoff,
   type LocalUpdateOptions, type LocalUpdateResult, type PreparedFileUpdate,
 } from "./local-update.js";
-import { coversPath, samePath } from "./root-plan.js";
+import { coversPath, runtimePathPlatform, samePath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
 import { OperationCancelledError, throwIfAborted, type ProgressUpdate } from "./progress.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
@@ -168,6 +168,8 @@ type RootState = {
   reconcileReason?: string;
   reconcileStartedAt?: string;
   reconcileUpdatedAt?: string;
+  reconcileSkippedByRule?: Record<string, number>;
+  exclusionCleanup?: { removed: number; pending: number };
   lastReconcileBatchAt?: number;
 };
 
@@ -312,12 +314,12 @@ export class LiveUpdateEngine {
     try {
       return RootExclusion.loadSync(root, this.store);
     } catch {
-      return RootExclusion.builtinOnly(root);
+      return RootExclusion.builtinOnly(root, this.store.databasePath);
     }
   }
 
-  private isExcluded(state: RootState, absPath: string, isDirectory: boolean): boolean {
-    return state.exclusion.excludes(absPath, isDirectory);
+  private isExcluded(state: RootState, absPath: string, isDirectory: boolean, isLink = false): boolean {
+    return state.exclusion.excludes(absPath, isDirectory, isLink);
   }
 
   snapshot(): LiveStatus {
@@ -330,6 +332,8 @@ export class LiveUpdateEngine {
         scopeMode: state.scopeMode,
         handles: state.handles.length,
         ...(state.lastError ? { lastError: state.lastError } : {}),
+        ...(state.reconcileSkippedByRule ? { skippedByRule: { ...state.reconcileSkippedByRule } } : {}),
+        ...(state.exclusionCleanup ? { exclusionCleanup: { ...state.exclusionCleanup } } : {}),
         ...(reconcile ? {
           reconcile: {
             generation: reconcile.generation,
@@ -427,6 +431,11 @@ export class LiveUpdateEngine {
 
   private printReport(report: SyncReport): void {
     this.log(`根目錄：${report.root}；更新 ${report.updated}、未變更 ${report.unchanged}、移除 ${report.removed}；耗時 ${report.elapsedMs} ms；完整：${report.complete ? "是" : "否"}`);
+    const skipped = Object.entries(report.skipped.byRule ?? {}).filter(([, count]) => count > 0);
+    if (skipped.length) this.log(`排除略過：${skipped.map(([id, count]) => `${id}=${count}`).join("、")}`);
+    if (report.exclusionCleanup) {
+      this.log(`既有排除索引清理：已移除 ${report.exclusionCleanup.removed}；待移除 ${report.exclusionCleanup.pending}`);
+    }
     if (this.options.verbose) {
       for (const notice of report.notices) this.log(`提示：${notice}`);
       for (const error of report.errors) this.log(`文件問題：${error}`);
@@ -493,6 +502,7 @@ export class LiveUpdateEngine {
       lockHeld: true,
       signal: this.abort.signal,
       ...(this.options.onProgress ? { onProgress: this.options.onProgress } : {}),
+      ...(exclusionForBatch ? { exclusion: exclusionForBatch } : {}),
     };
     const started = this.now();
     let writerBusy = false;
@@ -505,6 +515,7 @@ export class LiveUpdateEngine {
         if (!existing || existing.phase !== "active") this.rootScanCount++;
         const result = await runBackgroundReconcileBatch(state.root, this.store, this.queue, {
           signal: this.abort.signal,
+          exclusion: state.exclusion,
           ...(this.options.now ? { now: this.options.now } : {}),
           ...(this.options.sleep ? { sleep: this.options.sleep } : {}),
           maxEntries: this.options.reconcileBatchEntries ?? DEFAULT_RECONCILE_BATCH_ENTRIES,
@@ -513,6 +524,8 @@ export class LiveUpdateEngine {
         state.reconcileGeneration = result.generation;
         state.reconcileChecked = result.checked;
         state.reconcileFrontier = result.frontierCount;
+        state.reconcileSkippedByRule = { ...result.skipped.byRule };
+        state.exclusionCleanup = { ...result.exclusionCleanup };
         const current = this.queue.reconcileStatus(state.root);
         if (current) {
           state.reconcileReason = current.reason;
@@ -527,7 +540,9 @@ export class LiveUpdateEngine {
           this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: result.complete };
           state.lastReconcileAt = this.lastReconcile.at;
         }
-        this.log(`背景校正：${state.root}；檢查 ${result.checked}；更新 ${result.updated}；移除 ${result.removed}；剩餘範圍 ${result.frontierCount}；完整：${result.complete ? "是" : "否"}`);
+        const skipped = Object.entries(result.skipped.byRule).filter(([, count]) => count > 0);
+        const skippedNotice = skipped.length ? `；排除略過 ${skipped.map(([id, count]) => `${id}=${count}`).join("、")}` : "";
+        this.log(`背景校正：${state.root}；檢查 ${result.checked}；更新 ${result.updated}；移除 ${result.removed}；剩餘範圍 ${result.frontierCount}；完整：${result.complete ? "是" : "否"}${skippedNotice}；既有排除索引清理已移除 ${result.exclusionCleanup.removed}、待移除 ${result.exclusionCleanup.pending}`);
         state.busyAttempt = 0;
       } else if (fullReconcile) {
         try {
@@ -678,6 +693,7 @@ export class LiveUpdateEngine {
       if (this.isExcluded(state, item.filePath, false)) { finish(item); continue; }
       let info: fs.Stats | undefined;
       try { info = await fs.promises.lstat(item.filePath); } catch { info = undefined; }
+      if (info?.isSymbolicLink() && this.isExcluded(state, item.filePath, false, true)) { finish(item); continue; }
       if (info?.isDirectory() && !info.isSymbolicLink() && !samePath(item.filePath, state.root)) {
         if (this.isExcluded(state, item.filePath, true)) { finish(item); continue; }
         const walked = await this.expandDirectory(state, item.filePath, walkBudget);
@@ -872,12 +888,12 @@ export class LiveUpdateEngine {
         const entry = listing.entries[listing.next++]!;
         budget--;
         const full = path.join(listing.dir, entry.name);
-        if (entry.isSymbolicLink() || shouldIgnoreWatchPath(full, state.root)) continue;
+        if (entry.isSymbolicLink() || state.exclusion.excludes(full, entry.isDirectory(), entry.isSymbolicLink())) continue;
         if (entry.isDirectory()) {
-          if (!this.isExcluded(state, full, true)) walk.frontier.push(full);
+          walk.frontier.push(full);
           continue;
         }
-        if (!entry.isFile() || this.isExcluded(state, full, false) || isIndexArtifact(full, this.store.databasePath)) continue;
+        if (!entry.isFile() || isIndexArtifact(full, this.store.databasePath)) continue;
         walk.seen.add(full);
         if (!this.persistPath(state, full, "expand")) return { done: true, budgetLeft: budget };
       }
@@ -1166,11 +1182,8 @@ export class LiveUpdateEngine {
     }
     const children: string[] = [];
     for (const entry of entries) {
-      if (shouldIgnoreWatchPath(entry.name, root)) continue;
-      if (entry.isSymbolicLink()) continue;
-      if (!entry.isDirectory()) continue;
       const child = path.join(root, entry.name);
-      if (this.isExcluded(state, child, true)) continue;
+      if (entry.isSymbolicLink() || !entry.isDirectory() || state.exclusion.excludes(child, true, entry.isSymbolicLink())) continue;
       children.push(child);
     }
     return children;
@@ -1252,16 +1265,23 @@ export class LiveUpdateEngine {
     eventType: fs.WatchEventType = "rename",
   ): void {
     const label = filename ? String(filename) : "";
-    if (label && shouldIgnoreWatchPath(label, watchDir)) return;
     const abs = label ? path.resolve(watchDir, label) : undefined;
-    if (abs && this.isExcluded(state, abs, false)) {
-      this.excludedEventCount++;
-      return;
-    }
     let info: fs.Stats | undefined;
     let missing = false;
     if (abs) {
       try { info = fs.lstatSync(abs); } catch { missing = true; }
+    }
+    if (label && shouldIgnoreWatchPath(
+      label, watchDir, runtimePathPlatform(), state.exclusion, info?.isDirectory(), info?.isSymbolicLink() ?? false,
+    )) {
+      this.excludedEventCount++;
+      return;
+    }
+    if (abs) {
+      if (info?.isSymbolicLink() && this.isExcluded(state, abs, false, true)) {
+        this.excludedEventCount++;
+        return;
+      }
       // 只排除目錄的規則（例如 `/AppData/`）需要知道路徑本身是目錄。
       if (info?.isDirectory() && this.isExcluded(state, abs, true)) {
         this.excludedEventCount++;

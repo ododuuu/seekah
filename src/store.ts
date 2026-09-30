@@ -14,6 +14,8 @@ import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
 import type { SearchTrace, SearchTraceRecorder } from "./search-trace.js";
 import { RootError } from "./scanner.js";
+import { indexArtifactPaths, isIndexArtifact } from "./index-artifacts.js";
+export { indexArtifactPaths, isIndexArtifact };
 import { purgeWorkStateRoots } from "./live-queue.js";
 
 function bestEffortPurgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): void {
@@ -28,10 +30,14 @@ export type DataDirSource = "LOCALDOCSEARCH_DATA_DIR" | "LOCALAPPDATA" | "XDG_DA
 export interface RemovalResult {
   removed: number;
   protected: number;
+  /** 僅在呼叫端提供 trackExcluded 時存在。 */
+  exclusionRemoved?: number;
+  exclusionPending?: number;
 }
 export interface RemoveMissingOptions {
   signal?: AbortSignal;
   onProgress?: (update: ProgressUpdate) => void;
+  trackExcluded?: (filePath: string) => boolean;
 }
 export interface TrashedRoot { path: string; deletedAt: string; documentCount: number }
 
@@ -92,38 +98,6 @@ export function dataDirectory(databasePath = defaultDatabasePath()): string {
   return path.dirname(path.resolve(databasePath));
 }
 
-export function indexArtifactPaths(databasePath: string): string[] {
-  const resolved = path.resolve(databasePath);
-  const dir = path.dirname(resolved);
-  return [
-    resolved,
-    `${resolved}-wal`, `${resolved}-shm`, `${resolved}-journal`,
-    `${resolved}.writer.sqlite`, `${resolved}.writer.sqlite-wal`, `${resolved}.writer.sqlite-shm`, `${resolved}.writer.sqlite-journal`,
-    `${resolved}.live.sqlite`, `${resolved}.live.sqlite-wal`, `${resolved}.live.sqlite-shm`, `${resolved}.live.sqlite-journal`,
-    `${resolved}.work.sqlite`, `${resolved}.work.sqlite-wal`, `${resolved}.work.sqlite-shm`, `${resolved}.work.sqlite-journal`,
-    path.join(dir, "autoupdate.json"),
-    path.join(dir, "autoupdate.json.tmp"),
-    path.join(dir, "autoupdate.log"),
-    path.join(dir, "autoupdate.log.1"),
-    path.join(dir, "autoupdate.log.2"),
-    path.join(dir, "autoupdate.log.3"),
-    path.join(dir, "autoupdate.log.4"),
-    path.join(dir, "indexing.json"),
-    path.join(dir, "indexing.json.tmp"),
-    path.join(dir, "trace.log"),
-    path.join(dir, "trace.log.1"),
-    path.join(dir, "trace.log.2"),
-    path.join(dir, "trace.log.3"),
-    path.join(dir, "trace.log.4"),
-  ];
-}
-
-export function isIndexArtifact(filePath: string, databasePath: string): boolean {
-  const resolved = path.resolve(filePath);
-  if (indexArtifactPaths(databasePath).some(item => item === resolved)) return true;
-  const base = path.basename(resolved);
-  return base.startsWith("autoupdate-") && (base.endsWith(".sock") || base.endsWith(".sock.tmp"));
-}
 
 export interface StoredDocumentRow {
   id: number;
@@ -1554,22 +1528,33 @@ export class IndexStore {
     let protectedCount = 0;
     const rows = (root ? this.db.prepare("SELECT id, path FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").all(root) : this.db.prepare("SELECT id, path FROM documents").all()) as { id: number; path: string }[];
     const targets: number[] = [];
+    const excludedTargetIds = new Set<number>();
+    let excludedProtected = 0;
     for (const row of rows) {
       if (subtree && !coversPath(subtree, row.path)) continue;
       if (knownPaths.has(row.path)) continue;
+      const isExcluded = options.trackExcluded?.(row.path) ?? false;
       if (protectedScopes.some(scope => coversPath(scope, row.path))) {
         protectedCount++;
+        if (isExcluded) excludedProtected++;
         continue;
       }
       targets.push(row.id);
+      if (isExcluded) excludedTargetIds.add(row.id);
     }
     let removed = 0;
+    let exclusionRemoved = 0;
     const report = () => options.onProgress?.({ stage: "write", message: "刪除校正", current: removed, total: targets.length });
     if (targets.length) report();
     for (let start = 0; start < targets.length; start += REMOVE_BATCH_SIZE) {
       if (options.signal?.aborted) {
         const error = new OperationCancelledError();
-        error.partial = { removed, protected: protectedCount } satisfies RemovalResult;
+        const partial: RemovalResult = { removed, protected: protectedCount };
+        if (options.trackExcluded) {
+          partial.exclusionRemoved = exclusionRemoved;
+          partial.exclusionPending = excludedProtected + excludedTargetIds.size - exclusionRemoved;
+        }
+        error.partial = partial;
         throw error;
       }
       const batch = targets.slice(start, start + REMOVE_BATCH_SIZE);
@@ -1582,10 +1567,18 @@ export class IndexStore {
         throw error;
       }
       removed += batch.length;
+      if (options.trackExcluded) {
+        exclusionRemoved += batch.filter(id => excludedTargetIds.has(id)).length;
+      }
       report();
       if (start + REMOVE_BATCH_SIZE < targets.length) await yieldToEvents();
     }
-    return { removed, protected: protectedCount };
+    const result: RemovalResult = { removed, protected: protectedCount };
+    if (options.trackExcluded) {
+      result.exclusionRemoved = exclusionRemoved;
+      result.exclusionPending = excludedProtected + excludedTargetIds.size - exclusionRemoved;
+    }
+    return result;
   }
 
   /** Set-based delete of one batch inside the caller's transaction; FTS rows go before the rows that locate them. */
@@ -2647,6 +2640,44 @@ export class IndexStore {
       set.run("last_sync_diagnostics", JSON.stringify(diagnostics));
       if (rootChanged) this.db.prepare("DELETE FROM metadata WHERE key IN ('last_successful_sync', 'last_sync')").run();
       if (complete) set.run("last_successful_sync", attemptedAt);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * 背景校正只更新摘要可見性，不偽裝成一次新的完整同步。
+   * 摘要仍放在 root report 與 last_sync_summary，status 可在程序重啟後讀到。
+   */
+  recordReconcileSummary(
+    root: string,
+    generation: number,
+    skipped: SyncSummary["skipped"],
+    exclusionCleanup: NonNullable<SyncSummary["exclusionCleanup"]>,
+  ): void {
+    this.registerRoot(root);
+    const previous = this.getLastSyncReport(root);
+    const summary: SyncSummary = previous.summary
+      ? {
+        ...previous.summary,
+        reconcileGeneration: generation,
+        skipped: { ...skipped, byRule: { ...skipped.byRule } },
+        exclusionCleanup: { ...exclusionCleanup },
+      }
+      : {
+        found: 0, updated: 0, added: 0, reprocessed: 0, unchanged: 0, removed: 0, parserCalls: 0,
+        statuses: emptyStatusCounts(), skipped: { ...skipped, byRule: { ...skipped.byRule } }, readErrors: 0, elapsedMs: 0,
+        reconcileGeneration: generation,
+        exclusionCleanup: { ...exclusionCleanup },
+      };
+    const report = { ...previous, summary };
+    const set = this.db.prepare("INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE roots SET report = ? WHERE path = ?").run(JSON.stringify(report), root);
+      set.run("last_sync_summary", JSON.stringify(summary));
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");

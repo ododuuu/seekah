@@ -9,6 +9,7 @@ export class IgnoreConfigurationError extends Error {}
 interface IgnoreRule {
   directoryOnly: boolean;
   regex: RegExp;
+  pattern: string;
 }
 
 function escapeRegex(character: string): string {
@@ -51,7 +52,8 @@ export class IgnoreRules {
     for (const sourceLine of content.split(/\r?\n/u)) {
       let pattern = sourceLine.trim();
       if (!pattern || pattern.startsWith("#")) continue;
-      patterns.push(pattern);
+      const displayPattern = pattern;
+      patterns.push(displayPattern);
       if (pattern.startsWith("!")) {
         throw new IgnoreConfigurationError(`${IGNORE_FILE} 尚不支援以 ! 重新納入路徑：${sourceLine}`);
       }
@@ -64,7 +66,7 @@ export class IgnoreRules {
       const body = globRegex(pattern);
       const prefix = anchored || pattern.includes("/") ? "^" : "(?:^|/)";
       const suffix = directoryOnly ? "(?:$|/)" : "$";
-      rules.push({ directoryOnly, regex: new RegExp(`${prefix}${body}${suffix}`, "iu") });
+      rules.push({ directoryOnly, regex: new RegExp(`${prefix}${body}${suffix}`, "iu"), pattern: displayPattern });
     }
     const parsed = new IgnoreRules(rules);
     parsed.patterns.push(...patterns);
@@ -72,8 +74,22 @@ export class IgnoreRules {
   }
 
   matches(relativePath: string, isDirectory: boolean): boolean {
+    return this.matchingPattern(relativePath, isDirectory) !== undefined;
+  }
+
+  matchingPattern(relativePath: string, isDirectory: boolean | undefined): string | undefined {
     const normalized = relativePath.replaceAll(path.sep, "/").replaceAll("\\", "/");
-    return this.rules.some(rule => (!rule.directoryOnly || isDirectory) && rule.regex.test(normalized));
+    for (let index = 0; index < this.rules.length; index++) {
+      const rule = this.rules[index]!;
+      if (!rule.regex.test(normalized)) continue;
+      if (rule.directoryOnly && isDirectory === false) {
+        const segments = normalized.split("/");
+        const descendant = segments.slice(0, -1).some((_, end) => rule.regex.test(segments.slice(0, end + 1).join("/")));
+        if (!descendant) continue;
+      }
+      return rule.pattern;
+    }
+    return undefined;
   }
 }
 

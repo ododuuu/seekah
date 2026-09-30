@@ -62,6 +62,10 @@ export interface LiveRootStatus {
   handles?: number;
   lastError?: string;
   reconcile?: LiveReconcileStatus;
+  /** 目前已觀察到的每條排除規則略過數；舊程序可缺少。 */
+  skippedByRule?: Record<string, number>;
+  /** 既有排除索引清理進度；removed 不代表來源檔案刪除。 */
+  exclusionCleanup?: { removed: number; pending: number };
 }
 
 export interface LiveStatus {

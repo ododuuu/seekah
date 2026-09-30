@@ -121,7 +121,19 @@ test("M5 skip counts exclude subtrees once and keep hidden files despite gitigno
     await symlink(temp, path.join(temp, "cycle"), process.platform === "win32" ? "junction" : "dir");
     const result = await scan(temp);
     assert.deepEqual(result.paths.map(p => path.basename(p)), [".gitignore", ".hidden.txt", ".localdocsearchignore", "image.png"]);
-    assert.deepEqual(result.skipped, { builtin: 2, user: 2, unsupported: 0, link: 1 });
+    assert.deepEqual(result.skipped, {
+      builtin: 2,
+      user: 2,
+      unsupported: 0,
+      link: 1,
+      byRule: {
+        [`user-rule:${temp}:archive/`]: 1,
+        [`user-rule:${temp}:*.skip.txt`]: 1,
+        link: 1,
+        "builtin:node-modules": 1,
+        "builtin:office-temp": 1,
+      },
+    });
     assert.equal(result.ignoreFile, path.join(temp, ".localdocsearchignore"));
     assert.equal(result.errors.length, 0);
   } finally { await rm(temp, { recursive: true, force: true }); }
