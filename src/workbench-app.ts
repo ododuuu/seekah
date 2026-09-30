@@ -765,7 +765,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 /* desktop width adjustments */
 @media (max-width: 1320px) {
   :root { --sidebar-width: 220px; }
-  .topbar { grid-template-columns: 204px minmax(360px, 650px) 1fr; gap: 18px; }
+  .topbar { grid-template-columns: 204px minmax(300px, 1fr) auto; gap: 18px; }
+  .scope-bar { gap: 6px; }
+  .document-query { flex: 1 1 300px; }
+  .document-query select, .scope-summary select { max-width: 126px; }
 }
 /* reduced motion */
 @media (prefers-reduced-motion: reduce) {
