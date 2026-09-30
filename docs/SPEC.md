@@ -2476,6 +2476,8 @@ docsearch doctor
 ### 76.1 長精確片語候選查詢
 
 - `phrase` 模式的正規化查詢仍由既有 chunk trigram index 提供安全候選。現有 chunk FTS 使用 `detail=none`，不使用不受支援的 phrase `MATCH`；三個以上 code point 維持 trigram `AND` superset。搜尋 stream 對同一個 phrase 一次讀取符合的 chunk／heading posting rows 並依文件分組，exact verification 重用這些候選，避免對每個文件重複執行相同 FTS 查詢；正規化查詢達 8 個 code point 時，候選 chunk 的 exact text verification 可再用同一個 FTS-filtered payload cursor 批次讀取，仍逐 chunk／逐 block 驗證。短查詢、`all-terms` 及含 U+0000 的既有保守路徑維持原本候選規則。
+  - 每次 unrestricted phrase 的 chunk／heading posting materialization 各有 `200,000` rows 安全上限。實作必須以 SQLite `.iterate()` 邊讀邊計數；只有完整讀取未超限時才建立 document map。超過上限立即放棄該批次 map，改用既有逐文件 FTS lookup，所有 rows、文件、exact verification、結果順序與 total 語意仍完整保留；上限不是候選丟棄或總數截斷。
+  - posting map 只在第一次實際需要 heading／content 候選時建立；filename rank 4／3 階段若已滿足快速頁面，不得在開啟 stream 時先掃描整批 posting。正規化 phrase 少於 3 個 code point 或含 U+0000 時不啟用批次 materialization，維持既有保守路徑。
 - chunk 內的索引文字仍是各段落以換行串接的正規化文字。candidate 允許跨段落的 false positive，必須由既有 exact verification 逐段確認；不得因候選查詢而把跨段落命中當成結果，也不得漏掉段落內的精確子字串。
 - 候選查詢只負責提供 exact verification 的安全 superset；檔名／標題優先級、內容是否跨段落、`all-terms` 覆蓋度與代表 block 仍由既有搜尋程式決定。
 
@@ -2496,6 +2498,7 @@ docsearch doctor
 - 以隔離合成索引驗收：約 40,000 份含內文的 `indexed` 文件，加約 500,000 筆 `unsupported`、僅檔名可搜尋的 metadata 紀錄；內容需包含大量數字與英文詞，並保留長數字候選爆量形狀。
 - 暖機後同一資料集的主要查詢目標為：19 位數字精確片語無結果、一般詞 `field=content`、一般詞 `field=all` 各自 p95 小於 2 秒；只搜檔名不得因本節退步。報告必須同時列出 wall time、`SEARCH_TRACE` phase 與 candidate／verification counts。
 - `test/m70.test.ts` 必須以固定語料比對新 chunk 路徑與既有 block／逐文件路徑的完整結果集合與順序，涵蓋精確片語、`all-terms`、欄位、排序、檔名命中、內容命中與無結果；另斷言長片語無結果不會驗證爆量候選。
+  - `test/m70.test.ts` 與 `test/m70b.test.ts` 必須以固定語料比對新 chunk 路徑與既有 block／逐文件路徑的完整結果集合與順序；m70b 另覆蓋 type／root／subtree／status、restrict、Unicode／NFKC／代理對／U+0000、7／8／9 code point、fast total 499／500／501、跨 64 KiB chunk、低上限回退及 filename lazy build。
 - 反向驗證必須暫時還原長片語候選查詢或 filename source 隔離，使新增效能 regression 至少一項失敗；還原後執行 build、聚焦測試與完整 `npm test`。
 
 ### 76.5 工作台邊界
@@ -2505,6 +2508,6 @@ docsearch doctor
 
 ### 76.6 明確不做
 
-- 不以固定候選數上限、固定時間逾時、丟棄未驗證候選或「無結果」猜測取代安全 exact verification；這些做法會改變總數或漏掉有效片語。
+- 不以「超過 materialization 安全上限就丟棄候選」、固定時間逾時或「無結果」猜測取代安全 exact verification；上限只能觸發完整的逐文件 fallback，不能改變總數或漏掉有效片語。
 - 不另建 n-gram 頻率表或全文 cache；若可由既有 phrase candidate 安全剪枝達成目標，不引入新的持久化資料與失效語意。
 - 不把所有 filename-only 紀錄從全域索引移除，也不把 `field=all` 改成只搜內容；檔名搜尋與既有 filename rank 必須保留。

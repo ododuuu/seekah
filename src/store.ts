@@ -489,7 +489,11 @@ export interface IndexStoreOptions {
   writeBusyTimeoutMs?: number;
   /** @internal 僅供測試降低 WAL checkpoint threshold；不屬於 CLI／環境變數契約。 */
   walCheckpointThresholdBytes?: number;
+  /** @internal 僅供測試驗證 phrase posting 超限時的保守逐文件回退。 */
+  phraseCandidatePostingLimit?: number;
 }
+
+const DEFAULT_PHRASE_CANDIDATE_POSTING_LIMIT = 200_000;
 
 export class IndexStore {
   private readonly db: DatabaseSync;
@@ -497,6 +501,7 @@ export class IndexStore {
   private readonly onWarning: (message: string) => void;
   private readonly writeBusyTimeoutMs: number;
   private readonly walCheckpointThresholdBytes: number;
+  private readonly phraseCandidatePostingLimit: number;
   private walSwitchDeferred = false;
   private readonly walWarningKeys = new Set<string>();
   private walEnabled = false;
@@ -529,6 +534,10 @@ export class IndexStore {
     this.onWarning = options.onWarning ?? (message => console.error(message));
     this.writeBusyTimeoutMs = options.writeBusyTimeoutMs ?? MAIN_WRITE_BUSY_TIMEOUT_MS;
     this.walCheckpointThresholdBytes = options.walCheckpointThresholdBytes ?? MAIN_WAL_CHECKPOINT_THRESHOLD_BYTES;
+    const postingLimit = options.phraseCandidatePostingLimit;
+    this.phraseCandidatePostingLimit = postingLimit === undefined || !Number.isFinite(postingLimit)
+      ? DEFAULT_PHRASE_CANDIDATE_POSTING_LIMIT
+      : Math.max(0, Math.floor(postingLimit));
     if (this.readOnly) {
       this.db = new DatabaseSync(databasePath, databaseOptions(MAIN_READ_BUSY_TIMEOUT_MS, { readOnly: true }));
       this.db.exec("PRAGMA query_only = ON");
@@ -2036,28 +2045,44 @@ export class IndexStore {
     return rows.map(row => Number(row.id));
   }
 
-  /** All chunk candidates for one term, grouped once so phrase verification avoids one FTS query per document. */
+  /** All chunk candidates for one term, grouped once so phrase verification avoids one FTS lookup per document. */
   chunkCandidateChunks(term: string, types?: readonly string[], root?: string, subtree?: string,
-    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number[]> {
+    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number[]> | undefined {
     const { table, match } = indexMatch(term, false);
     const name = CHUNK_TABLES[table];
     const scope = this.searchDocumentWhere(types, root, subtree, statuses);
     const where = scope.sql ? ` AND ${scope.sql.slice(" WHERE ".length)}` : "";
-    const rows = this.cachedIndexRows<{ document_id: number; id: number }>(this.chunkCandidateSql, `${name}:${scope.sql}`,
-      `SELECT c.document_id, c.id FROM ${name}
-       JOIN document_chunks AS c ON c.id = ${name}.rowid
-       JOIN documents AS d ON d.id = c.document_id
-       WHERE ${name} MATCH ?${where} ORDER BY c.document_id, c.ordinal`,
-      [match, ...scope.values], trace);
-    const byDocument = new Map<number, number[]>();
-    for (const row of rows) {
-      const documentId = Number(row.document_id);
-      let chunks = byDocument.get(documentId);
-      if (!chunks) byDocument.set(documentId, chunks = []);
-      chunks.push(Number(row.id));
+    const key = `${name}:${scope.sql}`;
+    let statement = this.chunkCandidateSql.get(key);
+    if (!statement) {
+      statement = this.db.prepare(`SELECT c.document_id, c.id FROM ${name}
+        JOIN document_chunks AS c ON c.id = ${name}.rowid
+        JOIN documents AS d ON d.id = c.document_id
+        WHERE ${name} MATCH ?${where} ORDER BY c.document_id, c.ordinal`);
+      this.chunkCandidateSql.set(key, statement);
     }
-    trace?.increment("indexCandidateChunks", rows.length);
-    return byDocument;
+    const rows: { document_id: number; id: number }[] = [];
+    let rowsRead = 0;
+    const started = performance.now();
+    try {
+      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ document_id: number; id: number }>) {
+        rowsRead++;
+        if (rowsRead > this.phraseCandidatePostingLimit) return undefined;
+        rows.push(row);
+      }
+      const byDocument = new Map<number, number[]>();
+      for (const row of rows) {
+        const documentId = Number(row.document_id);
+        let chunks = byDocument.get(documentId);
+        if (!chunks) byDocument.set(documentId, chunks = []);
+        chunks.push(Number(row.id));
+      }
+      trace?.increment("indexCandidateChunks", rows.length);
+      return byDocument;
+    } finally {
+      trace?.increment("indexPostingRows", rowsRead);
+      trace?.addPhase("postingsLookup", performance.now() - started);
+    }
   }
 
 
@@ -2075,25 +2100,42 @@ export class IndexStore {
 
   /** All heading candidates for one term, grouped once for phrase ranking. */
   chunkHeadingCandidates(term: string, types?: readonly string[], root?: string, subtree?: string,
-    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, { ordinal: number; heading: string }[]> {
+    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder):
+    Map<number, { ordinal: number; heading: string }[]> | undefined {
     const { table, match } = indexMatch(term, false);
     const name = HEADING_TABLES[table];
     const scope = this.searchDocumentWhere(types, root, subtree, statuses);
     const where = scope.sql ? ` AND ${scope.sql.slice(" WHERE ".length)}` : "";
-    const rows = this.cachedIndexRows<{ document_id: number; ordinal: number; heading: string }>(this.headingCandidateSql, `${name}:${scope.sql}`,
-      `SELECT h.document_id, h.min_ordinal AS ordinal, h.heading FROM ${name}
-       JOIN search_headings AS h ON h.id = ${name}.rowid
-       JOIN documents AS d ON d.id = h.document_id
-       WHERE ${name} MATCH ?${where} ORDER BY h.document_id, h.min_ordinal`,
-      [match, ...scope.values], trace);
-    const byDocument = new Map<number, { ordinal: number; heading: string }[]>();
-    for (const row of rows) {
-      const documentId = Number(row.document_id);
-      let headings = byDocument.get(documentId);
-      if (!headings) byDocument.set(documentId, headings = []);
-      headings.push({ ordinal: Number(row.ordinal), heading: row.heading });
+    const key = `${name}:${scope.sql}`;
+    let statement = this.headingCandidateSql.get(key);
+    if (!statement) {
+      statement = this.db.prepare(`SELECT h.document_id, h.min_ordinal AS ordinal, h.heading FROM ${name}
+        JOIN search_headings AS h ON h.id = ${name}.rowid
+        JOIN documents AS d ON d.id = h.document_id
+        WHERE ${name} MATCH ?${where} ORDER BY h.document_id, h.min_ordinal`);
+      this.headingCandidateSql.set(key, statement);
     }
-    return byDocument;
+    const rows: { document_id: number; ordinal: number; heading: string }[] = [];
+    let rowsRead = 0;
+    const started = performance.now();
+    try {
+      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ document_id: number; ordinal: number; heading: string }>) {
+        rowsRead++;
+        if (rowsRead > this.phraseCandidatePostingLimit) return undefined;
+        rows.push(row);
+      }
+      const byDocument = new Map<number, { ordinal: number; heading: string }[]>();
+      for (const row of rows) {
+        const documentId = Number(row.document_id);
+        let headings = byDocument.get(documentId);
+        if (!headings) byDocument.set(documentId, headings = []);
+        headings.push({ ordinal: Number(row.ordinal), heading: row.heading });
+      }
+      return byDocument;
+    } finally {
+      trace?.increment("indexPostingRows", rowsRead);
+      trace?.addPhase("postingsLookup", performance.now() - started);
+    }
   }
 
   /** Path sort remains equivalent to the existing JavaScript comparator. */
@@ -2226,9 +2268,9 @@ export class IndexStore {
     return hits;
   }
 
-  /** Exact phrase hits from the same chunk FTS superset, read with one payload cursor. */
-  chunkTermHitsForCandidateChunks(term: string, types?: readonly string[], root?: string, subtree?: string,
-    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number[]> {
+  /** Exact long-phrase hits grouped by document from one FTS-filtered payload cursor. */
+  chunkPhraseDocumentHits(term: string, types?: readonly string[], root?: string, subtree?: string,
+    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number> | undefined {
     const { table, match } = indexMatch(term, false);
     const name = CHUNK_TABLES[table];
     const scope = this.searchDocumentWhere(types, root, subtree, statuses);
@@ -2236,23 +2278,33 @@ export class IndexStore {
     const key = `${name}:${scope.sql}`;
     let statement = this.chunkPhraseHitsSql.get(key);
     if (!statement) {
-      statement = this.db.prepare(`SELECT c.id, c.text, c.layout FROM ${name}
+      statement = this.db.prepare(`SELECT c.document_id, c.text, c.layout FROM ${name}
         JOIN document_chunks AS c ON c.id = ${name}.rowid
         JOIN documents AS d ON d.id = c.document_id
-        WHERE ${name} MATCH ?${where}`);
+        WHERE ${name} MATCH ?${where} ORDER BY c.document_id, c.ordinal`);
       this.chunkPhraseHitsSql.set(key, statement);
     }
-    const hitsByChunk = new Map<number, number[]>();
+    const hits: [number, number][] = [];
+    let rowsRead = 0;
+    let verifiedBytes = 0;
     const started = performance.now();
     try {
-      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ id: number; text: Uint8Array; layout: Uint8Array }>) {
-        trace?.increment("indexVerifiedChunks");
-        trace?.increment("indexVerifiedBytes", row.text.length);
+      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ document_id: number; text: Uint8Array; layout: Uint8Array }>) {
+        rowsRead++;
+        if (rowsRead > this.phraseCandidatePostingLimit) return undefined;
+        verifiedBytes += row.text.length;
         const ordinal = firstBlockContaining(row.text, row.layout, term);
-        if (ordinal !== undefined) hitsByChunk.set(Number(row.id), [ordinal]);
+        if (ordinal !== undefined) hits.push([Number(row.document_id), ordinal]);
       }
-      return hitsByChunk;
+      const hitsByDocument = new Map<number, number>();
+      for (const [documentId, ordinal] of hits) {
+        if (!hitsByDocument.has(documentId)) hitsByDocument.set(documentId, ordinal);
+      }
+      return hitsByDocument;
     } finally {
+      trace?.increment("indexCandidateChunks", rowsRead);
+      trace?.increment("indexVerifiedChunks", rowsRead);
+      trace?.increment("indexVerifiedBytes", verifiedBytes);
       trace?.increment("exactTextMs", performance.now() - started);
     }
   }
