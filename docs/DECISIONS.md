@@ -1,4 +1,34 @@
 # 設計決策紀錄
+## D102：背景校正只在 frontier 頂端收尾 scope
+
+- 日期：2026-09-29。依 SPEC §70；本項分配給 `fix/fix-reconcile-frontier`，不涉及 §68／D100 的局部更新公平性或 §69／D101 的舊 root work item 清理。
+- 事實：
+  - `runBackgroundReconcileBatch()` 在父目錄 entry loop 內把 child directory push 到 `state.frontier`（`src/reconcile.ts:183-186`），但 loop 後無條件 pop，仍以父 `directory` 呼叫 `removeMissing`（`src/reconcile.ts:230-246`）。
+  - 父目錄只列舉到 child entry 時，child files 尚未進入 durable `reconcile_seen(kind='file')`；父 root 會把未見的既有文件列為 deletion targets。第二輪 N=24 重現已觀察到 `complete=false` 仍 `removed=25`。
+  - `sync.ts` 的 scanner 使用獨立 pending 清冊與 `protectedScopes`；目前未發現相同的「push child 後以父 scope removeMissing」路徑。本決策不擴大修改同步／掃描。
+- 決定：
+  - `directory` 只有在確實等於 `state.frontier.at(-1)` 時才可 pop 並執行該 scope 的 `removeMissing`。
+  - 若 child directory 仍在 frontier 頂端，先 flush durable seen／frontier，保留父與 child，continue 讓下一輪處理 child。child 完成後父目錄重新列舉，`hasSeen` 略過已提交 entries，再由父 scope 安全收尾。
+  - 中斷／重啟沿用持久 frontier 與 durable seen；未完成的 current directory 不提前 pop，不以 partial known 集合執行刪除。
+  - 保留 §60 的 `readFailures`／`deferredChecks` guard、§64 的 checkpoint batch、§51 的分批刪除、既有 generation／schema／root 語意。
+- 理由：
+  - `removeMissing` 只知道呼叫者傳入的 root／subtree／known，無法自行判斷 traversal frontier 是否仍有未訪問子樹；scope 完成責任在 reconcile traversal。
+  - 只延後含未完成 child 的父 scope，不延後已完成 sibling，保留大型 root 的 bounded batch、刪除進度與中斷接續。
+  - 這是最小修正：只改 reconcile frontier／scope 邊界，不碰同事負責的 live-update branch 選擇與 orphan queue 清理。
+- 否決：
+  - 不把所有刪除延到整個 root 完成，避免退化既有 §56.2 的已完成子樹刪除與大根目錄中斷接續。
+  - 不改 `store.removeMissing` 成為 traversal-aware，不清空／重建 known、不升 work state schema、不關 durability。
+  - 不改 `sync.ts`／`scanner.ts`；檢查未發現同型 frontier pop 錯誤，後續若有證據另案處理。
+- 測試計畫：
+  - nested 25 檔 incomplete batch 保留索引；真實消失的 nested 檔仍移除。
+  - 子目錄中斷後關閉並以持久 frontier／seen 重啟，結果等同不中斷且零誤刪。
+  - child `readdir` 失敗保護該子樹；反向暫時還原修正時新 regression 必須失敗。
+  - 完整 `npm test`，明確記錄 M26 path coverage／M36 profile chmod 的既有 win32 失敗；隔離資料目錄重跑 140 頂層資料夾 pi 形狀。
+- 相容與風險：
+  - 不改 package 版本、搜尋結果、索引／work state schema、queue durability 或來源文件行為；來源文件不由索引刪除。
+  - 若錯誤只修 pop 而未驗證 resume，可能重播已 seen entries 或在父 scope premature remove；永久測試必須覆蓋 durable checkpoint 與重啟。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 
 ## D099：工作台與索引 worker 不以 SQLite 原文呈現 BUSY
 
