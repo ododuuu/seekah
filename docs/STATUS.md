@@ -1,8 +1,16 @@
 # 專案狀態
 
-最後更新：2026-09-29（package 0.43.0：主索引 WAL、有上限 busy 等待、BUSY／復原錯誤固定訊息）
+最後更新：2026-09-30（package 仍為 0.43.0；整合分支 integrate/queue-fixes 含 SPEC §68～§70／D100～D102 三項背景更新修正，尚未升版）
 
 ## 目前狀態
+
+- **2026-09-30 未升版（integrate/queue-fixes）**：依 SPEC §68～§70／D100～D102，三條分支各自實作、審查後合併（D093）。起因：使用者在 `C:\Users\mains\Desktop\123.txt` 新增內容，開啟背景更新約 1 分鐘仍搜不到；登錄根目錄為整顆 `C:\`，coarse 單 watcher，3 分鐘約 59,000 個事件，局部更新 0。
+  - §68／D100（`fix/fix-fairness`）：背景模式下事件持續湧入時，防抖上限使每輪間隔約 15 秒，遠大於 5 秒的 `reconcileDue`，每輪都選校正、局部更新永遠輪不到（插樁實測 4 輪全走 batchReconcile）。改為校正批之後下一輪先走局部分支、局部批後清除；校正未完成時 `schedule()` 也受 5 秒約束。反向驗證：關掉 `forceLocal` 後 m61 第一項失敗。
+  - §69／D101（`fix/fix-orphan-queue`）：`.work.sqlite` 中屬於已不在 roots 的根目錄的 work_items、reconcile_state、reconcile_seen 重啟後永遠殘留；engine 建構時清理，並在 trash／purge／merge／remove 入口清理，一律 best-effort（失敗不影響主操作，下次啟動補清）。審查修正兩點：`purgeTrashRoots` 不得清仍登錄的現根（`index-worker.ts:80`、`workbench.ts:528`／`694` 會傳入現根）、清理失敗不得讓已成功的主操作回報錯誤。
+  - §70／D102（`fix/fix-reconcile-frontier`）：**資料完整性缺陷**。`runBackgroundReconcileBatch` 父目錄列舉後 frontier 頂端是剛 push 的子目錄，卻無條件 `pop()` 並以父目錄為範圍 `removeMissing`，尚未列舉的子樹索引被誤刪（24 檔情境 `removed=25`，來源檔不動）。修正為只有目錄仍在 frontier 頂端才收尾。使用者那台因佇列有待辦而被 `pendingBelow` 擋住（日誌移除 0），佇列安靜時第一批校正就可能清掉整個根目錄的索引，之後才慢慢重新解析。反向驗證：關掉守衛後 4 項新測試全失敗。
+  - 測試：整合分支 `npm test` 412 項，409 通過、0 失敗、3 略過（M13 symlink writer-lock、M5 unreadable directory、0.36.1 real PTY）。
+  - 中等雜訊對照（約 300 writes/s、140 頂層資料夾、coarse）：main 3 次皆搜不到（>60 s）；修正版另有 3 次診斷重跑中 2 次約 3.3 秒可搜、1 次仍搜不到（先前 3 次對照為 1/3）。剩下的失敗**不是排程**：該次 `fs.watch` 交給程式的 22,655 個事件中目標檔名事件為 0、168 個是空檔名，目標從未進 work queue；底層原因（ReadDirectoryChangesW 緩衝或 Node 合併）未能區分。此時要靠背景校正補，但雜訊下每批只處理約 2.5 項、約 5.6 秒一批（每檔穩定等待），60 秒內走不到 `Users\Desktop`。
+  - 未處理：整顆磁碟當根目錄時預設排除 Windows 系統與程式資料夾（見 NEXT-TODO，待使用者決定）。本機 win32 證據，不是公司 Windows 驗收。
 
 - **2026-09-29 0.43.0**：依 SPEC §65～§67／D097～D099 完成。起因：使用者在公司電腦回報搜尋正常，但工作台健康摘要一直顯示 `database is locked`。根因：主索引 rollback journal 加零等待；搜尋唯讀連線的 SHARED lock 擋住背景自動更新寫入；症狀出現在 `/api/index-status` 的 `recentErrors`（`LIVE_UPDATE_FAILED: database is locked`），`/api/search` 仍 200。
   - §65／D097：背景自動更新遇主庫 SQLITE_BUSY 視為 INDEX_BUSY。最終實作：coordination lock 內只做 50／100 ms 短重試；超限停止本輪、已成功者 ack、其餘保留待辦，不把 busy 記成讀取失敗。

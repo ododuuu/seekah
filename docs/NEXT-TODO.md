@@ -33,6 +33,16 @@
 - [ ] 所有使用中的 index 都遷移後，移除遷移期舊搜尋路徑（Bloom／文件級 postings）程式碼。
 
 
+## 2026-09-30 背景更新修正後續（integrate/queue-fixes 之後）
+
+- [ ] **使用者決定：整顆磁碟根目錄預設排除**（提案：Windows、Program Files、Program Files (x86)、ProgramData、`Users\<profile>\AppData`、PerfLogs；只對本機磁碟根啟用；built-in 不可由 ignore 重新納入；下次完整校正分批移除既有索引）。核准前不實作；草稿原用 §68／D100，現已被公平輪替占用，需改用 §71／D103。
+- [ ] **事件遺失時的補救太慢**：`fs.watch` 在約 300 events/s 下有時不交付目標檔名（實測約 1/3）。背景校正在持續改寫的雜訊下每批約 2.5 項，主因是每個檔案的穩定等待；DFS 順序（`Top129` 往下）也使使用者常用資料夾晚被訪問。方向：校正遇到剛改過的檔案先延後、不逐檔等待；或讓校正先訪問近期有事件的目錄。需另寫 SPEC。
+- [ ] 公平輪替的已知缺口：待辦超過 `LOCAL_BATCH_MAX_ITEMS`（500）且校正仍 active 時，第 501 筆之後的新檔可能等數輪；m61 未涵蓋「800+ 待辦裡一筆新檔」。
+- [ ] 校正與公平輪替交錯、磁碟根規模寬 listing 的整合測試（單測樹太小）。
+- [ ] `LiveUpdateEngine` 建構時 `cleanupOrphanRoots` 無 try/catch；工作庫損壞或鎖住時 engine 可能起不來（推測實害低，雙程序已有 lease）。
+- [ ] 使用者現有索引若曾在佇列安靜時跑過舊版背景校正，可能有被誤移除的文件；重新 `index` 可補回（來源檔未被刪）。
+- [ ] 工作台沒有「更新這個資料夾」的按鈕；根目錄為整顆磁碟時「完整校正」太重。命令列可用 `seekah index <資料夾>`（已包含於上層根目錄的子樹只同步該子樹）。
+
 ## 0.43.0 後續
 
 - [ ] `compact` 仍在 `cli.ts` `main` 的 try／catch 外；SQLITE_BUSY 可能未轉成 INDEX_BUSY。
