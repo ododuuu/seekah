@@ -4,6 +4,10 @@
 
 ## 目前狀態
 
+- **2026-10-01 0.44.0 後修正（工作台載入失敗，`main`）**：使用者回報工作台「設定」下方一直顯示「讀取中…」，選資料夾出現 `Cannot read properties of undefined (reading 'map')`。根因：§74 排除可見性提交 `5c3ca9f` 在往前端 `state` 初始物件加新欄位時，誤刪原有的 `supportedExtensions`、`addRootDraft`、`selectedRoots`、`selectedTrash`；載入時 `buildApp → renderScopeSummaries` 對 `undefined` 做 `.map`，初始化中斷。補回四個欄位；新增 `test/m69.test.ts`（任何被當集合使用的 `state` 欄位都必須在初始物件宣告；拿掉欄位時失敗，已反向驗證）；根目錄頁訊息欄在載入成功且無通知時清空（原本只有出現通知才會取代初始「讀取中…」，0.43.0 就有）。**用無介面 Chrome（CDP）實際載入驗證**：載入後側邊欄顯示「索引可用」、根目錄頁與設定頁可開、模擬選資料夾出現預設排除預覽、瀏覽器無任何錯誤。測試 433 項，430 通過、0 失敗、3 略過。教訓：靜態元素與 API 測試抓不到前端初始化錯誤，之後工作台前端改動必須用瀏覽器實際載入驗證。
+  - 使用者需關閉舊的工作台命令視窗並重新啟動 `seekah-ui.cmd`（畫面程式已載入舊版記憶體）。
+  - 同批量測（真實索引，唯讀）：搜尋內容欄位一般詞約 7 秒、19 位數字精確片語（幾乎沒結果）**33 秒**、只搜檔名 0.7 秒；`GET /api/index-status` 2.3 秒且回應 5.4 MB（`errors` 34,893 筆）。這些是 0.43.0 就有的行為（`search.ts` 未改），已派工處理。
+
 - **2026-09-30 0.44.0 第二階段（integrate/queue-fixes）**：使用者核准「整顆磁碟根目錄預設排除」，並要求「被略過的位置必須讓使用者知道、找不到檔案時要有地方查」；並要求繼續修「新檔案搜不到」。依 D093 三條分支各自實作、交叉審查後合併。
   - §71／D103（`feat/default-exclusion`）：只對 Windows 本機磁碟根（如 `C:\`）預設排除 `Windows`、`Program Files`、`Program Files (x86)`、`ProgramData`、`Users\<profile>\AppData`、`PerfLogs`（另有既有 `$Recycle.Bin`、`System Volume Information`）；UNC 與非磁碟根不套用；built-in 不可由 `.localdocsearchignore` 重新納入。所有入口共用同一判定（`src/default-exclusions.ts`、`RootExclusion`）；既有索引在下次完整校正分批移除（§51），來源不動。審查修正兩點：監看事件先以字串判斷、不 `lstat`（恢復 §53.3，`lstat` 次數為 0 有測試）；使用者規則恢復祖先語意（`cache`、`/AppData/`、`skip/` 三種寫法一致）。已知限制：8.3 短檔名（`PROGRA~1`）不會被排除；`subst` 的磁碟會被當成磁碟根。
   - §74／D106（`feat/exclusion-visibility`）：「不可沉默」。CLI 新增 `exclusions`、`explain <路徑>`，`status` 顯示各根預設排除摘要與逐規則略過數；工作台根目錄頁顯示各根預設排除、設定頁政策說明、搜尋零結果提示與「檢查為何搜不到」輸入欄、加入整顆磁碟前先預覽會略過的位置；TUI `/explain`；MCP 新增唯讀 `explain_path`（工具數四個變五個）。審查修正：根外路徑不回報是否存在（避免探測整顆磁碟）、未登錄路徑預覽不讀 ignore 檔內容、Windows 大小寫不同的路徑仍判為已索引、各入口文案正確（CLI 提示 `explain`、TUI 提示 `/explain`）。

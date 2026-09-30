@@ -804,6 +804,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     indexNotice: "",
     indexNoticeKind: "",
     statusRefreshBusy: false,
+    supportedExtensions: [],
+    addRootDraft: "",
+    selectedRoots: new Set(),
+    selectedTrash: new Set(),
     folderPickerBusy: false,
     deleteConfirmation: true,
     totalMode: "fast",
@@ -1928,6 +1932,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       if (state.route === "documents") renderDocuments();
       if (state.route === "temporary") renderTemporary();
       if (!state.indexNotice && state.indexStatus.indexing && state.indexStatus.indexing.state === "failed") setNotice(state.indexStatus.indexing.message, "error");
+      else if (!state.indexNotice) setStatus("index-status-message", "", "");
     } catch (error) {
       state.indexStatus = previous || { state: "unavailable", roots: [], trash: [], indexing: { state: "idle", message: "索引狀態暫時無法讀取。" } };
       if (!previous || !isIndexing()) setNotice(error.message || "索引狀態暫時無法讀取；請稍後重試。", "warn");
