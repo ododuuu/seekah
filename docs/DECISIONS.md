@@ -1,4 +1,34 @@
 # 設計決策紀錄
+## D109：狀態 API 截斷上次同步錯誤與通知清單
+
+- 日期：2026-10-01。依 SPEC §77；本分支只處理 `indexStatus` 讀取出口與相關顯示，不修改版本、STATUS、handoff 或 NEXT-TODO。
+- 事實：
+  - `src/mcp-tools.ts` 的 `indexStatus()` 把 `getLastSyncReport().errors` 整份放進 `roots[].errors`；工作台 `GET /api/index-status` 與 MCP `index_status` 共用此函式。
+  - 真實索引曾量到 34,893 筆錯誤、約 5.38 MB，佔該 API 回應 99.9%（總計約 5.4 MB、2.3 秒）。工作台索引進行中每 750 ms 輪詢一次。
+  - `diagnostics` 在此出口已是 `report.diagnostics.length`。`notices` 與 `errors` 一樣是完整字串陣列。`live.recentErrors` 已有 20 筆上限。
+  - CLI `status --issues` 列出目前索引 `documentIssues` 與各根完整 `diagnostics`，是既有診斷轉儲，不是輪詢 API。預設 `status` 不印診斷碼（既有測試依賴此點）。
+- 決定：
+  - 預覽上限固定 100（`STATUS_LIST_PREVIEW_LIMIT`）。`errors`／`notices` 保持陣列；新增 `errorsTotal`／`errorsTruncated` 與對應的 notices 欄位。截斷取原始順序前 100 筆。
+  - 截斷只在 `indexStatus()`；store 仍保存完整 `LastSyncReport`。
+  - 工作台用 `errorsTotal` 顯示總數，截斷時固定句「共 N 筆，只列前 M 筆」。TUI `/status` 只顯示筆數與同一句，不傾印本文。
+  - CLI 預設 `status` 顯示總數／截斷句、不列出錯誤本文；`--issues` 仍列出完整診斷，不套用 100 筆上限。
+  - 舊報告缺陣列欄位視為空。不提供分頁或 `errors=all`。
+- 理由：
+  - 100 筆足夠看出錯誤型態；總數欄位避免 UI 把截斷長度當成全部失敗數。
+  - 共用 `indexStatus()` 一次截斷即可同時修工作台輪詢與 MCP。
+  - `--issues` 保持完整，診斷腳本與既有測試不必改成分頁。
+- 否決：
+  - 不刪 persistent 錯誤、不在寫入時截斷 `recordSync`、不把短清單寫回 `roots.report`。
+  - 不把 `diagnostics` 改回陣列、不截斷 `--issues`、不新增第二個 status endpoint。
+  - 不改 schema、搜尋、package 版本、資料目錄或 LAN 邊界。
+- 驗證：
+  - `test/m71.test.ts`：150 筆截成 100 且總數正確、缺欄位舊 JSON、CLI／TUI／MCP／HTTP、`--issues` 含第 120 筆、約 3.5 萬筆合成量測、反向拿掉 slice 後失敗。
+  - 完整 `npm test`。本機 win32 證據，不是公司 Windows 驗收。
+- 相容與風險：
+  - 只讀 `errors` 長度的舊客戶會看到最多 100；必須改讀 `errorsTotal` 才是真總數。工作台已改。
+  - 不改 IPC／MCP 工具名稱、`docsearch` 入口、LocalDocSearch 資料目錄。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D107：工作台手動重新檢查已登錄根目錄內的資料夾
 
 - 日期：2026-09-30。依 SPEC §75；本分支只處理工作台重新檢查入口、server 範圍驗證、索引報告與相關測試，不修改版本、STATUS、handoff 或 NEXT-TODO。

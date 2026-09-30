@@ -4,6 +4,8 @@ import { SearchSession } from "./search-session.js";
 import type { IndexStore } from "./store.js";
 import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.js";
 import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
+import { previewStatusList } from "./status-preview.js";
+
 
 export class McpToolError extends Error {
   constructor(public readonly code: string, message: string) {
@@ -133,16 +135,22 @@ export async function prepareContextTool(store: IndexStore, input: PrepareContex
 export function indexStatus(store: IndexStore) {
   const roots = store.roots().map(root => {
     const report = store.getLastSyncReport(root);
+    const errors = previewStatusList(report.errors);
+    const notices = previewStatusList(report.notices);
     return {
       path: root,
       documentCount: store.documentCountForRoot(root),
       lastAttemptedSync: report.attemptedAt,
       lastSuccessfulSync: report.successfulAt,
       lastSyncComplete: report.complete,
-      errors: report.errors,
-      notices: report.notices,
+      errors: errors.items,
+      errorsTotal: errors.total,
+      errorsTruncated: errors.truncated,
+      notices: notices.items,
+      noticesTotal: notices.total,
+      noticesTruncated: notices.truncated,
       summary: report.summary,
-      diagnostics: report.diagnostics.length,
+      diagnostics: Array.isArray(report.diagnostics) ? report.diagnostics.length : 0,
     };
   });
   const format = store.formatStatus();
@@ -173,6 +181,7 @@ export function indexStatus(store: IndexStore) {
     },
   };
 }
+
 
 export function explainPath(store: IndexStore, input: string) {
   const result = explainPathSync(store, input);

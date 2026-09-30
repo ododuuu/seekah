@@ -25,6 +25,8 @@ import { StringDecoder } from "node:string_decoder";
 import { buildIndexProfile, profilePaths, reserveNewProfile, writeIndexProfile } from "./profile.js";
 import type { SyncReport } from "./sync.js";
 import { productVersion } from "./version.js";
+import { formatTruncatedListNotice, previewStatusList, STATUS_LIST_PREVIEW_LIMIT } from "./status-preview.js";
+
 function formatStorageSize(footprint: StorageFootprint): string {
   return footprint.totalBytes === null ? "未知" : formatMib(footprint.totalBytes);
 }
@@ -120,7 +122,7 @@ export function buildHelpText(): string {
     "文字與原始碼採嚴格 UTF-8，失敗才回退 Big5；XML 明確編碼宣告失敗不回退。",
     "查詢預設為整段子字串；--all-terms 要求空白分隔詞全部出現在同一文件。AND、*、? 不作進階查詢語法。",
     "context 內可用 s <查詢> 跨查詢累積選取，b 查看已選清單，r <編號> 移除。",
-    "status 預設顯示容量與問題彙總；--issues 列出文件問題與各根同步診斷，--types 依副檔名統計。",
+    "status 預設顯示容量與問題彙總；最近同步錯誤超過 100 筆時只標示「共 N 筆，只列前 100 筆」，本文不列出。--issues 列出完整文件問題與各根同步診斷，--types 依副檔名統計。",
     "autoupdate start 在關閉原終端後繼續更新；不安裝服務、不要求管理員權限。登入啟動需明確執行 autoupdate startup enable，預設關閉。",
     "mcp 以本機 stdio 提供唯讀搜尋、已選上下文與索引狀態；stdout 專供 MCP 協定。",
     "ui 只綁定 127.0.0.1，提供索引搜尋、拖曳臨時文件、預覽與可選 OpenAI／xAI API；Ctrl+C 關閉並清除臨時資料。",
@@ -712,6 +714,10 @@ export async function main(args: readonly string[]): Promise<number> {
         if (syncReport.complete !== null) console.log(`最近同步完整：${syncReport.complete ? "是" : "否"}`);
         if (syncReport.summary) { console.log("最近同步摘要（歷史紀錄，非目前索引累計狀態）："); printSummary(syncReport.summary); }
         console.log(`最近同步診斷：${syncReport.diagnostics.length}（詳見 status --issues）`);
+        const errorPreview = previewStatusList(syncReport.errors);
+        console.log(`最近同步錯誤：${errorPreview.truncated
+          ? formatTruncatedListNotice(errorPreview.total, STATUS_LIST_PREVIEW_LIMIT)
+          : `${errorPreview.total} 筆`}`);
         console.log(`排除摘要：${formatExclusionPolicySummary(readExclusionPolicy(store, root))}`);
       }
       console.log("目前索引累計狀態：");

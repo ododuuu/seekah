@@ -1665,9 +1665,22 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     });
     return input;
   }
+  function rootListTotal(root, totalKey, listKey) {
+    const total = root[totalKey];
+    if (typeof total === "number" && Number.isFinite(total)) return total;
+    return Array.isArray(root[listKey]) ? root[listKey].length : 0;
+  }
+  function truncatedListLabel(total, shown) {
+    return "共 " + total + " 筆，只列前 " + shown + " 筆";
+  }
   function rootIntegrity(root) {
     if (root.lastSyncComplete === false) return { text: "未完整同步", kind: "bad" };
-    if (Array.isArray(root.errors) && root.errors.length) return { text: "錯誤 " + root.errors.length + " 項", kind: "bad" };
+    const errorTotal = rootListTotal(root, "errorsTotal", "errors");
+    if (errorTotal) {
+      const shown = Array.isArray(root.errors) ? root.errors.length : 0;
+      const truncated = root.errorsTruncated === true || shown < errorTotal;
+      return { text: truncated ? "錯誤 " + errorTotal + " 項（" + truncatedListLabel(errorTotal, shown) + "）" : "錯誤 " + errorTotal + " 項", kind: "bad" };
+    }
     if (root.lastSyncComplete === null) return { text: "尚未完成", kind: "warn" };
     return { text: "完整", kind: "good" };
   }
@@ -1780,7 +1793,15 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         const integrity = rootIntegrity(root);
         const synced = make("td", "root-state", root.lastSyncComplete === null ? "尚未同步" : "已同步");
         const status = make("td", "root-state " + integrity.kind, integrity.text);
-        status.title = Array.isArray(root.errors) && root.errors.length ? root.errors.join("；") : Array.isArray(root.notices) && root.notices.length ? root.notices.join("；") : integrity.text;
+        const errorTotal = rootListTotal(root, "errorsTotal", "errors");
+        const noticeTotal = rootListTotal(root, "noticesTotal", "notices");
+        if (errorTotal && Array.isArray(root.errors) && root.errors.length) {
+          const truncated = root.errorsTruncated === true || root.errors.length < errorTotal;
+          status.title = root.errors.join("；") + (truncated ? "（" + truncatedListLabel(errorTotal, root.errors.length) + "）" : "");
+        } else if (noticeTotal && Array.isArray(root.notices) && root.notices.length) {
+          const truncated = root.noticesTruncated === true || root.notices.length < noticeTotal;
+          status.title = root.notices.join("；") + (truncated ? "（" + truncatedListLabel(noticeTotal, root.notices.length) + "）" : "");
+        } else status.title = integrity.text;
         const exclusionCell = make("td", "root-exclusions", "");
         const policy = exclusionPolicyForRoot(root.path);
         if (policy) appendExclusionPolicyDetails(exclusionCell, policy);

@@ -2468,3 +2468,50 @@ docsearch doctor
 - 不把「重新檢查資料夾」改成每次完整掃描所有根目錄，不以全域重建取代明確子樹。
 - 不讓 client 單獨決定可同步範圍，不以字串前綴取代平台正確的路徑涵蓋判斷，不接受未驗證的任意 `root` 作為子樹。
 - 不新增另一個平行 index endpoint、另一套進度／停止狀態或對背景 daemon 的強制停止；不讀寫使用者真實資料目錄以外的資料。
+
+## 77. 索引狀態回應的錯誤清單上限
+
+依 D109。工作台在索引進行中每 750 ms 輪詢 `GET /api/index-status`，該端點與 MCP `index_status` 共用 `indexStatus()`。上次同步的 `LastSyncReport.errors` 沒有長度上限；真實磁碟根目錄可達數萬筆、數 MB，使狀態回應佔去輪詢時間與傳輸，畫面看起來像卡住。本節只限制**狀態讀取出口**的清單長度，不刪除、不改寫持久化的同步報告。
+
+### 77.1 上限與欄位
+
+- 固定預覽上限 **N = 100**。此值寫死於 `src/status-preview.ts` 的 `STATUS_LIST_PREVIEW_LIMIT`，不提供設定項、query 參數或「下載全部」API。
+- `indexStatus()` 對每個已登錄根目錄必須回傳：
+  - `errors`：字串陣列，仍為陣列以維持既有客戶相容；長度最多 100，內容為持久化清單的前 100 筆（原始順序，不重排、不去重）。
+  - `errorsTotal`：持久化清單的實際筆數（整數，可大於 `errors.length`）。
+  - `errorsTruncated`：布林；當且僅當 `errorsTotal > 100` 為 true。
+  - `notices`、`noticesTotal`、`noticesTruncated`：同一規則。`notices` 與 `errors` 一樣可隨同步成長（例如大量 `no_text` PDF 提示），必須同樣截斷。
+  - `diagnostics`：**維持既有語意**，仍是診斷筆數（number），不是陣列。不新增 `diagnostics` 陣列，因此不必再截斷。
+- 缺欄位或非陣列的舊 `roots.report` JSON 視為空陣列：`errorsTotal=0`、`errorsTruncated=false`、`errors=[]`（`notices` 同）。
+- 持久化路徑（`recordSync`、`roots.report`、metadata `last_sync_errors` 等）仍保存完整清單。截斷只發生在 `indexStatus()` 組裝讀取回應時。
+
+### 77.2 各入口顯示
+
+- **工作台**（`GET /api/index-status` 沿用 `indexStatus()`）：根目錄列的錯誤摘要必須用 `errorsTotal`（舊回應若無此欄則回退 `errors.length`），不得把截斷後的 `errors.length` 當成總數。截斷時畫面必須出現固定句「共 N 筆，只列前 M 筆」（N=`errorsTotal`，M=`errors.length`）。tooltip 最多列出回應裡的 `errors`（已截斷）並附同一句。`notices` 僅在沒有錯誤時作為 tooltip 後備，同樣標示總數與截斷。
+- **MCP `index_status`**：structured content 與 JSON 文字都是同一 `indexStatus()` 物件；客戶仍讀 `errors` 陣列，但必須能讀新欄位得知總數。不新增第二個工具、不回傳文件正文。
+- **CLI `status`（無 `--issues`）**：每個根目錄在既有「最近同步診斷：K（詳見 status --issues）」之外，顯示「最近同步錯誤：…」。未截斷時寫「K 筆」；截斷時寫「共 N 筆，只列前 100 筆」。**不列出錯誤本文**，以免破壞既有「預設 status 不含診斷碼、詳細走 `--issues`」契約。
+- **CLI `status --issues`**：維持完整清單用途。繼續列出目前索引的全部 `documentIssues`，以及各根 `getLastSyncReport().diagnostics` 的**全部**項目，不得套用 100 筆上限。此命令是診斷轉儲，不是輪詢 API。
+- **TUI `/status`**：不傾印錯誤本文（終端畫面小）。每根顯示「最近同步錯誤」筆數；截斷時使用同一句「共 N 筆，只列前 100 筆」。
+
+### 77.3 檢查過、不截斷的其他欄位
+
+- `diagnostics`：狀態 API 已是長度。
+- `summary`：固定形狀的同步摘要物件，不會隨檔案數線性膨脹到 MB。
+- `exclusions`：每根規則清單，與排除政策大小同級，不是上次同步的逐檔失敗清單。
+- 背景自動更新 `live.recentErrors`：engine 已限制最多 20 筆；工作台健康摘要再只顯示 3 筆。本節不改。
+- `counts`、`format`、`trash`：有界。
+- 目前索引的 `documentIssues` 不進入 `indexStatus()`；完整列出仍只在 `status --issues`。
+
+### 77.4 相容與明確不做
+
+- 不改 schema、不遷移舊報告、不刪持久化錯誤、不改搜尋、不改 package 版本、不接觸真實資料目錄。
+- 不提供「第 2 頁錯誤」或「errors=all」開關；完整診斷走 CLI `status --issues`。
+- 不把截斷後的短清單寫回 `roots.report`。
+- 工作台前端只改錯誤／通知摘要顯示；不改選資料夾、state 初始欄位或其他同事負責的 UI。
+
+### 77.5 驗收
+
+- `test/m71.test.ts`：上限與總數、舊資料缺欄位、CLI／工作台／TUI／MCP 顯示、`--issues` 仍完整、反向驗證（拿掉截斷後新測試失敗）。
+- 合成約 3.5 萬筆同步錯誤的 `LastSyncReport`，量測 `indexStatus()`／`GET /api/index-status` 回應大小與時間；截斷後不得再接近數 MB。
+- 完整 `npm test`。不得宣稱公司 Windows 驗收。
+

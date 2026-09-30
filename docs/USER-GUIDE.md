@@ -77,11 +77,11 @@ Seekah 只在 `127.0.0.1` 啟動本機工作台。若瀏覽器沒有自動開啟
 ### 臨時文件、根目錄與垃圾桶
 
 - 「臨時文件」接受任何格式，只保留本次工作階段且不寫入永久索引。支援格式可解析並加入上下文；不支援或解析失敗的項目仍有穩定 ID、可依檔名搜尋及移除，但因沒有正文不能加入上下文。
-- 「根目錄」頁只顯示實際登錄根、文件數、完整性與錯誤摘要。「加入資料夾」只開啟本機選擇器；選取後先顯示唯讀路徑，按「確認並建立索引」才呼叫索引。取消或未確認不會新增根。
+- 「根目錄」頁只顯示實際登錄根、文件數、完整性與錯誤摘要。上次同步錯誤超過 100 筆時，摘要會寫「共 N 筆，只列前 100 筆」；完整診斷請用命令列 `status --issues`。「加入資料夾」只開啟本機選擇器；選取後先顯示唯讀路徑，按「確認並建立索引」才呼叫索引。取消或未確認不會新增根。
 - 「完整校正」會列舉已登錄根目錄並比較 metadata，只重新解析新增或變更文件。進行中可按「停止同步」；server 等索引 store 關閉後，根目錄移除才會重新啟用。
 - 「重新檢查資料夾」會用本機 folder picker 選一個已登錄根目錄內的現有子資料夾，選定後立即只同步該子樹；根目錄列的「重新檢查此根目錄」則只同步該根目錄。選到未登錄、根目錄外、不存在或非目錄位置時，server 會拒絕，不會新增根目錄。
 - 重新檢查完成後，狀態訊息會顯示「新增／更新／移除／略過」件數；進行中可按「停止同步」。若背景自動更新或其他 writer 正在使用索引，請等完成後重試，不要停止不屬於本工作台的程序。
-- 工作台索引的列舉、解析與寫入在背景 worker 執行；即使單一大檔或慢格式仍在處理，狀態頁、搜尋與「停止同步」仍可回應。畫面每 750 ms 更新一次，會顯示檢查數與目前檔名；重新整理頁面不會停止這輪索引。
+- 工作台索引的列舉、解析與寫入在背景 worker 執行；即使單一大檔或慢格式仍在處理，狀態頁、搜尋與「停止同步」仍可回應。畫面每 750 ms 更新一次，會顯示檢查數與目前檔名；狀態 API 不會把整份同步錯誤清單傳進瀏覽器。重新整理頁面不會停止這輪索引。
 - CLI 等價操作是 `.\seekah.cmd index "資料夾路徑"`；當路徑已在已登錄根目錄內時，CLI 依既有 root plan 只同步該子樹。未登錄路徑在 CLI 仍可能代表加入新根目錄，請不要把它誤當成工作台的受限重新檢查。
 - 索引進度另存於索引資料目錄的 `indexing.json`，只含狀態、計數、路徑與摘要，不含文件正文。若命令視窗或程序在索引中被關閉，重開工作台會顯示「上次索引程序已中斷」；這不是索引損壞，已提交的文件仍保留，再按「完整校正」會從已提交文件接續，未提交文件會重新檢查。
 - 「完整校正」在同一輪可能先列舉／檢查，再進行解析或搜尋 postings 升級；這些是同一個索引請求的不同階段，不代表 UI 自己送出了第二次。只有按下按鈕或 API 明確送出才會開始新一輪。
@@ -99,6 +99,9 @@ node dist/src/cli.js search "付款 例外 規格" --all-terms
 node dist/src/cli.js search "合約" --verbose
 node dist/src/cli.js status
 ```
+
+`status` 會顯示各根最近同步錯誤總數；超過 100 筆時標示「共 N 筆，只列前 100 筆」，預設不印出錯誤本文。要看完整文件問題與各根同步診斷，用 `status --issues`。
+
 加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 5 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
 0.39.0 的 `candidateStrategy` 為 `chunk-index`（結果內搜尋為 `chunk-index+restricted-ids`）；`indexPostingRows` 是檔名／heading／區段索引回傳列數，`indexCandidateChunks` 是候選區段數，`indexVerifiedChunks`／`indexVerifiedBytes` 是實際解壓驗證（含當頁 snippet）的區段數與壓縮位元組；`totalRelation` 為 `gte` 表示快速模式提前停止、總數是下限。`payloadsRead` 恆為 0。以下 payload 欄位說明只適用於升級完成前的舊路徑：
 `postings` 只回傳文件 ID，不回傳 payload ordinal；payload-level pruning 與 block reconstruction 的數字分別看 `payloadsAfterPruning`、`expandedPayloads` 與 `blockExpansionRatio`。`payloadsRead` 是所有實際 stream pass 的總和，page materialization 可能重新讀取同一文件，因此不必等於或小於 `payloadsConsidered`。
@@ -187,6 +190,7 @@ ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 | 加入資料夾時提示進行中 | 按「停止同步」，等畫面顯示已停止後再加入或移除；也可等目前同步完成。 |
 | 索引百分比長時間不變 | 先看目前檔名與 API 狀態；Workbench 仍可操作時可按「停止同步」，再重新按「完整校正」。若剛關閉命令視窗，重新開啟後看到「上次索引程序已中斷」屬預期，已提交文件會保留。 |
 | 重新整理後顯示索引狀態未知 | 先等待一次狀態輪詢；UI 會保留最後一次成功進度，短暫 SQLite busy／locked 不應清空畫面。若仍顯示暫時無法讀取，確認索引資料目錄可寫且只啟動一個工作台程序。 |
+| 工作台根目錄顯示「共 N 筆，只列前 100 筆」或狀態輪詢很慢 | 這是上次同步錯誤清單的預覽上限。畫面與 MCP `index_status` 只帶前 100 筆；完整清單用 `node dist/src/cli.js status --issues`。 |
 | 索引卡在單一檔案且停止沒有立刻完成 | 某些 parser／檔案 IO 只能在安全點取消；停止最多等待約兩秒後終止背景 worker。下次完整校正會依已提交 SQLite 交易重新檢查未完成文件。 |
 | 用 `.localdocsearchignore` 排除大量檔案後同步較久 | 掃描後會顯示「刪除校正」目前／總數，每 1,000 份提交一次。可按「停止同步」或 Ctrl+C，已刪部分會保留，下次同步接續刪除其餘。資料庫檔不會自動變小；先 `autoupdate stop`，再執行 `compact` 回收空白頁（顯示含 `-wal`／`-shm` 的合計大小），完成後 `autoupdate start`。 |
 | 常見詞只顯示「500 筆以上」 | 這是預設的快速模式。要精確總數：工作台設定頁改為「精確」，或 CLI 加 `--exact-total`。 |
