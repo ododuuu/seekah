@@ -30,6 +30,8 @@ export const BACKGROUND_RECONCILE_INTERVAL_MS = 5_000;
 /** 局部更新每輪上限；輪與輪之間釋放 writer lock（SPEC §54.1）。 */
 export const LOCAL_BATCH_MAX_ITEMS = 500;
 export const LOCAL_BATCH_MAX_MS = 5_000;
+/** 穩定候選超過一批時，保留最新的尾端工作；其餘名額取最舊工作（SPEC §73、D105）。 */
+const LOCAL_BATCH_NEWEST_ITEMS = 100;
 /** 已準備文件群組在一次 writer lock 內提交的數量與準備時間上限（SPEC §63）。 */
 export const LOCAL_PREPARED_GROUP_MAX_ITEMS = 50;
 export const LOCAL_PREPARED_GROUP_MAX_MS = 250;
@@ -81,6 +83,10 @@ export interface LiveUpdateOptions {
 
 type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
 
+function localWorkKey(item: Pick<LocalWorkItem, "filePath" | "generation">): string {
+  return `${item.filePath}\u0000${item.generation}`;
+}
+
 type PreparedLocalItem = {
   item: LocalWorkItem;
   prepared: PreparedFileUpdate;
@@ -103,7 +109,7 @@ type LocalBatchResult = {
   complete: boolean;
   /** 已確認完成（含延後用盡）的路徑；其餘留在佇列。 */
   finished: Set<string>;
-  /** 本輪處理過的路徑（完成或延後），記入輪替的本圈。 */
+  /** 本輪處理過的工作項（完成或延後），記入輪替的本圈。 */
   attempted: Set<string>;
   deferred: boolean;
   interrupted: boolean;
@@ -226,6 +232,8 @@ export class LiveUpdateEngine {
   private excludedEventCount = 0;
   /** 路徑連續延後次數；超過 UNSTABLE_BACKOFF_MS.length 即記為不穩定並確認完成。 */
   private readonly deferrals = new Map<string, number>();
+  /** 路徑目前被延後的工作項 generation；新 generation 不繼承舊延後狀態。 */
+  private readonly deferredGenerations = new Map<string, number>();
   private localUpdateCount = 0;
   private rootScanCount = 0;
   private subtreeScanCount = 0;
@@ -568,21 +576,23 @@ export class LiveUpdateEngine {
           ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath, expand: item.reason === "expand" }))
           : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath), expand: false }));
         // 輪替（SPEC §55.2）：先處理本圈尚未處理過的待辦，全部處理過一次後開始下一圈。
-        const queuedPaths = new Set(work.map(item => item.filePath));
-        state.sweep = new Set([...state.sweep].filter(item => queuedPaths.has(item)));
-        let order = work.filter(item => !state.sweep.has(item.filePath));
+        // 以 path + generation 識別工作項，避免同一路徑的新事件沿用舊 generation 的本圈標記。
+        const queuedKeys = new Set(work.map(localWorkKey));
+        state.sweep = new Set([...state.sweep].filter(item => queuedKeys.has(item)));
+        let order = work.filter(item => !state.sweep.has(localWorkKey(item)));
         if (!order.length) {
           state.sweep.clear();
           order = work;
         }
-        // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1），各自仍先進先出。
+        // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1）。
         order = [...order.filter(item => !item.expand), ...order.filter(item => item.expand)];
-        const batch = await this.applyLocalBatch(state, order.slice(0, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
+        const candidateCount = order.length;
+        const batch = await this.applyLocalBatch(state, this.selectLocalWork(order, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
         if (batch.busy) throw batch.busy;
         if (state.localPriority) state.localPriority = false;
-        moreLocal = batch.interrupted || order.length > LOCAL_BATCH_MAX_ITEMS;
+        moreLocal = batch.interrupted || candidateCount > LOCAL_BATCH_MAX_ITEMS;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
         if (!batch.complete) state.syncFailed = true;
@@ -627,6 +637,40 @@ export class LiveUpdateEngine {
   }
 
   /**
+   * 局部候選在同一類別內採穩定優先，保留最多 400 筆最舊與 100 筆最新工作；
+   * 剛以相同 generation defer 的工作只在穩定候選之後補入。事件／展開的類別順序由呼叫端保留。
+   */
+  private selectLocalWork(work: readonly LocalWorkItem[], limit: number): LocalWorkItem[] {
+    const selectGroup = (items: readonly LocalWorkItem[], capacity: number): LocalWorkItem[] => {
+      if (capacity <= 0) return [];
+      const stable: LocalWorkItem[] = [];
+      const deferred: LocalWorkItem[] = [];
+      for (const item of items) {
+        if (this.deferredGenerations.get(item.filePath) === item.generation) deferred.push(item);
+        else stable.push(item);
+      }
+      const newestCount = Math.min(LOCAL_BATCH_NEWEST_ITEMS, stable.length, capacity);
+      const oldestCount = Math.min(capacity - newestCount, stable.length - newestCount);
+      const selectedStable = [
+        ...stable.slice(0, oldestCount),
+        ...stable.slice(stable.length - newestCount),
+      ];
+      return [
+        ...selectedStable,
+        ...deferred.slice(0, capacity - selectedStable.length),
+      ];
+    };
+
+    const events = work.filter(item => !item.expand);
+    const expansions = work.filter(item => item.expand);
+    const selectedEvents = selectGroup(events, limit);
+    return [
+      ...selectedEvents,
+      ...selectGroup(expansions, limit - selectedEvents.length),
+    ];
+  }
+
+  /**
    * SPEC §63：批次只在觀察 metadata 與逐份準備時不持有 writer lock；
    * 每份完成準備後才短暫取得鎖，重新確認 identity，再提交並釋放鎖。
    */
@@ -651,11 +695,16 @@ export class LiveUpdateEngine {
         }
       }
       this.deferrals.delete(item.filePath);
+      this.deferredGenerations.delete(item.filePath);
       result.finished.add(item.filePath);
-      result.attempted.add(item.filePath);
+      result.attempted.add(localWorkKey(item));
       if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
     };
     const defer = (item: LocalWorkItem) => {
+      if (this.deferredGenerations.get(item.filePath) !== item.generation) {
+        this.deferrals.set(item.filePath, 0);
+        this.deferredGenerations.set(item.filePath, item.generation);
+      }
       const count = (this.deferrals.get(item.filePath) ?? 0) + 1;
       if (count > UNSTABLE_BACKOFF_MS.length) {
         // 與原本退避用盡相同：保留既有索引並確認完成，之後的新事件會重新排入。
@@ -664,9 +713,9 @@ export class LiveUpdateEngine {
       }
       this.deferrals.set(item.filePath, count);
       result.deferred = true;
-      result.attempted.add(item.filePath);
-    };
+      result.attempted.add(localWorkKey(item));
 
+    };
     if (!this.store.roots().includes(state.root)) {
       this.dropRoot(state, true);
       return result;
@@ -685,7 +734,7 @@ export class LiveUpdateEngine {
         // 展開寫入的檔案待辦要由下一輪處理，所以一律立即接續。
         result.interrupted = true;
         if (walked.done) finish(item);
-        else result.attempted.add(item.filePath);
+        else result.attempted.add(localWorkKey(item));
         continue;
       }
       if (!info || !info.isFile()) {

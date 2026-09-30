@@ -1,4 +1,29 @@
 # 設計決策紀錄
+## D105：局部批次採穩定優先、首尾保留與延後代次隔離（2026-09-30）
+
+**背景**
+
+`§54` 的局部批次上限為 500 筆，既有 `§55` 以 `created_at_ms` 由舊到新取出工作；當待辦超過 500 筆時，批次尾端的新事件可能要等待多輪。穩定等待後被判定為不穩定的檔案也會留在佇列，若直接按原順序重取，會佔滿下一批。`m61` 只覆蓋小量佇列，未能證明 800 筆以上積壓時的首尾進度。
+
+**決策**
+
+1. 局部批次仍固定最多處理 `LOCAL_BATCH_MAX_ITEMS`（500）筆，仍只做一次穩定等待，並保留既有 writer lock、`§54` 穩定性判定、defer 上限、`§55` 輪替、事件優先於展開工作的順序。
+2. 每次從同一類別（event 或 expand）的候選中，先排除同一 `filePath` 與 `generation` 剛 defer 的工作項；穩定候選依既有 `created_at_ms` 順序取「最舊最多 400 筆」與「最新最多 100 筆」，再以舊到新的順序合併。穩定候選不足 500 筆時，再以舊到新補入延後候選。
+3. 批次仍先取 event，再取 expand；候選總量超過 500 時沿用既有 immediate continuation。延後狀態只存在記憶體，以 path 與 generation 辨識；新 generation 不繼承舊 generation 的 defer 狀態。
+4. 不變更 `LiveWorkQueue` schema／`created_at_ms` 合併規則、排除判斷、`runRoot` 根目錄分支、`reconcile.ts`、資料格式或索引行為。
+
+**取捨與否決方案**
+
+- 不採只取最舊：會讓新事件在持續積壓中等待多輪。
+- 不採只取最新：會破壞 `§55` 的舊待辦輪替保證。
+- 不採永久跳過 defer：會使噪音檔無法依既有 defer 上限收斂。
+- 不採提高上限、每檔獨立等待、取消穩定等待或平行寫入：會改變 `§54` 的批次／鎖語義，且增加 writer lock 與記憶體壓力。
+
+**驗證**
+
+- `m65` 驗證 800 筆以上舊積壓與新檔在兩個局部批次內都有進度、持續新增時舊待辦不永久餓死、defer 噪音不阻塞穩定檔案，以及反向恢復舊選擇後回歸失敗。
+- 執行 `npm run build`、`npm run test -- --runInBand test/m65.test.ts`、相關 live-update／queue 測試及完整 `npm test`；記錄既有 Windows 平台限制。
+
 ## D102：背景校正只在 frontier 頂端收尾 scope
 
 - 日期：2026-09-29。依 SPEC §70；本項分配給 `fix/fix-reconcile-frontier`，不涉及 §68／D100 的局部更新公平性或 §69／D101 的舊 root work item 清理。
