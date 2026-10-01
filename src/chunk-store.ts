@@ -107,12 +107,16 @@ export function decodeLayout(layout: Uint8Array): { starts: number[]; ordinals: 
   return { starts, ordinals };
 }
 
-const ASCII = /^[\x00-\x7f]*$/u;
 const ASCII_CASE_NEUTRAL = /^[^A-Za-z]*$/u;
 
-/** A chunk holds at most 64 Ki UTF-16 units (≤192 KiB UTF-8), so one 256 KiB output buffer avoids re-chunking (~30% faster). */
-function decompressChunk(text: Uint8Array): string {
-  return zstdDecompressSync(text, { chunkSize: 256 * 1024 }).toString("utf8");
+/** Use zstd's fast fixed output slab; the bounded arena owns compact cached copies. */
+export function decompressChunk(text: Uint8Array): Buffer {
+  return zstdDecompressSync(text, { chunkSize: 256 * 1024 });
+}
+
+function isAsciiBuffer(text: Uint8Array): boolean {
+  for (let index = 0; index < text.length; index++) if (text[index]! > 0x7f) return false;
+  return true;
 }
 
 /**
@@ -123,12 +127,38 @@ function decompressChunk(text: Uint8Array): string {
  * straight to blocks. `firstOnly` stops at the first block per term.
  */
 export function blocksContaining(text: Uint8Array, layout: Uint8Array, terms: readonly string[], firstOnly: boolean): Map<string, number[]> {
-  const joined = decompressChunk(text);
+  return blocksContainingBuffer(decompressChunk(text), layout, terms, firstOnly);
+}
+
+/** Same verification as blocksContaining(), reusing a caller-owned decompressed Buffer. */
+export function blocksContainingBuffer(text: Uint8Array, layout: Uint8Array, terms: readonly string[], firstOnly: boolean): Map<string, number[]> {
+  const buffer = Buffer.isBuffer(text) ? text : Buffer.from(text);
+  const ascii = isAsciiBuffer(buffer);
+  const hits = new Map<string, number[]>(terms.map(term => [term, []]));
+  if (ascii && terms.every(term => ASCII_CASE_NEUTRAL.test(term))) {
+    const { starts, ordinals } = decodeLayout(layout);
+    for (const term of terms) {
+      const list = hits.get(term)!;
+      const needle = Buffer.from(term, "utf8");
+      let from = 0, block = 0;
+      while (true) {
+        const at = buffer.indexOf(needle, from);
+        if (at < 0) break;
+        while (block + 1 < starts.length && starts[block + 1]! <= at) block++;
+        const end = block + 1 < starts.length ? starts[block + 1]! - 1 : buffer.length;
+        if (at + needle.length <= end) {
+          list.push(ordinals[block]!);
+          if (firstOnly || block + 1 >= starts.length) break;
+          from = starts[++block]!;
+        } else from = at + 1;
+      }
+    }
+    return hits;
+  }
+  const joined = buffer.toString("utf8");
   // NFKC leaves ASCII unchanged, so ASCII chunks only need lower-casing.
-  const ascii = ASCII.test(joined);
   const normalizedJoined = ascii ? joined.toLowerCase() : normalizeText(joined);
   const wanted = terms.filter(term => normalizedJoined.includes(term));
-  const hits = new Map<string, number[]>(terms.map(term => [term, []]));
   if (!wanted.length) return hits;
   const { starts, ordinals } = decodeLayout(layout);
   const endOf = (index: number) => index + 1 < starts.length ? starts[index + 1]! - 1 : joined.length;
@@ -160,39 +190,68 @@ export function blocksContaining(text: Uint8Array, layout: Uint8Array, terms: re
   return hits;
 }
 
-/** First exact block ordinal for one phrase; avoids per-term Map/array allocation on the no-hit path. */
+/**
+ * First exact block ordinal for one phrase. ASCII case-neutral queries use the
+ * decompressed UTF-8 Buffer directly; all other cases retain the normalized
+ * string fallback so byte and UTF-16 offsets cannot be confused.
+ */
 export function firstBlockContaining(text: Uint8Array, layout: Uint8Array, term: string): number | undefined {
-  const joined = decompressChunk(text);
-  const ascii = ASCII.test(joined);
-  if (!ascii) {
-    const { starts, ordinals } = decodeLayout(layout);
-    for (let index = 0; index < starts.length; index++) {
-      const end = index + 1 < starts.length ? starts[index + 1]! - 1 : joined.length;
-      if (normalizeText(joined.slice(starts[index], end)).includes(term)) return ordinals[index];
-    }
-    return undefined;
-  }
-  // For digits, whitespace and punctuation, lower-casing the chunk cannot
-  // change whether the normalized query is present; avoid that allocation in
-  // the common long numeric no-hit scan.
-  const normalizedJoined = ASCII_CASE_NEUTRAL.test(term) ? joined : joined.toLowerCase();
-  let from = 0;
-  let block = 0;
-  let layoutData: { starts: number[]; ordinals: number[] } | undefined;
-  while (true) {
-    const at = normalizedJoined.indexOf(term, from);
-    if (at < 0) return undefined;
-    const positions = layoutData ??= decodeLayout(layout);
-    while (block + 1 < positions.starts.length && positions.starts[block + 1]! <= at) block++;
-    const end = block + 1 < positions.starts.length ? positions.starts[block + 1]! - 1 : joined.length;
-    if (at + term.length <= end) return positions.ordinals[block];
-    from = at + 1;
-  }
+  return firstBlockContainingBuffer(decompressChunk(text), layout, term);
 }
 
-/** Original block contents of one chunk, in ordinal order. */
+/** Same verification as firstBlockContaining(), reusing a caller-owned decompressed Buffer. */
+export function firstBlockContainingBuffer(text: Uint8Array, layout: Uint8Array, term: string, asciiNeedle?: Buffer): number | undefined {
+  const buffer = Buffer.isBuffer(text) ? text : Buffer.from(text);
+  const ascii = isAsciiBuffer(buffer);
+  if (ascii && ASCII_CASE_NEUTRAL.test(term)) {
+    const needle = asciiNeedle ?? Buffer.from(term, "utf8");
+    let from = 0;
+    let block = 0;
+    let positions: { starts: number[]; ordinals: number[] } | undefined;
+    while (true) {
+      const at = buffer.indexOf(needle, from);
+      if (at < 0) return undefined;
+      positions ??= decodeLayout(layout);
+      while (block + 1 < positions.starts.length && positions.starts[block + 1]! <= at) block++;
+      const end = block + 1 < positions.starts.length ? positions.starts[block + 1]! - 1 : buffer.length;
+      if (at + needle.length <= end) return positions.ordinals[block];
+      from = at + 1;
+    }
+  }
+
+  const joined = buffer.toString("utf8");
+  if (ascii) {
+    const normalizedJoined = joined.toLowerCase();
+    const { starts, ordinals } = decodeLayout(layout);
+    let from = 0;
+    let block = 0;
+    while (true) {
+      const at = normalizedJoined.indexOf(term, from);
+      if (at < 0) return undefined;
+      while (block + 1 < starts.length && starts[block + 1]! <= at) block++;
+      const end = block + 1 < starts.length ? starts[block + 1]! - 1 : joined.length;
+      if (at + term.length <= end) return ordinals[block];
+      from = at + 1;
+    }
+  }
+
+  const { starts, ordinals } = decodeLayout(layout);
+  for (let index = 0; index < starts.length; index++) {
+    const end = index + 1 < starts.length ? starts[index + 1]! - 1 : joined.length;
+    if (normalizeText(joined.slice(starts[index], end)).includes(term)) return ordinals[index];
+  }
+  return undefined;
+}
+
+/** Original blocks of one chunk, in ordinal order. */
 export function decodeChunk(text: Uint8Array, layout: Uint8Array): ChunkBlock[] {
-  const joined = decompressChunk(text);
+  return decodeChunkBuffer(decompressChunk(text), layout);
+}
+
+/** Same decoding as decodeChunk(), reusing a caller-owned decompressed Buffer. */
+export function decodeChunkBuffer(text: Uint8Array, layout: Uint8Array): ChunkBlock[] {
+  const buffer = Buffer.isBuffer(text) ? text : Buffer.from(text);
+  const joined = buffer.toString("utf8");
   const { starts, ordinals } = decodeLayout(layout);
   return ordinals.map((ordinal, index) => ({
     ordinal,
