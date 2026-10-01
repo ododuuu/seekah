@@ -2915,3 +2915,45 @@ docsearch doctor
 - `test/m86.test.ts` 必須以兩份合成文件的可控解析／等待序列證明下一份檔案的穩定等待已開始後，前一份仍可繼續解析；改回整批單次等待或逐檔串行等待時測試必須失敗。
 - 量測使用本機暫存目錄與合成資料；不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄／備份，不啟動其 daemon，不修改 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`、package 版本或 lockfile。
 - 本節不對背景寫入期間搜尋較慢的根因作判定、不修改 WAL／autocheckpoint／唯讀搜尋連線設定；該問題另由指定工作處理。
+## 91. 背景寫入期間搜尋慢的合成量測與連線設定邊界
+
+依 D123。這一節處理「背景更新寫入期間搜尋約慢 1.3～1.6 倍」的調查，不在沒有證據時改動 WAL、checkpoint 或唯讀連線設定。
+
+### 91.1 調查範圍
+
+- 產品主索引仍使用第 66 節的 WAL、有界 busy 等待、唯讀搜尋連線 `query_only=ON`、每連線 page cache 與 mmap 設定；背景寫入仍沿用既有交易、`wal_autocheckpoint` 與 `checkpointWal()`。
+- 調查必須使用隔離 `LOCALDOCSEARCH_DATA_DIR`、合成文件與獨立 writer／reader 程序，不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份。
+- 至少比較無 writer、產品現況、停用唯讀 mmap、停用自動 checkpoint 及保留／停用顯式 checkpoint 的組合；讀取結果必須逐次保持完整，不得以放寬 exact verification 換取時間。
+
+### 91.2 調查結論與產品邊界
+
+- 若候選設定在相同合成負載下沒有穩定改善，保留目前設定，不把受機器負載影響的比例寫成已證實根因。
+- 若後續有可重現證據，才可在本節新增只限儲存讀取／連線設定層的修正；不得順帶改變搜尋候選、排序、片段、總數、WAL 資料完整性或錯誤語意。
+- 本次量測未重現 1.3～1.6 倍，也未證實唯讀 WAL-index 讀取或 `wal_autocheckpoint` 是主因，因此目前不新增 C 的產品設定變更。`test/m87.test.ts` 只保護背景提交期間的 WAL 讀取正確性與資料版本可見性，不設定不穩定的毫秒門檻。
+
+### 91.3 驗收與限制
+
+- 必須記錄文件數、區塊數、writer／reader 並行度、批次大小、checkpoint 組合、p50／p95、結果數及執行環境；量測受其他負載影響時必須明列。
+- 本機合成量測不能代表公司 Windows；若部署後仍有慢化，應另行記錄 event、transaction、checkpoint、候選驗證及當頁物化階段，不能直接沿用本節的未重現結論。
+
+## 92. 長文件多段落當頁讀取候選化
+
+依 D124。本節只改善當頁多段落物化時的儲存讀取量，不改搜尋結果選擇或片段呈現語意。
+
+### 92.1 讀取策略
+
+- current chunk store 的當頁多段落讀取可用既有 chunk／heading FTS 索引取得保守候選：只讀可能包含當頁前最多四個搜尋詞的 chunks，以及可能命中標題的 block metadata。
+- FTS 候選只是 storage read 的縮小提示；既有 exact per-block `includes` 驗證、每詞第一次命中 block、依 ordinal 排序、相鄰 block 合併、`makeSnippet()`、`omittedTerms` 與檔名-only 邊界全部保留在搜尋層。
+- candidate chunk、heading-only block、空內容 block 與缺少可用 FTS 表的情況必須保守可讀；後兩者使用 metadata 或原本完整讀取 fallback，不得因效能路徑漏掉結果。
+- block-index 與 pre-chunk legacy store 維持原本完整讀取路徑；不新增索引表、欄位、migration、全文 cache 或公開 API 欄位。
+
+### 92.2 結果與相容性
+
+- `SearchResult` 的結果集合、順序、rank、代表位置、snippet、passages、total、`totalRelation`、scope、status 與排序均不得因候選讀取改變。
+- 多段落仍只在 `materialize` 當頁執行；候選讀取不得進入建立 stream、翻頁前的 rank 或 total 計算。工作台、MCP、CLI 與舊索引相容入口不變。
+
+### 92.3 驗收
+
+- `test/m88.test.ts` 必須以同一合成長文件分別走完整讀取與候選讀取，逐欄比較當頁結果，並證明候選路徑驗證的 chunks／bytes 較少；拿掉候選 terms 傳遞或退回完整讀取時，該讀取量斷言必須失敗。
+- 必須執行 `test/m76.test.ts` 的既有三種索引形狀回歸與 `scripts/search-diff.mjs`；搜尋差分的結果集合、欄位、排序、rank、total、`totalRelation` 必須為 0 差異。
+- 效能數字只作本機觀察；長文件查詢詞若分散於幾乎所有 chunks，收益可接近零，不得宣稱所有文件固定加速。
