@@ -176,6 +176,8 @@ async function fixtureFor(viewport) {
   const refreshFolder = path.join(root, "refresh-area");
   const multiPath = path.join(root, "multi-passage-lines.txt");
   const singlePath = path.join(root, "single-passage.txt");
+  const phraseSecondPath = path.join(root, "phrase-second.txt");
+  const filenameBodyPath = path.join(root, "UI_SMOKE_FILENAME_BODY_NEEDLE.txt");
   const omittedPath = path.join(root, "omitted-terms.txt");
   await mkdir(path.join(root, "excluded"), { recursive: true });
   await mkdir(path.join(refreshFolder, "ignored"), { recursive: true });
@@ -193,6 +195,12 @@ async function fixtureFor(viewport) {
     "node final passage",
   ].join("\n") + "\n");
   await writeFile(singlePath, "private node together\n");
+  await writeFile(phraseSecondPath, [
+    "UI_SMOKE_PHRASE_NEEDLE first passage",
+    "合成 phrase filler。",
+    "UI_SMOKE_PHRASE_NEEDLE second passage",
+  ].join("\n") + "\n");
+  await writeFile(filenameBodyPath, "UI_SMOKE_FILENAME_BODY_NEEDLE body passage\n");
   await writeFile(omittedPath, "alpha beta gamma delta epsilon\n");
   for (let index = 0; index < 22; index += 1) {
     await writeFile(path.join(root, `page-result-${String(index).padStart(2, "0")}.txt`), `UI_SMOKE_PAGE_TOKEN ${index}\n`);
@@ -207,11 +215,13 @@ async function fixtureFor(viewport) {
     root,
     dataDir,
     refreshFolder,
+    excludedPath: path.join(root, "excluded", "secret.txt"),
     indexedPath: path.join(root, "included 中文😀.txt"),
     multiPath,
     singlePath,
+    phraseSecondPath,
+    filenameBodyPath,
     omittedPath,
-    excludedPath: path.join(root, "excluded", "secret.txt"),
     outsidePath: path.join(temp, "outside-root.txt"),
   };
   } catch (error) {
@@ -860,6 +870,44 @@ async function runViewport(viewport, chromePath) {
     });
 
     await installPickerPatch(cdp);
+    await check(`${label} 主題按鈕循環、URL 保存與 token fragment 保留`, async () => {
+      const start = browserEvents.length;
+      const sequence = await cdp.evaluate(`(() => {
+        const button = document.getElementById("theme-button");
+        if (!(button instanceof HTMLElement)) return null;
+        const read = () => ({
+          mode: document.documentElement.dataset.theme || "",
+          search: location.search,
+          hash: location.hash,
+          canvas: getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim(),
+          label: button.textContent || "",
+        });
+        const values = [read()];
+        button.click(); values.push(read());
+        button.click(); values.push(read());
+        button.click(); values.push(read());
+        return values;
+      })()`);
+      expect(sequence?.length === 4, "主題按鈕不存在或無法循環。");
+      expect(sequence[0].mode === "auto" && sequence[1].mode === "light" && sequence[2].mode === "dark" && sequence[3].mode === "auto", "主題循環順序不是自動／淺色／深色。");
+      expect(sequence[1].search === "?theme=light" && sequence[2].search === "?theme=dark" && sequence[3].search === "", "主題 query 保存／清除不符。");
+      expect(sequence.every(item => item.hash === sequence[0].hash), "主題切換改寫了 token fragment。");
+      expect(sequence[1].canvas !== sequence[2].canvas, "淺色／深色沒有套用不同 CSS token。");
+      await cdp.evaluate(`(() => {
+        const button = document.getElementById("theme-button");
+        button?.click();
+        button?.click();
+        return true;
+      })()`);
+      const explicit = await cdp.evaluate("({ mode: document.documentElement.dataset.theme, search: location.search, hash: location.hash })");
+      expect(explicit.mode === "dark" && explicit.search === "?theme=dark", "深色主題保存失敗。");
+      await reloadWorkbench(cdp);
+      const persisted = await cdp.evaluate("({ mode: document.documentElement.dataset.theme, search: location.search, hash: location.hash })");
+      expect(persisted.mode === "dark" && persisted.search === "?theme=dark" && persisted.hash === sequence[0].hash, "重新載入沒有保留深色主題或 token。");
+      await click(cdp, "#theme-button");
+      expect(await cdp.evaluate("document.documentElement.dataset.theme === 'auto' && location.search === ''"), "清除主題後沒有回到 auto。");
+      await noBrowserErrorsSince(cdp, start, "主題切換");
+    });
     await check(`${label} 搜尋有結果`, async () => {
       const start = browserEvents.length;
       await click(cdp, "#nav-documents");
@@ -1092,6 +1140,59 @@ async function runViewport(viewport, chromePath) {
       expect(allTerms.copyButtons === 2, "all-terms 單一結果遺失既有複製控制。");
       expect(allTerms.snippet === phrase.snippet, "phrase 與單一 all-terms 的既有 snippet 外觀不一致。");
       await noBrowserErrorsSince(cdp, start, "單一 passage／phrase");
+    });
+    await check(`${label} phrase 第二片段與檔名／內文共命中顯示內容`, async () => {
+      const start = browserEvents.length;
+      await setSearchMode(cdp, "phrase");
+      await inputAndSearch(cdp, "UI_SMOKE_PHRASE_NEEDLE");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "phrase-second.txt"))`));
+      const response = await searchDirectly(cdp, "UI_SMOKE_PHRASE_NEEDLE", "phrase");
+      const phrase = response.data?.results?.find(item => typeof item.path === "string" && item.path.endsWith("phrase-second.txt"));
+      expect(phrase?.passages?.length === 2, "phrase API 沒有回傳同文件第二片段。");
+      expect(phrase.passages[0].location === "第 1 行" && phrase.passages[1].location === "第 3 行", "phrase 第二片段位置不符。");
+      const list = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "phrase-second.txt");
+        return row ? {
+          passages: row.querySelectorAll(".result-passages > .result-passage").length,
+          snippets: Array.from(row.querySelectorAll(".result-passage-snippet")).map(node => node.textContent || ""),
+        } : null;
+      })()`);
+      expect(list?.passages === 2 && list.snippets.some(value => value.includes("second passage")), "列表沒有顯示第二片段。");
+      await click(cdp, "#view-table");
+      await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
+      const tablePassages = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "phrase-second.txt");
+        return row ? row.querySelectorAll(".result-passages > .result-passage").length : 0;
+      })()`);
+      expect(tablePassages === 2, "表格沒有顯示 phrase 第二片段。");
+      await click(cdp, "#view-list");
+      await waitFor(() => visible(cdp, "#document-list"));
+
+      const filenameQuery = "UI_SMOKE_FILENAME_BODY_NEEDLE";
+      await inputAndSearch(cdp, filenameQuery);
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "UI_SMOKE_FILENAME_BODY_NEEDLE.txt"))`));
+      const filenameResponse = await searchDirectly(cdp, filenameQuery, "phrase");
+      const filenameBody = filenameResponse.data?.results?.find(item => typeof item.path === "string" && item.path.endsWith("UI_SMOKE_FILENAME_BODY_NEEDLE.txt"));
+      expect(filenameBody?.filenameOnly === true && filenameBody.passages?.length === 1, "檔名／內文共命中 API 欄位不符。");
+      expect(filenameBody.passages[0].snippet.includes("body passage"), "檔名／內文共命中 API 沒有 body snippet。");
+      const filenameRow = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "UI_SMOKE_FILENAME_BODY_NEEDLE.txt");
+        return row ? {
+          snippet: row.querySelector(".snippet")?.textContent || "",
+          filenameFallback: row.textContent?.includes("檔名符合") || false,
+        } : null;
+      })()`);
+      expect(filenameRow?.snippet.includes("body passage") && !filenameRow.filenameFallback, "工作台仍只顯示檔名符合。");
+      await click(cdp, "#view-table");
+      await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
+      const filenameTable = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "UI_SMOKE_FILENAME_BODY_NEEDLE.txt");
+        return row?.querySelector(".snippet")?.textContent || "";
+      })()`);
+      expect(filenameTable.includes("body passage"), "表格仍遺失檔名／內文共命中片段。");
+      await click(cdp, "#view-list");
+      await waitFor(() => visible(cdp, "#document-list"));
+      await noBrowserErrorsSince(cdp, start, "phrase 第二片段與檔名／內文共命中");
     });
 
     await check(`${label} omittedTerms 顯示省略詞提示`, async () => {
@@ -1698,7 +1799,7 @@ async function main() {
   console.log(`合成資料與暫存索引只會建立在暫存目錄；輸出目錄：${outputDir}`);
   let executionError;
   try {
-    for (const viewport of [{ width: 1440, height: 900 }, { width: 1180, height: 800 }]) {
+    for (const viewport of [{ width: 1920, height: 1080 }, { width: 1440, height: 900 }, { width: 1180, height: 800 }]) {
       await runViewport(viewport, chromePath);
     }
   } catch (error) {

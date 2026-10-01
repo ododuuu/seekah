@@ -237,6 +237,7 @@ interface RankedSearchResult {
   documentId: number;
   ordinal: number | null;
   sourceKind: "filename" | "heading" | "content";
+  passageOrdinals?: number[] | undefined;
 }
 
 export interface SearchResultPage {
@@ -308,6 +309,18 @@ function matchingPassageBlock(block: StoredBlockRow, terms: readonly string[]): 
   return { block, terms: termsInDocumentOrder(source, matched), source };
 }
 
+function toSearchPassage(item: PassageBlock): SearchPassage {
+  const terms = termsInDocumentOrder(item.source, item.terms);
+  const snippet = makeSnippet(item.source, snippetTerm(item.source, terms));
+  return {
+    terms,
+    heading: item.block.heading,
+    location: item.block.location_value,
+    snippet: snippet.text,
+    snippetTruncated: snippet.truncated,
+  };
+}
+
 function allTermsPassages(store: IndexStore, filePath: string, terms: readonly string[],
   trace?: SearchTraceRecorder): { passages: SearchPassage[]; omittedTerms: number } {
   const passageTerms = terms.slice(0, MAX_PASSAGE_TERMS);
@@ -316,17 +329,57 @@ function allTermsPassages(store: IndexStore, filePath: string, terms: readonly s
   const candidate = store.candidateByPath(filePath, trace);
   if (!candidate) return { passages: [], omittedTerms };
 
-  const firstBlocks: PassageBlock[] = [];
-  const seenTerms = new Set<string>();
+  const occurrences = new Map<string, PassageBlock[]>();
   for (const block of candidate.blocks) {
     const match = matchingPassageBlock(block, passageTerms);
     if (!match) continue;
-    const firstTerms = match.terms.filter(term => !seenTerms.has(term));
-    if (!firstTerms.length) continue;
-    for (const term of firstTerms) seenTerms.add(term);
-    firstBlocks.push({ ...match, terms: firstTerms });
+    for (const term of match.terms) {
+      const termOccurrences = occurrences.get(term) ?? [];
+      termOccurrences.push({ ...match, terms: [term] });
+      occurrences.set(term, termOccurrences);
+    }
   }
 
+  const selected = new Map<number, PassageBlock>();
+  for (const term of passageTerms) {
+    const termOccurrences = occurrences.get(term) ?? [];
+    if (!termOccurrences.length) continue;
+    const otherOccurrences = [...occurrences.entries()]
+      .filter(([otherTerm]) => otherTerm !== term)
+      .flatMap(([, values]) => values)
+      .sort((left, right) => left.block.ordinal - right.block.ordinal);
+    let chosen = termOccurrences[0]!;
+    if (otherOccurrences.length) {
+      const distance = (item: PassageBlock, other: PassageBlock): number =>
+        Math.abs(item.block.ordinal - other.block.ordinal);
+      const nearestDistance = (item: PassageBlock): number => {
+        let low = 0;
+        let high = otherOccurrences.length;
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2);
+          if (otherOccurrences[middle]!.block.ordinal < item.block.ordinal) low = middle + 1;
+          else high = middle;
+        }
+        const previous = otherOccurrences[low - 1];
+        const next = otherOccurrences[low];
+        return Math.min(
+          previous ? distance(item, previous) : Number.POSITIVE_INFINITY,
+          next ? distance(item, next) : Number.POSITIVE_INFINITY,
+        );
+      };
+      chosen = termOccurrences.reduce((best, item) => {
+        const itemDistance = nearestDistance(item);
+        const bestDistance = nearestDistance(best);
+        return itemDistance < bestDistance || (itemDistance === bestDistance && item.block.ordinal < best.block.ordinal)
+          ? item : best;
+      });
+    }
+    const existing = selected.get(chosen.block.ordinal);
+    if (existing) existing.terms.push(term);
+    else selected.set(chosen.block.ordinal, chosen);
+  }
+
+  const selectedBlocks = [...selected.values()].sort((left, right) => left.block.ordinal - right.block.ordinal);
   const passages: SearchPassage[] = [];
   let group: PassageBlock[] = [];
   const flush = () => {
@@ -343,13 +396,58 @@ function allTermsPassages(store: IndexStore, filePath: string, terms: readonly s
     });
     group = [];
   };
-  for (const item of firstBlocks) {
+  for (const item of selectedBlocks) {
     const previous = group.at(-1);
     if (previous && item.block.ordinal !== previous.block.ordinal + 1) flush();
     group.push(item);
   }
   flush();
   return { passages, omittedTerms };
+}
+
+function phrasePassageBlocks(store: IndexStore, documentId: number, filePath: string, terms: readonly string[],
+  preferredOrdinal: number | null, primarySource: string, passageOrdinals: readonly number[] | undefined,
+  trace?: SearchTraceRecorder): PassageBlock[] {
+  let ordinals = passageOrdinals ? [...passageOrdinals] : [];
+  if (!passageOrdinals) {
+    if (store.chunkStoreReady()) {
+      for (const chunk of store.chunkCandidatesForDocument(terms[0]!, documentId, trace)) {
+        ordinals.push(...(store.chunkTermHits(chunk, terms, false, trace).get(terms[0]!) ?? []));
+      }
+    } else if (store.blockIndexReady()) {
+      ordinals.push(...store.indexHeadingCandidates(terms[0]!, trace)
+        .filter(row => row.documentId === documentId && normalize(row.heading).includes(terms[0]!))
+        .map(row => row.ordinal));
+      ordinals.push(...store.indexContentBlocks(terms, [documentId], trace)
+        .filter(row => row.documentId === documentId)
+        .map(row => row.ordinal));
+    } else if (preferredOrdinal === null) {
+      const candidate = store.candidateByPath(filePath, trace);
+      for (const block of candidate?.blocks ?? []) {
+        if (matchingPassageBlock(block, terms)) ordinals.push(block.ordinal);
+      }
+    }
+  }
+  if (preferredOrdinal !== null) ordinals.push(preferredOrdinal);
+  const uniqueOrdinals = [...new Set(ordinals)].sort((left, right) =>
+    Number(right === preferredOrdinal) - Number(left === preferredOrdinal) || left - right).slice(0, 2);
+  const matches: PassageBlock[] = [];
+  for (const ordinal of uniqueOrdinals) {
+    const display = store.blockDisplay(documentId, ordinal);
+    const headingMatches = display.heading !== null && terms.every(term => normalize(display.heading!).includes(term));
+    const content = ordinal === preferredOrdinal ? primarySource
+      : headingMatches ? "" : store.blockSource(documentId, ordinal, "content", trace) ?? "";
+    const block: StoredBlockRow = {
+      ordinal,
+      heading: display.heading,
+      content,
+      location_kind: display.location_kind,
+      location_value: display.location,
+    };
+    const match = matchingPassageBlock(block, terms);
+    if (match) matches.push(match);
+  }
+  return matches;
 }
 
 type SelectedBlock = { block: StoredBlockRow; source: string; coverage: number; headingHit: boolean };
@@ -361,12 +459,14 @@ function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockR
   let headingBlock: StoredBlockRow | undefined;
   let contentBlock: StoredBlockRow | undefined;
   let representative: SelectedBlock | undefined;
+  const phraseOrdinals = new Set<number>();
   const unmatched = new Set(terms.filter(term => field === "content" || !filename.includes(term)));
   if (!filenameRank && field !== "filename") {
     for (const block of blocks) {
       const exactTextStarted = performance.now();
       const heading = normalize(block.heading ?? "");
       const content = normalize(block.content);
+      if (mode === "phrase" && phraseOrdinals.size < 2 && (heading.includes(query) || content.includes(query))) phraseOrdinals.add(block.ordinal);
       if (mode === "all-terms") {
         for (const term of unmatched) if (heading.includes(term) || content.includes(term)) unmatched.delete(term);
       }
@@ -399,7 +499,8 @@ function rankDocument(document: StoredDocumentRow, blocks: Iterable<StoredBlockR
     location: block?.location_value ?? null, snippet: "", rank: effectiveRank,
     reason: rankReason(mode, effectiveRank),
     filenameOnly: !block, status: document.status, snippetTruncated: false },
-    documentId: document.id, ordinal: block?.ordinal ?? null, sourceKind };
+    documentId: document.id, ordinal: block?.ordinal ?? null, sourceKind,
+    passageOrdinals: mode === "phrase" && !filenameRank ? [...phraseOrdinals] : undefined };
 }
 
 function rankReason(mode: SearchMode, rank: number): string {
@@ -407,7 +508,7 @@ function rankReason(mode: SearchMode, rank: number): string {
     : ["", "內容", "標題", "檔名包含", "檔名完全符合"][rank]!;
 }
 
-type IndexedRank = { rank: number; sourceKind: RankedSearchResult["sourceKind"]; ordinal: number | null };
+type IndexedRank = { rank: number; sourceKind: RankedSearchResult["sourceKind"]; ordinal: number | null; passageOrdinals?: number[] | undefined };
 
 /**
  * SPEC §50.2: the same ranking as rankDocument(), computed from the block
@@ -481,11 +582,28 @@ function indexedHits(store: IndexStore, query: string, terms: readonly string[],
       if (previous === undefined || row.ordinal < previous) headingAll.set(row.documentId, row.ordinal);
     }
     const contentAll = store.indexContentFirstBlocks(terms, restrict, trace);
+    const phraseContentOrdinals = new Map<number, number[]>();
+    if (mode === "phrase") {
+      for (const row of store.indexContentBlocks(terms, restrict, trace)) {
+        const ordinals = phraseContentOrdinals.get(row.documentId) ?? [];
+        ordinals.push(row.ordinal);
+        phraseContentOrdinals.set(row.documentId, ordinals);
+      }
+    }
+    const phrasePassageOrdinals = (documentId: number): number[] => {
+      const ordinals = [
+        ...(headingHits.get(terms[0]!) ?? []).filter(row => row.documentId === documentId).map(row => row.ordinal),
+        ...(phraseContentOrdinals.get(documentId) ?? []),
+      ];
+      return [...new Set(ordinals)].sort((left, right) => left - right);
+    };
     const blockRank = (documentId: number): IndexedRank | undefined => {
       const heading = headingAll.get(documentId);
-      if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
+      if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading,
+        passageOrdinals: mode === "phrase" ? phrasePassageOrdinals(documentId) : undefined };
       const content = contentAll.get(documentId);
-      return content === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: content };
+      return content === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: content,
+        passageOrdinals: mode === "phrase" ? phrasePassageOrdinals(documentId) : undefined };
     };
 
     if (mode === "phrase") {
@@ -578,7 +696,8 @@ function indexedHits(store: IndexStore, query: string, terms: readonly string[],
     results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
       modifiedAtMs: document.modified_at_ms, heading: block?.heading ?? null, location: block?.location ?? null, snippet: "",
       rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: !block, status: document.status, snippetTruncated: false },
-    documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
+    documentId: document.id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind,
+    passageOrdinals: ranked.passageOrdinals });
   }
   return results;
 }
@@ -653,9 +772,9 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     }
     return phraseContentCandidates;
   };
-  let phraseDocumentHits: Map<number, number> | undefined;
+  let phraseDocumentHits: Map<number, number[]> | undefined;
   let phraseDocumentHitsLoaded = false;
-  const ensurePhraseDocumentHits = (): Map<number, number> | undefined => {
+  const ensurePhraseDocumentHits = (): Map<number, number[]> | undefined => {
     if (!longPhrase) return undefined;
     if (!phraseDocumentHitsLoaded) {
       phraseDocumentHitsLoaded = true;
@@ -690,6 +809,18 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     byDocument.set(documentId, chunks);
     return chunks;
   };
+  const phrasePassageOrdinals = (documentId: number): number[] => {
+    const ordinals = new Set<number>(headingRowsFor(query, documentId).map(row => row.ordinal));
+    const indexed = ensurePhraseDocumentHits();
+    if (indexed) {
+      for (const ordinal of indexed.get(documentId) ?? []) ordinals.add(ordinal);
+    } else {
+      for (const chunk of contentChunksFor(query, documentId)) {
+        for (const ordinal of store.chunkTermHits(chunk, [query], false, trace).get(query) ?? []) ordinals.add(ordinal);
+      }
+    }
+    return [...ordinals].sort((left, right) => left - right);
+  };
   const headingAllFor = (documentId: number): number | undefined => {
     if (field === "filename") return undefined;
     let first: number | undefined;
@@ -711,21 +842,15 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
     if (field === "filename") return undefined;
     const id = Number(document.id);
     const heading = headingAllFor(id);
-    if (heading !== undefined) return { rank: 2, sourceKind: "heading", ordinal: heading };
+    if (heading !== undefined) {
+      return mode === "phrase"
+        ? { rank: 2, sourceKind: "heading", ordinal: heading, passageOrdinals: phrasePassageOrdinals(id) }
+        : { rank: 2, sourceKind: "heading", ordinal: heading };
+    }
     if (mode === "phrase") {
-      if (longPhrase) {
-        const hits = ensurePhraseDocumentHits();
-        if (hits) {
-          const first = hits.get(id);
-          return first === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: first };
-        }
-      }
-      // Candidate chunks are in block order, so the first hit is the smallest matching ordinal.
-      for (const chunk of contentChunksFor(query, id)) {
-        const first = store.chunkTermHits(chunk, [query], true, trace).get(query)![0];
-        if (first !== undefined) return { rank: 1, sourceKind: "content", ordinal: first };
-      }
-      return undefined;
+      const passageOrdinals = phrasePassageOrdinals(id);
+      const first = passageOrdinals[0];
+      return first === undefined ? undefined : { rank: 1, sourceKind: "content", ordinal: first, passageOrdinals };
     }
     // all-terms: every term not in the filename must occur in some heading or block.
     const chunkIds = [...new Set(uniqueTerms.flatMap(term => contentChunksFor(term, id)))];
@@ -842,7 +967,8 @@ function chunkHitStream(store: IndexStore, query: string, terms: readonly string
         results.push({ result: { reference: documentReference(document.id, document.path), path: document.path, extension: document.extension,
           modifiedAtMs: document.modified_at_ms, heading: display?.heading ?? null, location: display?.location ?? null, snippet: "",
           rank: ranked.rank, reason: rankReason(mode, ranked.rank), filenameOnly: ranked.ordinal === null, status: document.status,
-          snippetTruncated: false }, documentId: id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind });
+          snippetTruncated: false }, documentId: id, ordinal: ranked.ordinal, sourceKind: ranked.sourceKind,
+        passageOrdinals: ranked.passageOrdinals });
       }
       trace.setTotalRelation(done ? "eq" : "gte");
     },
@@ -979,7 +1105,7 @@ export function collectHits(store: IndexStore, rawQuery: string, types?: readonl
 }
 
 function materializeHits(store: IndexStore, ranked: readonly RankedSearchResult[], rawQuery: string, mode: SearchMode,
-  page: number, pageSize: number, condition?: string, trace?: SearchTraceRecorder): SearchResultPage {
+  page: number, pageSize: number, condition?: string, trace?: SearchTraceRecorder, field: SearchField = "all"): SearchResultPage {
   trace?.resume();
   try {
     const { terms } = queryTerms(rawQuery, mode);
@@ -988,27 +1114,40 @@ function materializeHits(store: IndexStore, ranked: readonly RankedSearchResult[
     const pageCount = Math.max(1, Math.ceil(ranked.length / pageSize));
     if (ranked.length > 0 && page > pageCount) throw new Error(`頁碼超出範圍；共有 ${pageCount} 頁。`);
     const offset = (page - 1) * pageSize;
-    const selected = ranked.slice(offset, offset + pageSize).map(({ result, documentId, ordinal, sourceKind }) => {
+    const selected = ranked.slice(offset, offset + pageSize).map(({ result, documentId, ordinal, sourceKind, passageOrdinals }) => {
       const source = sourceKind === "filename" ? path.basename(result.path)
         : ordinal === null ? path.basename(result.path) : store.blockSource(documentId, ordinal, sourceKind, trace) ?? path.basename(result.path);
       const snippetStarted = performance.now();
       try {
         const snippetQuery = snippetTerm(source, terms);
         const snippet = makeSnippet(source, snippetQuery);
-        const passageData = mode === "all-terms"
-          ? result.filenameOnly
+        let passageData: { passages: SearchPassage[]; omittedTerms: number };
+        if (mode === "all-terms") {
+          passageData = field === "filename"
             ? { passages: [], omittedTerms: Math.max(0, terms.length - MAX_PASSAGE_TERMS) }
-            : allTermsPassages(store, result.path, terms, trace)
-          : {
-            passages: !result.filenameOnly ? [{
-              terms: [terms[0]!],
-              heading: result.heading,
-              location: result.location,
-              snippet: snippet.text,
-              snippetTruncated: snippet.truncated,
-            }] : [],
+            : allTermsPassages(store, result.path, terms, trace);
+        } else if (field === "filename") {
+          passageData = { passages: [], omittedTerms: 0 };
+        } else {
+          const primaryPassage: SearchPassage = {
+            terms: [terms[0]!],
+            heading: result.heading,
+            location: result.location,
+            snippet: snippet.text,
+            snippetTruncated: snippet.truncated,
+          };
+          const matches = phrasePassageBlocks(store, documentId, result.path, terms, ordinal, source, passageOrdinals, trace);
+          const extraPassages = matches
+            .filter(item => item.block.ordinal !== ordinal)
+            .slice(0, 1)
+            .map(toSearchPassage);
+          passageData = {
+            passages: result.filenameOnly
+              ? matches.slice(0, 2).map(toSearchPassage)
+              : [primaryPassage, ...extraPassages],
             omittedTerms: 0,
           };
+        }
         const materialized = {
           ...result,
           snippet: snippet.text,
@@ -1052,7 +1191,7 @@ export function createSearchResultSet(store: IndexStore, rawQuery: string, types
     get trace() { return trace.snapshot(stream.results.length, returnedResults); },
     page(page, pageSize) {
       if (Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger(pageSize) && pageSize > 0) stream.fill(page * pageSize);
-      const resultPage = materializeHits(store, stream.results, rawQuery, mode, page, pageSize, undefined, trace);
+      const resultPage = materializeHits(store, stream.results, rawQuery, mode, page, pageSize, undefined, trace, field);
       returnedResults = resultPage.results.length;
       return resultPage;
     },

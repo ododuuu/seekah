@@ -116,7 +116,7 @@ export class SearchSession {
     this.ensureCurrent();
     const layer = this.current;
     if (Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger(pageSize) && pageSize > 0) layer.stream.fill(page * pageSize);
-    return materializeHits(this.store, layer.stream.results, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery, layer.trace);
+    return materializeHits(this.store, layer.stream.results, layer.rawQuery, this.mode, page, pageSize, layer.rawQuery, layer.trace, this.field);
   }
 }
 

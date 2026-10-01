@@ -2852,3 +2852,44 @@ docsearch doctor
 - 必須以產品本身的 `LiveUpdateEngine`／`autoupdate` 在隔離合成資料上比較目前拓撲與預設排除後 split 拓撲；writer 必須是獨立程序，測試 150／300／600 writes/s，量測目標檔搜尋延遲、遺失、watch scope／句柄、空檔名與 unknown-filename 補掃，並如實報告無法重現的條件。
 - 不採按子目錄 `mtime` 優先校正、不因近期檔案改走另一套局部佇列、不宣稱空檔名等於 `ERROR_NOTIFY_ENUM_DIR`；不新增 OCR、embedding、USN、native dependency、網路或外部服務。
 - 所有資料仍只在本機處理；不讀取或接觸使用者真實 `LocalDocSearch` 資料目錄／備份，不改既有 IPC／MCP／`docsearch` 識別、索引 schema 或 package 版本。
+
+## 87. 工作台主題切換與本機瀏覽器偏好
+
+### 87.1 切換行為
+
+- 工作台頂列必須提供一個原生 `button` 主題切換鈕，循環切換「自動／淺色／深色」三種狀態；按鈕文字、`aria-label` 與 `title` 必須反映目前狀態及下一次動作。
+- 「自動」是預設狀態，沿用 `prefers-color-scheme`；「淺色」與「深色」必須覆蓋作業系統偏好。切換只改工作台頁面的 CSS 主題，不改搜尋、索引、API、MCP、TUI 或其他工作階段資料。
+- 主題狀態套用在文件列表、表格、段落片段、對話框、設定頁、狀態訊息、焦點與互動控制；不得以新增外部資源或第二套頁面模板實作。
+
+### 87.2 儲存與安全邊界
+
+- 既有規格禁止使用 `localStorage`、`sessionStorage`、cookie 保存工作台查詢、文件內容、Key、答案或其他敏感資料；本功能同樣不得使用 Web Storage、cookie、IndexedDB 或外部服務。
+- 為滿足重新載入後保留非敏感 UI 偏好，工作台可在目前 `127.0.0.1` URL 的 query 以 `theme=light`／`theme=dark` 保存顯式主題；「自動」移除該 query。只接受這三個白名單值，其他值回到「自動」。
+- 主題 query 必須由瀏覽器端 `history.replaceState` 更新，不得送出新 endpoint；既有 token 仍只在 URL fragment，token 解析不可被主題 query 改變。不得把查詢、文件路徑、文件內容或答案寫入 URL。
+- 頁面首次載入沒有主題 query 時採「自動」。主題偏好只屬於該本機工作台 URL，不建立跨使用者、跨裝置或伺服器端設定。
+
+### 87.3 驗收與不做
+
+- `test/m83.test.ts` 必須驗證三狀態、白名單讀取、`data-theme` 套用、按鈕可操作性、`history.replaceState` 保存及 token fragment 不被改寫；反向移除任一狀態、覆蓋或 fragment 保留時測試必須失敗。
+- 工作台 smoke 必須在既有隔離合成資料與 1180、1440、1920 寬度驗證按鈕可見、三次循環、重新載入後顯式主題仍在，並確認沒有瀏覽器例外。
+- 不新增設定 API、資料庫欄位、daemon 狀態、外部字型／圖片／網路請求或任何文件內容傳輸。
+
+## 88. 搜尋結果第二片段、檔名與內文共命中及多段落選擇
+
+### 88.1 phrase／單詞結果片段
+
+- `phrase` 模式包含單詞查詢與多詞片語查詢；每筆同一文件結果最多 materialize 兩個不同文字區段的命中片段。第一片段維持既有排名、主要 `snippet`、`heading`、`location` 與結果順序，第二片段只追加到既有 `passages` 展示資料。
+- 只有一個命中區段時維持單一片段外觀；有第二個區段時，工作台列表與表格以既有段落清單元件顯示兩段，兩段各自保留位置、命中詞、高亮與可選取文字。
+- `field=filename` 不讀取或虛構內文片段。其他欄位若檔名命中取得排名、同一文件另有 heading／content 命中，必須在 `passages` 提供實際內文／標題片段，讓工作台顯示內容而非只顯示「檔名符合」；檔名排名、既有主要 `snippet` 與 `filenameOnly` 相容欄位保留。
+
+### 88.2 all-terms 多段落選擇
+
+- `all-terms` 最多列出前四個查詢詞；每個查詢詞不再固定取文件中第一次出現，而是在實際 heading／content 命中區段中選擇與另一個已命中查詢詞的 ordinal 距離最小者。若文件只有一個查詢詞可用，保留其最早命中。
+- 距離相同時以較小 ordinal、再以文件原始區段順序穩定決定；同一區段或相鄰區段仍合併為一個 passage，passage 詞序仍按實際文字順序。檔名命中但內文沒有該詞時不得建立虛擬 passage。
+- 此選擇只影響 `passages` 展示資料，不改總數、排名、排序、分頁、搜尋欄位、filename／content 語意或既有核心結果欄位。
+
+### 88.3 工作台版面
+
+- 段落清單的位置標籤欄必須比既有版面窄：一般列表最大比例為 24%，表格最大比例為 28%，仍保留至少 72px／60px 並允許文字換行；窄桌面規則不得恢復舊的 31%／36% 比例。
+- `test/m84.test.ts` 必須以隔離合成索引驗證 phrase 第二片段、檔名與內文共命中、all-terms 最近區段、filename 欄位不讀內文、三種索引形狀相容及位置欄寬度契約；至少一項反向恢復第一次出現或移除第二片段時測試必須失敗。
+- Workbench、MCP 與既有搜尋 API 共用同一份 `passages` materialization；不新增 OCR、embedding、新格式、外部服務或真實使用者索引操作。

@@ -144,15 +144,16 @@ test("metadata mapping pruning only materializes selected block metadata", async
       assert.equal(page.results[0]!.location, "line 128");
       assert.equal(page.results[0]!.filenameOnly, false);
       assert.match(page.results[0]!.snippet, /needle-739/u);
-      assert.equal(trace.counts.blocksMetadataRows, 4);
-      assert.equal(trace.counts.owningBlockMappingRows, 1);
-      assert.equal(trace.counts.owningBlocksFound, 3);
-      assert.equal(trace.counts.candidatePayloadOrdinals, 3);
-      assert.equal(trace.counts.blockExpansionInputPayloads, 3);
-      assert.equal(trace.counts.payloadsRead, 3);
+      // phrase 顯示第二個命中區段，因此 page materialization 會精確讀取第二個 owning payload。
+      assert.equal(trace.counts.blocksMetadataRows, 6);
+      assert.equal(trace.counts.owningBlockMappingRows, 2);
+      assert.equal(trace.counts.owningBlocksFound, 4);
+      assert.equal(trace.counts.candidatePayloadOrdinals, 4);
+      assert.equal(trace.counts.blockExpansionInputPayloads, 4);
+      assert.equal(trace.counts.payloadsRead, 4);
       assert.equal(trace.counts.uniquePayloadsRead, 2);
-      assert.equal(trace.counts.duplicatePayloadsRead, 1);
-      assert.equal(trace.diagnostics.payloadSql.owningBlockMapping.executeCount, 1);
+      assert.equal(trace.counts.duplicatePayloadsRead, 2);
+      assert.equal(trace.diagnostics.payloadSql.owningBlockMapping.executeCount, 2);
     } finally { store.close(); }
   } finally {
     writer?.close();

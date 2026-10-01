@@ -1,4 +1,40 @@
 # 設計決策紀錄
+## D120：展示片段與排名解耦，內容命中追加至 passages
+
+- 日期：2026-10-02。依 SPEC §88；本分支處理 `src/search.ts`、`src/search-session.ts`、`src/workbench-app.ts`、`test/m84.test.ts` 與必要的既有測試／smoke fixture。不修改 package 版本、索引 schema、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 handoff。
+- 事實：
+  - 目前 `phrase` materialization 只建立一個 `passages`，即使同一文件有第二個 heading／content 命中也不會傳到工作台。
+  - 檔名排名會把主要來源設為 filename；這保留了排序與主要 `snippet`，但 `field=all` 時仍可能有實際 body 命中。單純改 `filenameOnly` 或主要 `snippet` 會破壞既有消費者投影與搜尋差分。
+  - `all-terms` 目前以文件順序第一次看見的區段鎖定每個詞，因此重複詞較晚但彼此更接近時會產生不必要的分離段落。
+- 決定：
+  - `phrase` materialization 對每個文件最多收集兩個不同 ordinal 的實際 heading／content 命中；保留第一個結果的排名、主要 `snippet`、`filenameOnly` 與排序，僅把新增展示資料放入既有 `passages`。
+  - `field=filename` 完全不 materialize body passages；`field=all` 或 `content` 的 filename-ranked 結果若有 body 命中，將 body passage 放入 `passages`，工作台在 passage 存在時優先顯示 passage，避免只顯示「檔名符合」。這不改 stable 核心欄位，因此搜尋差分仍可判定核心行為未漂移。
+  - `all-terms` 先收集每個詞的所有實際區段，再以與其他詞區段的最小 ordinal 距離選擇；距離相同採較小 ordinal，最後依輸入順序穩定決定。選定區段沿用既有相鄰合併、詞序、四詞上限與省略計數。
+- 理由：
+  - `passages` 已是工作台、MCP 與搜尋 API 的共用展示欄位，追加資料不需新增 endpoint 或改動排名資料結構；保留 stable 主要欄位可讓 `scripts/search-diff.mjs` 專注驗證核心搜尋未改變。
+  - 以實際 body passage 判斷工作台顯示內容，能處理單一 body 命中而不把 filename-only 的資料列誤當成內容；filename field 仍嚴格維持只查檔名。
+  - 最近鄰選擇直接以索引區段 ordinal 計算，成本有界、結果可重現，且不引入第二套搜尋語意。
+- 否決：
+  - 不改 rank、sort、total、page、`snippet` 或 `filenameOnly` 的 stable 語意；不在 filename 命中時建立假的 body。
+  - 不以 UI 複製第一段、在瀏覽器再次搜尋全文或新增專用 passage API 取代 server materialization。
+
+## D119：主題偏好寫入 URL query，不使用瀏覽器 storage
+
+- 日期：2026-10-02。依 SPEC §87；本分支處理 `src/workbench-app.ts`、`test/m83.test.ts` 與 UI smoke 驗收。不修改 package 版本、server token 格式、索引資料或既有設定 API。
+- 事實：
+  - 工作台已有 `prefers-color-scheme` 淺／深色 CSS，但缺少可切換的明確控制。
+  - SPEC §43／§47 與既有安全測試禁止以 `localStorage`、`sessionStorage` 或 cookie 保存工作台資料；把主題偏好放入這些 API 會違反資料邊界。
+  - token 現在位於 URL fragment，UI 端 helper 與 server 認證都假設 fragment 是完整 token；把主題附加到 fragment 會破壞認證相容性。
+- 決定：
+  - 頂列新增原生主題按鈕，循環「自動／淺色／深色」；狀態以 `data-theme` 套用，預設「自動」沿用系統偏好。
+  - 非自動狀態以目前本機工作台 URL 的 `theme=light`／`theme=dark` query 保存，透過 `history.replaceState` 更新；自動狀態移除 query。只解析白名單值，fragment token 原樣保留。
+  - 不呼叫 Web Storage、cookie、IndexedDB、server endpoint 或外部服務；query 只保存非敏感顯示偏好，不寫入查詢、路徑、文件正文、Key 或答案。
+- 理由：
+  - URL query 可跨重新載入保存這項非敏感 UI 偏好，又不進入被禁止的 browser storage，且與 fragment token 分離；無需新增 schema、設定 API 或跨工作階段帳戶狀態。
+  - 使用同一份 CSS token 覆蓋 explicit light／dark，auto 仍由瀏覽器媒體偏好決定；按鈕是原生元素，鍵盤與輔助技術行為不需額外事件協定。
+- 否決：
+  - 不將 token、查詢字串、文件內容或答案放入 query；不改成 server-side preference、資料庫欄位、MCP／IPC 設定或永久使用者設定。
+
 ## D118：監看不確定訊號採區域降級與有界補掃
 
 - 日期：2026-10-01。依 SPEC §86；本分支處理 `src/live-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts`、必要的 `src/live-queue.ts`／`src/workbench.ts` 狀態映射與 `test/m82.test.ts`。不修改 package 版本；所有實驗使用隔離 `LOCALDOCSEARCH_DATA_DIR` 與合成資料。
