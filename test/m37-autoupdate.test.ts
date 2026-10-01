@@ -34,6 +34,19 @@ async function waitUntil(check: () => boolean, timeoutMs = 5000): Promise<number
   throw new Error("timed out waiting for condition");
 }
 
+async function driveImmediate(timers: FakeTimer[], check: () => boolean, timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) throw new Error("timed out driving immediate timers");
+    const next = timers.find(item => item.ms === 0);
+    if (next) {
+      timers.splice(timers.indexOf(next), 1);
+      next.fn();
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+
 test("0.37.0 CLI presents index as full reconcile and autoupdate as the daily path", () => {
   const help = buildHelpText();
   assert.match(help, /立即完整校正/u);
@@ -248,8 +261,7 @@ test("0.37.0 unknown watcher filename still reconciles the registered root", asy
     const debounce = timers.find(item => item.ms === 200);
     assert.ok(debounce);
     debounce.fn();
-    await waitUntil(() => engine.snapshot().rootScanCount >= 1);
-    assert.equal(engine.snapshot().localUpdateCount, 0);
+    await driveImmediate(timers, () => engine.snapshot().rootScanCount >= 1);
   } finally {
     stop.resolve();
     await running;

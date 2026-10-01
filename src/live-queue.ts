@@ -231,6 +231,16 @@ export class LiveWorkQueue {
     return this.upsert(root, relPath, "path", reason);
   }
 
+  /** 以 path work item 表示根目錄／子目錄的有界 expansion；根目錄用空 rel_path，保留 "." dirty scope。 */
+  acceptDirectory(root: string, relPath: string): WorkItem {
+    const normalized = relPath === "" || relPath === SCOPE_REL ? "" : relPath;
+    const parts = normalized.replace(/\\/gu, "/").split("/").filter(Boolean);
+    if (parts.includes("..") || (normalized && parts.includes("."))) {
+      throw new QueuePersistError("工作佇列目錄路徑無效。");
+    }
+    return this.upsert(root, normalized, "path", "expand");
+  }
+
   markDirtyScope(root: string, reason: string): WorkItem {
     return this.upsert(root, SCOPE_REL, "dirty-scope", reason);
   }

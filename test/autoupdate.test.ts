@@ -217,7 +217,14 @@ test("0.31.0 watch file events do not call injected full-root sync", async () =>
     const overflow = timers.find(item => item.ms === 200);
     overflow?.fn();
     const started = Date.now();
-    while (syncCalls.length === 0 && Date.now() - started < 5000) await new Promise(r => setImmediate(r));
+    while (syncCalls.length === 0 && Date.now() - started < 5000) {
+      const immediate = timers.find(item => item.ms === 0);
+      if (immediate) {
+        timers.splice(timers.indexOf(immediate), 1);
+        immediate.fn();
+      }
+      await new Promise(r => setImmediate(r));
+    }
     assert.equal(syncCalls.length, 1, "unknown filename must reconcile the root");
     stop.resolve();
     await running;

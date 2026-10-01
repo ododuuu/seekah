@@ -2769,3 +2769,49 @@ docsearch doctor
 - `test/m81.test.ts` 必須覆蓋：冷讀取與快取命中回應深度等價、MCP 形狀不變、同步完成／背景摘要／設定／根目錄變更失效、ignore file 存在／修改／刪除失效、`/api/index-progress` 只回傳兩個頂層欄位、錯誤與停止狀態邊界，以及反向移除失效或欄位合併時測試會失敗。
 - 必須以只在本機建立的暫存合成資料測量；不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份，不得啟動、停止或干擾使用者 daemon，不新增文件內容 endpoint、OCR、embedding、外部服務、LAN 暴露、索引格式或 package 版本。
 - `scripts/ui-smoke.mjs` 與完整 `npm test` 必須在交付前執行；本機合成／win32 證據不得宣稱公司 Windows 人工驗收。
+
+## 86. 監看不確定事件的區域降級、有界補掃與可觀測性
+
+依 D118。本節處理 Windows `fs.watch` callback 交付空檔名，以及磁碟根目錄 split watcher 的單一子目錄 attach 失敗。空檔名是 watcher 無法定位事件的**不確定訊號**，不是 `ReadDirectoryChangesW` 緩衝溢位的證明；本節不得依空檔名推論 `ERROR_NOTIFY_ENUM_DIR`。
+
+### 86.1 split watcher 的局部降級
+
+- 磁碟根目錄或其他根目錄採 split 時，根目錄的 watcher 與各可監看的直接子目錄 watcher 分開處理。
+- 根目錄 watcher attach 失敗時，沿用既有 root failure／coarse fallback 或定期重試語意；**單一直接子目錄 watcher** 因 `EPERM`、`EACCES`、`ENOENT` 或其他 attach／runtime error 失敗時，不得關閉同一根目錄仍健康的其他 watcher，也不得只因該失敗把整個根目錄改為 coarse。
+- 失敗的直接子目錄列入該根的 `degradedSubdirectories`，每筆至少保存子目錄絕對路徑與讀取／監看失敗原因；該子目錄仍須交給既有週期性校正、工作佇列與有界目錄展開覆蓋。後續 attach 成功時移除該筆降級紀錄。
+- handle 上限仍沿用既有 coarse fallback；這是整體資源預算決策，不得與「單一子目錄 attach 失敗」混為一談。
+- split／coarse 的判定、預設排除與 `.localdocsearchignore` 來源仍由既有 `RootExclusion`／`shouldIgnoreWatchPath` 唯一決定；不得為降級 watcher 建立第二套排除清單。
+
+### 86.2 空檔名不確定訊號
+
+- callback 的 `filename` 為 `null`、空字串或不可用值時，計入 `emptyFilenameEventCount`，不得對空字串執行 `lstat`，也不得把空字串當成檔案路徑寫入 path queue。
+- 事件來源的 `watchDir` 是唯一可用的熱目錄提示。熱目錄必須位於該根目錄涵蓋範圍內；不得以目錄 `mtime`、最近修改檔案或猜測的檔名替代 `watchDir`。
+- 同一根目錄、同一 `watchDir` 的不確定訊號必須合併；預設冷卻為 5 秒，同一個 `watchDir` 在冷卻期間最多排入一次有界補掃。補掃排入既有 local queue，目錄由既有 `expandDirectory` 展開，不新增第二套掃描器。
+- 根目錄 watcher 的不確定訊號保留既有 `unknown-filename` dirty scope 作為完整校正安全網，但必須先以 `watchDir` 的 local queue expansion 作為熱目錄補掃；直接子目錄 watcher 則只排入該 `watchDir` 的 expansion。兩者都遵守既有事件優先、局部批次輪替與 at-least-once 語意。
+- 每次補掃的目錄列舉、局部工作批次與處理時間必須受既有 `LOCAL_WALK_MAX_ENTRIES`、`LOCAL_BATCH_MAX_ITEMS` 與 `LOCAL_BATCH_MAX_MS` 上限約束；補掃未完成時保留 expansion 待辦，不能一次遞迴讀完整棵子樹。
+- 同一根目錄／熱目錄在 60 秒視窗內預設最多觸發 4 次補掃；達上限後必須退避，退避時間至少依 `5 秒 → 15 秒 → 60 秒` 上限遞增。被冷卻、視窗上限或退避抑制的訊號仍可計入事件觀測，但不得產生新的掃描工作。週期性完整校正仍是遺漏事件的正確性安全網。
+- 補掃只把目前可讀且未被排除的檔案送入既有 local queue。刪除核對沿用 §53、§60、§64、§70：未完成列舉、任何讀取失敗或延後核對時不得執行不安全的 `removeMissing`；不得因補掃而刪除來源檔案或未確認的既有索引。
+- 每根目錄的不確定訊號狀態只存在記憶體，`uncertainRescanStateCount` 每根上限為 1024；超出時淘汰最久未使用的 `watchDir` 狀態，不得無界累積。child watcher 被釋放、降級或移除時清除對應狀態；根 watcher 重建／整根移除／監看停止時清除該根全部狀態。
+- 日誌可記錄 `watchDir`、補掃原因、冷卻／退避／上限抑制與失敗原因，但不得記錄文件正文；產品不得把訊號命名成已證實的 OS buffer overflow。
+
+### 86.3 狀態與相容欄位
+
+- `LiveStatus` 追加（舊 daemon／舊 JSON 可缺少）：
+  - `emptyFilenameEventCount`：所有根目錄收到的空檔名事件累計數。
+  - `uncertainRescanCount`：不確定訊號實際排入補掃的累計數；被冷卻、上限或退避抑制者不增加。
+  - `lastUncertainRescanAt`：最近一次實際排入補掃的 ISO 時間，尚未發生時省略。
+- `LiveRootStatus` 追加 `degradedSubdirectories`：降級直接子目錄清單；每筆包含 `path` 與 `reason`。既有 `scopeMode`、`handles`、`watch` 與其他欄位保留。
+- `LiveRootStatus` 追加 `uncertainRescanStateCount`：目前保留的 `watchDir` 冷卻／視窗／退避狀態數；`LiveStatus` 追加所有根目錄的同名總數。舊 daemon／舊 JSON 可缺少，`autoupdate status` 可顯示。
+- `autoupdate status` 顯示上述追加欄位，以及每個根的監看範圍、句柄數與降級子目錄／原因。`GET /api/index-status` 的 `autoupdate.live` 直接保留相同追加欄位；不得改名或移除既有欄位。
+- 工作台可只在既有背景更新健康摘要增加一行不確定訊號／補掃文字；本節不要求新增前端控制或新的 endpoint。
+
+### 86.4 驗收與明確不做
+
+- `test/m82.test.ts` 必須以注入某個子目錄 `watch` attach／error 失敗驗證：其他 sibling watcher 仍存在、scope 仍為 split、降級清單含路徑與原因；反向恢復「任一 child 失敗即 close 全部並 coarse」時測試必須失敗。另驗證 handle limit 仍可使整體進入 coarse。
+- `test/m82.test.ts` 必須驗證空檔名事件的 `watchDir` expansion、同一來源冷卻合併、60 秒視窗上限、退避、空檔名不觸發 `lstat`、局部 queue／目錄展開及既有刪除安全；反向移除冷卻／上限／退避或改用 mtime 排序時至少一項測試必須失敗。
+- `test/m82.test.ts` 必須驗證 `LiveStatus`／`formatLiveStatus` 與工作台 index-status response 的追加欄位，且舊欄位與舊 daemon 缺欄位仍可讀。
+- `test/m82.test.ts` 或同等聚焦測試必須以至少 5,000 個不同 `watchDir` 事件證明每根狀態數不超過 1024，並證明 child 降級／watcher 釋放／根目錄移除後狀態數歸零。
+- 必須以注入暫時 `readdir` 失敗或補掃中斷的目錄測試證明不確定訊號觸發的 expansion 不會移除既有索引列。
+- 必須以產品本身的 `LiveUpdateEngine`／`autoupdate` 在隔離合成資料上比較目前拓撲與預設排除後 split 拓撲；writer 必須是獨立程序，測試 150／300／600 writes/s，量測目標檔搜尋延遲、遺失、watch scope／句柄、空檔名與 unknown-filename 補掃，並如實報告無法重現的條件。
+- 不採按子目錄 `mtime` 優先校正、不因近期檔案改走另一套局部佇列、不宣稱空檔名等於 `ERROR_NOTIFY_ENUM_DIR`；不新增 OCR、embedding、USN、native dependency、網路或外部服務。
+- 所有資料仍只在本機處理；不讀取或接觸使用者真實 `LocalDocSearch` 資料目錄／備份，不改既有 IPC／MCP／`docsearch` 識別、索引 schema 或 package 版本。

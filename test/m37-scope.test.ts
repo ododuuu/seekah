@@ -274,7 +274,7 @@ test("0.37.0 unlocatable filename on the root watcher reconciles the whole root"
   try {
     session.emitters.get(store.roots()[0]!)!.emit("change", "change", null);
     fireDebounce(session.timers);
-    await waitUntil(() => session.engine.snapshot().rootScanCount >= 1);
+    await driveUntil(session.timers, () => session.engine.snapshot().rootScanCount >= 1);
     assert.ok(session.syncCalls.includes(store.roots()[0]!));
   } finally {
     session.stop.resolve();
