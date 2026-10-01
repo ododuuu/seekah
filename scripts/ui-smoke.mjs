@@ -5,7 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(project, "dist", "src", "cli.js");
@@ -13,6 +13,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const outputDir = mkdtempSync(path.join(os.tmpdir(), "seekah-ui-smoke-output-"));
 const results = [];
 const browserEvents = [];
+const syntheticProcessPaths = new Set();
 
 function text(value) {
   return value === undefined || value === null ? "" : String(value);
@@ -74,11 +75,83 @@ function waitForExit(child) {
   if (child.exitCode !== null) return Promise.resolve(child.exitCode);
   return new Promise(resolve => child.once("exit", code => resolve(code ?? 0)));
 }
-
 async function stopProcess(child) {
   if (!child || child.exitCode !== null) return;
-  child.kill();
+  if (process.platform === "win32") {
+    spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  } else {
+    child.kill("SIGTERM");
+  }
   await Promise.race([waitForExit(child), sleep(2_000)]);
+  if (child.exitCode === null) {
+    if (process.platform === "win32") {
+      spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } else {
+      child.kill("SIGKILL");
+    }
+    await Promise.race([waitForExit(child), sleep(2_000)]);
+  }
+  if (child.exitCode === null) throw new Error(`無法停止子程序 PID ${child.pid}。`);
+}
+async function removeDirectory(directory, label) {
+  const deadline = Date.now() + 10_000;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (error?.code !== "EBUSY" && error?.code !== "EPERM") throw error;
+      await sleep(250);
+    }
+  }
+  throw new Error(`${label} 清理逾時：${errorText(lastError)}`);
+}
+async function stopChrome(child, profile) {
+  let processError;
+  try { await stopProcess(child); } catch (error) { processError = error; }
+  if (profile && process.platform === "win32") {
+    const escaped = profile.replace(/'/gu, "''");
+    const command = `$profile = '${escaped}'; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
+    spawnSync("powershell.exe", ["-NoProfile", "-Command", command], { stdio: "ignore", windowsHide: true });
+  }
+  let profileError;
+  try { if (profile) await removeDirectory(profile, "Chrome profile"); }
+  catch (error) { profileError = error; }
+  if (processError) throw processError;
+  if (profileError) throw profileError;
+}
+function processCommandLines() {
+  if (process.platform === "win32") {
+    const result = spawnSync("powershell.exe", [
+      "-NoProfile", "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ], { encoding: "utf8", windowsHide: true });
+    if (result.status !== 0 || !result.stdout) return [];
+    try {
+      const entries = JSON.parse(result.stdout);
+      return (Array.isArray(entries) ? entries : [entries]).map(entry => `${entry.ProcessId ?? ""} ${entry.CommandLine ?? ""}`);
+    } catch { return []; }
+  }
+  const result = spawnSync("ps", ["-eo", "pid=,args="], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.split(/\r?\n/u).filter(Boolean) : [];
+}
+
+async function assertNoSyntheticProcesses() {
+  const patterns = [...syntheticProcessPaths].map(value => path.resolve(value).toLowerCase());
+  if (!patterns.length) return;
+  const deadline = Date.now() + 5_000;
+  let matches = [];
+  do {
+    matches = processCommandLines().filter(line => {
+      const normalized = line.toLowerCase();
+      return patterns.some(pattern => normalized.includes(pattern));
+    });
+    if (!matches.length) return;
+    await sleep(250);
+  } while (Date.now() < deadline);
+  throw new Error(`仍有程序指向 smoke 暫存路徑：${truncate(matches.join(" | "), 1_500)}`);
 }
 
 function runIndex(root, dataDir) {
@@ -97,6 +170,7 @@ function runIndex(root, dataDir) {
 
 async function fixtureFor(viewport) {
   const temp = await mkdtemp(path.join(outputDir, `fixture-${viewport.width}x${viewport.height}-`));
+  try {
   const root = path.join(temp, "synthetic-root 中文😀");
   const dataDir = path.join(temp, "data");
   const refreshFolder = path.join(root, "refresh-area");
@@ -140,6 +214,10 @@ async function fixtureFor(viewport) {
     excludedPath: path.join(root, "excluded", "secret.txt"),
     outsidePath: path.join(temp, "outside-root.txt"),
   };
+  } catch (error) {
+    await removeDirectory(temp, `fixture ${viewport.width}x${viewport.height}`);
+    throw error;
+  }
 }
 
 async function prepareRefreshFixture(fixture) {
@@ -193,7 +271,29 @@ function stopCliAutoupdate(fixture) {
 }
 
 function startWorkbench(dataDir, temp) {
-  const child = spawn(process.execPath, [cli, "ui", "--no-open"], {
+  const databasePath = path.join(dataDir, "LocalDocSearch", "index.db");
+  const workbenchModule = pathToFileURL(path.join(project, "dist", "src", "workbench.js")).href;
+  const launcher = `
+    import { createWorkbench } from ${JSON.stringify(workbenchModule)};
+    const handle = await createWorkbench({
+      databasePath: ${JSON.stringify(databasePath)},
+      tempParent: ${JSON.stringify(temp)},
+      searchDelayMs: 1250,
+      indexHold: () => new Promise(resolve => setTimeout(resolve, 3000)),
+    });
+    console.log(handle.url);
+    let closing = false;
+    const close = async () => {
+      if (closing) return;
+      closing = true;
+      await handle.close();
+      process.exit(0);
+    };
+    process.once("SIGINT", () => { void close(); });
+    process.once("SIGTERM", () => { void close(); });
+    await new Promise(() => {});
+  `;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", launcher], {
     cwd: project,
     env: {
       ...process.env,
@@ -607,10 +707,13 @@ async function runViewport(viewport, chromePath) {
   let port;
   try {
     fixture = await fixtureFor(viewport);
+    syntheticProcessPaths.add(fixture.temp);
+    syntheticProcessPaths.add(fixture.dataDir);
     workbench = startWorkbench(fixture.dataDir, fixture.temp);
     const url = await waitForWorkbench(workbench);
     port = await unusedPort();
     chromeProfile = await mkdtemp(path.join(outputDir, `chrome-${label}-`));
+    syntheticProcessPaths.add(chromeProfile);
     chrome = spawn(chromePath, [
       "--headless=new",
       `--remote-debugging-port=${port}`,
@@ -766,6 +869,49 @@ async function runViewport(viewport, chromePath) {
       const result = await cdp.evaluate("document.querySelectorAll('#document-list .document-row').length");
       expect(result > 0, "搜尋結果列為空。");
       await noBrowserErrorsSince(cdp, start, "有結果搜尋");
+    });
+    await check(`${label} 慢速搜尋顯示取消並保留上一筆結果與輸入`, async () => {
+      const start = browserEvents.length;
+      const previous = await cdp.evaluate(`(() => ({
+        query: document.getElementById("document-query")?.value || "",
+        rows: document.querySelectorAll("#document-list .document-row").length,
+      }))()`);
+      await inputAndSearch(cdp, "UI_SMOKE_PAGE_TOKEN");
+      try {
+        await waitFor(() => visible(cdp, "#search-cancel-button"), 10_000);
+      } catch (error) {
+        const snapshot = await cdp.evaluate(`(() => ({
+          status: document.getElementById("search-status")?.textContent?.trim() || "",
+          query: document.getElementById("document-query")?.value || "",
+          rows: document.querySelectorAll("#document-list .document-row").length,
+          cancelHidden: Boolean(document.getElementById("search-cancel-button")?.hidden),
+        }))()`);
+        throw new Error(`取消按鈕等待失敗：${JSON.stringify(snapshot)}；${errorText(error)}`);
+      }
+      expect(await visible(cdp, "#search-cancel-button"), "搜尋超過一秒後仍沒有顯示取消按鈕。");
+      const waitingStatus = await cdp.evaluate("document.getElementById('search-status')?.textContent?.trim() || ''");
+      expect(/已等待 \d+ 秒/u.test(waitingStatus), `搜尋等待秒數未顯示：${waitingStatus}`);
+      await click(cdp, "#search-cancel-button");
+      try {
+        await waitFor(async () => {
+          const current = await cdp.evaluate(`(() => ({
+            status: document.getElementById("search-status")?.textContent?.trim() || "",
+            query: document.getElementById("document-query")?.value || "",
+            rows: document.querySelectorAll("#document-list .document-row").length,
+            cancelHidden: Boolean(document.getElementById("search-cancel-button")?.hidden),
+          }))()`);
+          return current.status === "搜尋已取消" && current.query === previous.query && current.rows === previous.rows && current.cancelHidden;
+        });
+      } catch (error) {
+        const snapshot = await cdp.evaluate(`(() => ({
+          status: document.getElementById("search-status")?.textContent?.trim() || "",
+          query: document.getElementById("document-query")?.value || "",
+          rows: document.querySelectorAll("#document-list .document-row").length,
+          cancelHidden: Boolean(document.getElementById("search-cancel-button")?.hidden),
+        }))()`);
+        throw new Error(`取消後狀態等待失敗：${JSON.stringify({ previous, snapshot })}；${errorText(error)}`);
+      }
+      await noBrowserErrorsSince(cdp, start, "慢速搜尋取消");
     });
     await check(`${label} 搜尋結果可選取、複製且選取時不開啟`, async () => {
       const start = browserEvents.length;
@@ -1478,10 +1624,16 @@ async function runViewport(viewport, chromePath) {
         })()`);
         expect(response.status === 202, `索引開始回應不是 202：${response.status}`);
         await click(cdp, "#settings-autoupdate");
-        await waitFor(async () => {
-          const current = await settingSnapshot(cdp);
-          return current.auto?.ariaChecked === "true" && !current.auto?.disabled;
-        }, 30_000);
+        try {
+          await waitFor(async () => {
+            const current = await settingSnapshot(cdp);
+            return current.auto?.ariaChecked === "true" && !current.auto?.disabled;
+          }, 60_000);
+        } catch (error) {
+          const setting = await settingSnapshot(cdp);
+          const index = await indexStatus(cdp);
+          throw new Error(`索引中開啟背景更新逾時：${JSON.stringify({ setting, index })}；${errorText(error)}`);
+        }
         const current = await indexStatus(cdp);
         expect(current?.autoupdate?.enabled === true, "索引進行中切換後 API autoupdate 沒有 enabled。");
         expect(current?.indexing && typeof current.indexing.state === "string", "索引進度狀態缺少 state。");
@@ -1516,15 +1668,18 @@ async function runViewport(viewport, chromePath) {
     results.push({ status: "fail", label: `${label} 煙霧測試執行`, message: truncate(errorText(error)) });
     console.log(`[FAIL] ${label} 煙霧測試執行：${truncate(errorText(error))}`);
   } finally {
-    if (cdp) {
-      try { await settingsPost(cdp, { autoupdateEnabled: false }); } catch { /* 合成 daemon 已停止或頁面已關閉。 */ }
-      await sleep(3_000);
-      cdp.close();
+    let cleanupError;
+    if (fixture) {
+      try { stopCliAutoupdate(fixture); } catch (error) { cleanupError = error; console.error(`[CLEANUP] autoupdate stop 失敗：${errorText(error)}`); }
     }
-    await stopProcess(chrome);
-    await stopProcess(workbench?.child);
-    if (chromeProfile) await rm(chromeProfile, { recursive: true, force: true });
-    if (fixture) await rm(fixture.temp, { recursive: true, force: true });
+    if (cdp) {
+      try { await cdp.evaluate("document.getElementById('settings-dialog')?.close()"); } catch { /* 頁面已關閉 */ }
+      try { cdp.close(); } catch (error) { cleanupError ??= error; }
+    }
+    try { await stopChrome(chrome, chromeProfile); } catch (error) { cleanupError ??= error; }
+    try { await stopProcess(workbench?.child); } catch (error) { cleanupError ??= error; }
+    try { if (fixture) await removeDirectory(fixture.temp, `fixture ${label}`); } catch (error) { cleanupError ??= error; }
+    if (cleanupError) throw cleanupError;
   }
 }
 
@@ -1541,9 +1696,20 @@ async function main() {
   }
   console.log(`Chrome：${chromePath}`);
   console.log(`合成資料與暫存索引只會建立在暫存目錄；輸出目錄：${outputDir}`);
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 1180, height: 800 }]) {
-    await runViewport(viewport, chromePath);
+  let executionError;
+  try {
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1180, height: 800 }]) {
+      await runViewport(viewport, chromePath);
+    }
+  } catch (error) {
+    executionError = error;
   }
+  let processError;
+  try { await assertNoSyntheticProcesses(); } catch (error) { processError = error; }
+  if (executionError || processError) {
+    throw new Error([executionError, processError].filter(Boolean).map(errorText).join("；"));
+  }
+  console.log("[PASS] smoke 暫存資料庫無殘留程序");
   const failed = results.filter(item => item.status === "fail");
   const passed = results.filter(item => item.status === "pass");
   const warnings = browserEvents.filter(event => !event.failure);

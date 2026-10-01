@@ -922,6 +922,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 (() => {
   "use strict";
   const MAX = 20;
+  const searchClientHeader = (() => {
+    try { return crypto.randomUUID(); }
+    catch { return "browser-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2); }
+  })();
   const state = {
     route: "documents",
     mode: "phrase",
@@ -937,6 +941,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     searchMessage: "尚未搜尋。",
     searchKind: "",
     searchSeq: 0,
+    searchController: null,
+    searchCancelTimer: null,
+    searchCancelVisible: false,
+    searchElapsedSeconds: 0,
     selected: new Map(),
     imported: new Map(),
     indexStatus: null,
@@ -1261,9 +1269,47 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const message = data && typeof data.error === "string" ? data.error : "本機服務拒絕要求。";
       const error = new Error(message);
       error.status = response.status;
+      if (data && typeof data.code === "string") error.code = data.code;
       throw error;
     }
     return data;
+  }
+  function clearSearchCancellation() {
+    clearInterval(state.searchCancelTimer);
+    state.searchCancelTimer = null;
+    state.searchCancelVisible = false;
+    state.searchElapsedSeconds = 0;
+  }
+  function cancelSearch() {
+    if (state.searchController) state.searchController.abort();
+  }
+  function searchRequestOptions(controller, body) {
+    return {
+      method: "POST",
+      body,
+      signal: controller.signal,
+      headers: { "X-LocalDocSearch-Client": searchClientHeader },
+    };
+  }
+  function isCancelledSearch(error, controller) {
+    return controller.signal.aborted || error && (error.name === "AbortError" || error.status === 499 || error.code === "SEARCH_CANCELLED");
+  }
+  function restoreCancelledSearch(seq, controller, previous) {
+    if (seq !== state.searchSeq || state.searchController !== controller) return;
+    clearSearchCancellation();
+    state.searchController = null;
+    state.data = previous.data;
+    state.submittedQuery = previous.submittedQuery;
+    state.queryDraft = previous.queryDraft;
+    state.searchState = state.data ? "success" : "idle";
+    state.searchMessage = "搜尋已取消";
+    state.searchKind = "warn";
+    state.counting = false;
+    syncQueryInputs();
+    renderDocuments();
+    const restoredQuery = previous.queryDraft;
+    if ($("document-query")) $("document-query").value = restoredQuery;
+    if ($("global-query")) $("global-query").value = restoredQuery;
   }
   function selectedCount() {
     let count = state.selected.size;
@@ -1706,6 +1752,12 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
     prev.disabled = !data || data.page <= 1 || state.searchState === "loading";
     next.disabled = !data || data.page >= data.pageCount || state.searchState === "loading";
+    const cancelButton = $("search-cancel-button");
+    const searchActive = state.searchState === "loading" || state.counting;
+    if (cancelButton) {
+      cancelButton.hidden = !searchActive || !state.searchCancelVisible;
+      cancelButton.disabled = !searchActive;
+    }
     const sortSelect = $("document-sort");
     if (sortSelect) sortSelect.value = state.sortMode;
     const listMode = state.viewMode !== "table";
@@ -1723,7 +1775,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       $("selection-label").textContent = "已選取 " + selectedCount() + " 份文件";
     } else bulk.hidden = true;
     $("review-context").disabled = selectedCount() === 0;
-    setStatus("search-status", state.searchMessage, state.searchKind);
+    const statusMessage = searchActive && state.searchElapsedSeconds > 0
+      ? state.searchMessage + "（已等待 " + state.searchElapsedSeconds + " 秒）"
+      : state.searchMessage;
+    setStatus("search-status", statusMessage, state.searchKind);
     renderSidebar();
     renderContextDrawer();
   }
@@ -1802,25 +1857,54 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderDocuments();
       return;
     }
+    const previous = {
+      data: state.data,
+      submittedQuery: state.submittedQuery,
+      queryDraft: state.data ? state.submittedQuery : state.queryDraft,
+    };
+    if (state.searchController) state.searchController.abort();
+    clearSearchCancellation();
+    const controller = new AbortController();
+    const seq = ++state.searchSeq;
+    state.searchController = controller;
     state.submittedQuery = submitted;
     state.queryDraft = submitted;
     syncQueryInputs();
-    const seq = ++state.searchSeq;
     state.searchState = "loading";
     state.searchMessage = "搜尋中…";
     state.searchKind = "";
+    state.counting = false;
+    const searchStartedAt = performance.now();
+    state.searchElapsedSeconds = 0;
+    state.searchCancelTimer = setInterval(() => {
+      if (seq !== state.searchSeq || state.searchController !== controller || controller.signal.aborted
+        || (state.searchState !== "loading" && !state.counting)) return;
+      const elapsed = Math.floor((performance.now() - searchStartedAt) / 1_000);
+      if (elapsed < 1 || elapsed === state.searchElapsedSeconds) return;
+      state.searchElapsedSeconds = elapsed;
+      state.searchCancelVisible = true;
+      renderDocuments();
+    }, 200);
     renderDocuments();
     try {
-      let data = await api("/api/search", { method: "POST", body: searchPayload(page) });
+      let data = await api("/api/search", searchRequestOptions(controller, searchPayload(page)));
       while (data.pendingUpgrade) {
         if (seq !== state.searchSeq) return;
+        if (controller.signal.aborted) {
+          restoreCancelledSearch(seq, controller, previous);
+          return;
+        }
         state.searchMessage = data.message || "正在建立 unigram／trigram 搜尋 postings…";
         state.searchKind = "warn";
         renderDocuments();
         await new Promise(resolve => setTimeout(resolve, 500));
-        const status = await api("/api/index-progress");
+        if (controller.signal.aborted) {
+          restoreCancelledSearch(seq, controller, previous);
+          return;
+        }
+        const status = await api("/api/index-progress", { signal: controller.signal });
         if (["failed", "stopped"].includes(status.indexing?.state)) throw new Error(status.indexing.message);
-        data = await api("/api/search", { method: "POST", body: searchPayload(page) });
+        data = await api("/api/search", searchRequestOptions(controller, searchPayload(page)));
       }
       if (seq !== state.searchSeq) return;
       state.data = data;
@@ -1833,11 +1917,12 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       if (state.counting) {
         // Exact mode: show the page first, then fill in the exact total.
         try {
-          const count = await api("/api/search/count", { method: "POST", body: searchPayload(page) });
+          const count = await api("/api/search/count", searchRequestOptions(controller, searchPayload(page)));
           if (seq !== state.searchSeq) return;
           data.total = count.total;
           data.totalRelation = count.totalRelation;
         } catch (error) {
+          if (isCancelledSearch(error, controller)) throw error;
           if (seq !== state.searchSeq) return;
           state.searchMessage = "總數計算失敗：" + (error.message || "未知錯誤");
           state.searchKind = "warn";
@@ -1845,8 +1930,17 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         state.counting = false;
         renderDocuments();
       }
-    } catch (error) {
       if (seq !== state.searchSeq) return;
+      clearSearchCancellation();
+      state.searchController = null;
+    } catch (error) {
+      if (isCancelledSearch(error, controller)) {
+        restoreCancelledSearch(seq, controller, previous);
+        return;
+      }
+      if (seq !== state.searchSeq) return;
+      clearSearchCancellation();
+      state.searchController = null;
       state.data = null;
       state.searchState = "error";
       state.searchMessage = error.message || "查詢失敗。";
@@ -3106,12 +3200,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const queryWrap = make("label", "document-query"); queryWrap.htmlFor = "document-query"; const queryField = document.createElement("select"); queryField.id = "query-field"; queryField.setAttribute("aria-label", "搜尋欄位"); queryField.append(new Option("檔名與內容", "all"), new Option("只搜尋檔名", "filename"), new Option("只搜尋內容", "content")); const pageQuery = document.createElement("input"); pageQuery.id = "document-query"; pageQuery.type = "search"; pageQuery.maxLength = 1000; pageQuery.autocomplete = "off"; pageQuery.placeholder = "搜尋"; queryWrap.append(queryField, pageQuery);
     const modeSwitch = make("div", "mode-switch"); modeSwitch.setAttribute("role", "group"); modeSwitch.setAttribute("aria-label", "搜尋模式"); const phrase = button("完整片語 ×", "filter-choice", () => setMode("all-terms")); phrase.id = "mode-phrase"; phrase.dataset.mode = "phrase"; const allTerms = button("全部詞彙 ×", "filter-choice", () => setMode("phrase")); allTerms.id = "mode-all-terms"; allTerms.dataset.mode = "all-terms"; modeSwitch.append(phrase, allTerms);
     const searchButton = button("搜尋", "primary search-submit", () => void search(1)); searchButton.id = "document-search-button";
+    const cancelButton = button("取消搜尋", "danger search-cancel", cancelSearch); cancelButton.id = "search-cancel-button"; cancelButton.hidden = true;
     const summaries = make("div", "scope-summaries"); summaries.append(scopeSummary("根目錄", "scope-root"), scopeSummary("格式", "scope-format"), scopeSummary("解析狀態", "scope-parse"));
     const resetFilters = button("重設篩選", "filter-reset", () => {
       state.searchField = "all"; state.rootFilter = ""; state.typeFilter = ""; state.statusFilter = ""; state.sortMode = "relevance";
       queryField.value = "all"; sortSelect.value = "relevance"; renderScopeSummaries(); if (state.submittedQuery || state.queryDraft.trim()) void search(1);
     }); resetFilters.id = "reset-filters";
-    scopeBar.append(queryWrap, summaries, modeSwitch, resetFilters, searchButton); docPage.append(scopeBar);
+    scopeBar.append(queryWrap, summaries, modeSwitch, resetFilters, searchButton, cancelButton); docPage.append(scopeBar);
     const searchStatus = make("div", "status", "尚未搜尋。"); searchStatus.id = "search-status"; searchStatus.setAttribute("role", "status"); searchStatus.setAttribute("aria-live", "polite"); docPage.append(searchStatus);
     const resultToolbar = make("div", "results-toolbar"); const resultCopy = make("div", "", ""); resultCopy.append(make("strong", "", "尚未搜尋"), make("span", "", "")); resultCopy.lastChild.id = "results-subtitle"; resultCopy.firstChild.id = "results-title"; const pagination = make("div", "pagination"); const paginationLabel = make("span", "pagination-label", "1"); paginationLabel.id = "pagination-label"; const prev = button("‹", "small", () => void search((state.data?.page || 1) - 1)); prev.id = "documents-prev"; prev.setAttribute("aria-label", "上一頁"); const next = button("›", "small", () => void search((state.data?.page || 1) + 1)); next.id = "documents-next"; next.setAttribute("aria-label", "下一頁"); pagination.append(prev, paginationLabel, next); resultToolbar.append(resultCopy, pagination); docPage.append(resultToolbar);
     const resultList = make("div", "result-list", ""); resultList.id = "document-list"; docPage.append(resultList);
@@ -3238,6 +3333,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   function setMode(mode) {
     if (state.mode === mode) return;
+    if (state.searchController) state.searchController.abort();
+    clearSearchCancellation();
+    state.searchController = null;
     state.mode = mode;
     state.data = null;
     state.submittedQuery = "";

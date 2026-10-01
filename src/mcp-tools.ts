@@ -1,7 +1,9 @@
 import { prepareSelectedContext, type SelectedContextReference, ContextError } from "./context.js";
-import { parseTypes, type SearchField, type SearchMode, type SearchSort } from "./search.js";
+import { parseTypes, type SearchField, type SearchMode, type SearchPassage, type SearchSort } from "./search.js";
 import { SearchSession } from "./search-session.js";
+import type { DocumentStatus } from "./model.js";
 import type { IndexStore } from "./store.js";
+import type { SearchTrace } from "./search-trace.js";
 import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.js";
 import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 import { previewStatusList } from "./status-preview.js";
@@ -23,10 +25,39 @@ export interface SearchDocumentsInput {
   page?: number;
   pageSize?: number;
   field?: SearchField;
-  statuses?: readonly import("./model.js").DocumentStatus[];
+  statuses?: readonly DocumentStatus[];
   sort?: SearchSort;
   /** Verify every candidate for an exact total instead of stopping at 500 (SPEC §52.3). */
   exactTotal?: boolean;
+}
+export interface SearchDocumentResult {
+  reference: string;
+  path: string;
+  extension: string;
+  status: DocumentStatus;
+  reason: string;
+  filenameOnly: boolean;
+  heading: string | null;
+  location: string | null;
+  snippet: string;
+  snippetTruncated: boolean;
+  passages: SearchPassage[];
+  omittedTerms: number;
+  modifiedAt: string;
+}
+
+export interface SearchDocumentsResult {
+  query: string;
+  mode: SearchMode;
+  total: number;
+  totalRelation: "eq" | "gte";
+  accessibleTotal: number;
+  truncatedToFirst500: boolean;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  results: SearchDocumentResult[];
+  trace: SearchTrace;
 }
 
 function resolveScope(store: IndexStore, root?: string): { root?: string; subtree?: string } {
@@ -45,7 +76,7 @@ function resolveTypes(types?: readonly string[]): string[] | undefined {
   catch { throw new McpToolError("MCP_TYPES_INVALID", "types 必須是安全的副檔名清單。"); }
 }
 
-export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) {
+export function searchDocuments(store: IndexStore, input: SearchDocumentsInput, reuseSession?: SearchSession): SearchDocumentsResult {
   const query = input.query.trim();
   const mode = input.mode ?? "phrase";
   const page = input.page ?? 1;
@@ -63,9 +94,12 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
   if (!["all", "filename", "content"].includes(field)) throw new McpToolError("MCP_FIELD_INVALID", "field 必須是 all、filename 或 content。");
   if (!["relevance", "filename", "modified"].includes(sort)) throw new McpToolError("MCP_SORT_INVALID", "sort 必須是 relevance、filename 或 modified。");
   if (input.exactTotal !== undefined && typeof input.exactTotal !== "boolean") throw new McpToolError("MCP_EXACT_TOTAL_INVALID", "exactTotal 必須是 boolean。");
-  const session = new SearchSession(store, query, types, scope.root, mode, scope.subtree, field, input.statuses, sort,
+  const session = reuseSession ?? new SearchSession(store, query, types, scope.root, mode, scope.subtree, field, input.statuses, sort,
     input.exactTotal ? "exact" : "fast");
-  const accessibleTotal = Math.min(session.originalTotal, 500);
+  if (input.exactTotal) session.complete();
+  const total = session.currentTotal;
+  const totalRelation = session.currentTotalRelation;
+  const accessibleTotal = Math.min(total, 500);
   const pageCount = Math.max(1, Math.ceil(accessibleTotal / pageSize));
   if (page > pageCount) throw new McpToolError("MCP_PAGE_INVALID", `頁碼超出範圍；可瀏覽頁數為 ${pageCount}。`);
   const resultPage = session.page(page, pageSize);
@@ -87,11 +121,11 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
   return {
     query,
     mode,
-    total: session.originalTotal,
+    total,
     /** `gte`: `total` is a lower bound because fast mode stopped at 500 matches. */
-    totalRelation: session.originalTotalRelation,
+    totalRelation,
     accessibleTotal,
-    truncatedToFirst500: session.originalTotal > 500 || session.originalTotalRelation === "gte",
+    truncatedToFirst500: total > 500 || totalRelation === "gte",
     page,
     pageSize,
     pageCount,
