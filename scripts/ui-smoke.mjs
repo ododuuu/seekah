@@ -100,11 +100,29 @@ async function fixtureFor(viewport) {
   const root = path.join(temp, "synthetic-root 中文😀");
   const dataDir = path.join(temp, "data");
   const refreshFolder = path.join(root, "refresh-area");
+  const multiPath = path.join(root, "multi-passage-lines.txt");
+  const singlePath = path.join(root, "single-passage.txt");
+  const omittedPath = path.join(root, "omitted-terms.txt");
   await mkdir(path.join(root, "excluded"), { recursive: true });
   await mkdir(path.join(refreshFolder, "ignored"), { recursive: true });
   await writeFile(path.join(root, ".localdocsearchignore"), "excluded/\nrefresh-area/ignored/\n");
   await writeFile(path.join(root, "included 中文😀.txt"), "UI_SMOKE_INCLUDED_NEEDLE\n一般合成文件。\n");
   await writeFile(path.join(root, "ordinary.md"), "普通文件，不含測試查詢。\n");
+  await writeFile(multiPath, [
+    "private first passage",
+    "合成 filler line 2。",
+    "合成 filler line 3。",
+    "合成 filler line 4。",
+    "合成 filler line 5。",
+    "合成 filler line 6。",
+    "合成 filler line 7。",
+    "node final passage",
+  ].join("\n") + "\n");
+  await writeFile(singlePath, "private node together\n");
+  await writeFile(omittedPath, "alpha beta gamma delta epsilon\n");
+  for (let index = 0; index < 22; index += 1) {
+    await writeFile(path.join(root, `page-result-${String(index).padStart(2, "0")}.txt`), `UI_SMOKE_PAGE_TOKEN ${index}\n`);
+  }
   await writeFile(path.join(root, "excluded", "secret.txt"), "UI_SMOKE_EXCLUDED_SECRET\n");
   await writeFile(path.join(refreshFolder, "refresh-existing.txt"), "UI_SMOKE_REFRESH_BEFORE\n");
   await writeFile(path.join(refreshFolder, "refresh-removed.txt"), "UI_SMOKE_REFRESH_REMOVED\n");
@@ -116,6 +134,9 @@ async function fixtureFor(viewport) {
     dataDir,
     refreshFolder,
     indexedPath: path.join(root, "included 中文😀.txt"),
+    multiPath,
+    singlePath,
+    omittedPath,
     excludedPath: path.join(root, "excluded", "secret.txt"),
     outsidePath: path.join(temp, "outside-root.txt"),
   };
@@ -464,6 +485,30 @@ async function inputAndSearch(cdp, query) {
   })()`);
 }
 
+async function setSearchMode(cdp, mode) {
+  const activeModeId = mode === "all-terms" ? "mode-phrase" : "mode-all-terms";
+  const expectedModeId = mode === "all-terms" ? "mode-all-terms" : "mode-phrase";
+  const clicked = await cdp.evaluate(`(() => {
+    const active = document.getElementById(${JSON.stringify(activeModeId)});
+    if (!(active instanceof HTMLElement)) return false;
+    if (active.getAttribute("aria-pressed") === "true") active.click();
+    return true;
+  })()`);
+  expect(clicked, `找不到搜尋模式按鈕 ${activeModeId}。`);
+  await waitFor(() => cdp.evaluate(`document.getElementById(${JSON.stringify(expectedModeId)})?.getAttribute("aria-pressed") === "true"`));
+}
+async function searchDirectly(cdp, query, mode, page = 1) {
+  return await cdp.evaluate(`(async () => {
+    const token = decodeURIComponent(location.hash.slice(1));
+    const response = await fetch("/api/search", {
+      method: "POST",
+      headers: { "X-LocalDocSearch-Token": token, "content-type": "application/json" },
+      body: JSON.stringify({ query: ${JSON.stringify(query)}, mode: ${JSON.stringify(mode)}, page: ${page}, pageSize: 20, field: "all" }),
+    });
+    return { status: response.status, data: await response.json() };
+  })()`);
+}
+
 async function inputAndExplain(cdp, filePath) {
   await cdp.evaluate(`(() => {
     const input = document.getElementById("search-empty-explain-path");
@@ -740,6 +785,166 @@ async function runViewport(viewport, chromePath) {
       await noBrowserErrorsSince(cdp, start, "結果選取與複製");
     });
 
+    await check(`${label} all-terms 多段落在列表／表格可讀、可高亮且可精確選取`, async () => {
+      const start = browserEvents.length;
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, "private node");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
+      const response = await searchDirectly(cdp, "private node", "all-terms");
+      expect(response.status === 200, `all-terms API HTTP ${response.status ?? "未知"}。`);
+      const multi = response.data?.results?.find(item => typeof item.path === "string" && item.path.endsWith("multi-passage-lines.txt"));
+      expect(multi?.passages?.length === 2, "合成多段落 API 沒有回傳兩段。");
+      expect(multi.passages[0].location === "第 1 行" && multi.passages[1].location === "第 8 行", "API 多段落位置不符。");
+      const list = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        if (!row) return null;
+        const labels = Array.from(row.querySelectorAll(".result-passage-label")).map(node => node.textContent || "");
+        const snippets = Array.from(row.querySelectorAll(".result-passage-snippet")).map(node => node.textContent || "");
+        return {
+          labels,
+          snippets,
+          marks: row.querySelectorAll(".result-passage-snippet mark").length,
+          passages: row.querySelectorAll(".result-passages > .result-passage").length,
+          listLabel: row.querySelector(".result-passages")?.getAttribute("aria-label") || "",
+          labelSelect: Array.from(row.querySelectorAll(".result-passage-label")).map(node => getComputedStyle(node).userSelect),
+          copyButtons: row.querySelectorAll(".copy-action button").length,
+        };
+      })()`);
+      expect(list?.passages === 2, "列表沒有顯示兩個 li passage。");
+      expect(list.labels[0].includes("第 1 行") && list.labels[0].includes("private"), "列表第一段缺少位置／詞標籤。");
+      expect(list.labels[1].includes("第 8 行") && list.labels[1].includes("node"), "列表第二段缺少位置／詞標籤。");
+      expect(JSON.stringify(list.snippets) === JSON.stringify(multi.passages.map(passage => passage.snippet)), "列表片段文字不是 API 原始 snippet。");
+      expect(list.marks >= 2, "列表多段落沒有命中詞 mark。");
+      expect(list.listLabel === "搜尋命中段落", "列表缺少 passage 清單 aria label。");
+      expect(list.labelSelect.every(value => value === "none"), "passage 標籤沒有 user-select:none。");
+      expect(list.copyButtons === 2, "多段落結果遺失複製路徑／檔名按鈕。");
+      const selected = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const active = window.getSelection();
+        if (!row || !active) return [];
+        return Array.from(row.querySelectorAll(".result-passage-snippet")).map(node => {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          active.removeAllRanges();
+          active.addRange(range);
+          const value = active.toString();
+          active.removeAllRanges();
+          return value;
+        });
+      })()`);
+      expect(JSON.stringify(selected) === JSON.stringify(multi.passages.map(passage => passage.snippet)), "Selection API 選取片段混入標籤或高亮字元。");
+      await click(cdp, "#view-table");
+      await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
+      const table = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "multi-passage-lines.txt");
+        return row ? {
+          passages: row.querySelectorAll(".result-passages > .result-passage").length,
+          snippets: Array.from(row.querySelectorAll(".result-passage-snippet")).map(node => node.textContent || ""),
+          copyButtons: row.querySelectorAll(".copy-action button").length,
+        } : null;
+      })()`);
+      expect(table?.passages === 2, "表格沒有顯示兩個 passage。");
+      expect(JSON.stringify(table.snippets) === JSON.stringify(multi.passages.map(passage => passage.snippet)), "表格片段文字不是 API 原始 snippet。");
+      expect(table.copyButtons === 2, "表格多段落結果遺失既有複製按鈕。");
+      await click(cdp, "#view-list");
+      await waitFor(() => visible(cdp, "#document-list"));
+      await noBrowserErrorsSince(cdp, start, "all-terms 多段落列表／表格");
+    });
+
+    await check(`${label} 單一 passage 與 phrase 維持既有單一片段外觀`, async () => {
+      const start = browserEvents.length;
+      const query = "private node together";
+      await setSearchMode(cdp, "phrase");
+      await inputAndSearch(cdp, query);
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "single-passage.txt"))`));
+      const phrase = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "single-passage.txt");
+        return row ? {
+          passageCount: row.querySelectorAll(".result-passages > .result-passage").length,
+          snippetCount: row.querySelectorAll(".snippet").length,
+          snippet: row.querySelector(".snippet")?.textContent || "",
+          copyButtons: row.querySelectorAll(".copy-action button").length,
+        } : null;
+      })()`);
+      expect(phrase?.passageCount === 0 && phrase?.snippetCount === 1, "phrase 單一結果外觀被多段落元件取代。");
+      expect(phrase.copyButtons === 2, "phrase 單一結果遺失既有複製控制。");
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, query);
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "single-passage.txt"))`));
+      const allTerms = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "single-passage.txt");
+        return row ? {
+          passageCount: row.querySelectorAll(".result-passages > .result-passage").length,
+          snippetCount: row.querySelectorAll(".snippet").length,
+          snippet: row.querySelector(".snippet")?.textContent || "",
+          copyButtons: row.querySelectorAll(".copy-action button").length,
+        } : null;
+      })()`);
+      expect(allTerms?.passageCount === 0 && allTerms?.snippetCount === 1, "單一 all-terms passage 不應顯示多段落清單。");
+      expect(allTerms.copyButtons === 2, "all-terms 單一結果遺失既有複製控制。");
+      expect(allTerms.snippet === phrase.snippet, "phrase 與單一 all-terms 的既有 snippet 外觀不一致。");
+      await noBrowserErrorsSince(cdp, start, "單一 passage／phrase");
+    });
+
+    await check(`${label} omittedTerms 顯示省略詞提示`, async () => {
+      const start = browserEvents.length;
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, "alpha beta gamma delta epsilon");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "omitted-terms.txt"))`));
+      const response = await searchDirectly(cdp, "alpha beta gamma delta epsilon", "all-terms");
+      const result = response.data?.results?.find(item => typeof item.path === "string" && item.path.endsWith("omitted-terms.txt"));
+      expect(result?.omittedTerms === 1, `API omittedTerms 不符：${result?.omittedTerms ?? "未提供"}。`);
+      const notice = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "omitted-terms.txt");
+        return row ? {
+          text: row.querySelector(".result-passages-omitted")?.textContent || "",
+          listCount: row.querySelectorAll(".result-passages").length,
+        } : null;
+      })()`);
+      expect(notice?.text === "還有 1 個詞未列出", "工作台沒有顯示 omittedTerms 提示。");
+      expect(notice.listCount === 0, "單一 passage 不應虛構多段落清單。");
+      await noBrowserErrorsSince(cdp, start, "omittedTerms 提示");
+    });
+
+    await check(`${label} 模式切換、分頁與上下文抽屜維持可操作`, async () => {
+      const start = browserEvents.length;
+      await setSearchMode(cdp, "phrase");
+      await inputAndSearch(cdp, "UI_SMOKE_PAGE_TOKEN");
+      await waitFor(() => cdp.evaluate("document.querySelectorAll('#document-list .document-row').length > 0 && !document.getElementById('search-status')?.textContent?.includes('搜尋中')"));
+      const pageOne = await searchDirectly(cdp, "UI_SMOKE_PAGE_TOKEN", "phrase", 1);
+      expect(pageOne.data?.pageCount >= 2, `合成分頁資料不足：${pageOne.data?.pageCount ?? "未提供"}。`);
+      expect(await cdp.evaluate("document.getElementById('pagination-label')?.textContent === '1'"), "分頁初始頁碼不是 1。");
+      expect(!(await cdp.evaluate("Boolean(document.getElementById('documents-next')?.disabled)")), "有第二頁時下一頁按鈕仍停用。");
+      await click(cdp, "#documents-next");
+      await waitFor(() => cdp.evaluate("document.getElementById('pagination-label')?.textContent === '2'"));
+      await click(cdp, "#documents-prev");
+      await waitFor(() => cdp.evaluate("document.getElementById('pagination-label')?.textContent === '1'"));
+
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, "private node");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
+      const selected = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const control = row && Array.from(row.querySelectorAll(".document-actions button")).find(node => node.textContent === "加入上下文");
+        if (!(control instanceof HTMLElement)) return false;
+        control.click();
+        return true;
+      })()`);
+      expect(selected, "找不到多段落結果的加入上下文控制。");
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '1'"));
+      await click(cdp, "#nav-context");
+      await waitFor(() => visible(cdp, "#context-drawer"));
+      const drawer = await cdp.evaluate(`(() => ({
+        hidden: Boolean(document.getElementById("context-drawer")?.hidden),
+        itemCount: document.querySelectorAll("#context-indexed-list .context-item").length,
+        text: document.getElementById("context-indexed-list")?.textContent || "",
+      }))()`);
+      expect(!drawer.hidden && drawer.itemCount === 1 && drawer.text.includes("multi-passage-lines.txt"), "上下文抽屜沒有保留選取結果。");
+      await click(cdp, "#context-close");
+      await waitFor(() => cdp.evaluate("Boolean(document.getElementById('context-drawer')?.hidden)"));
+      await noBrowserErrorsSince(cdp, start, "模式切換／分頁／上下文抽屜");
+    });
+
     await check(`${label} 搜尋零結果顯示排除提示與檢查輸入欄`, async () => {
       const start = browserEvents.length;
       await inputAndSearch(cdp, "UI_SMOKE_ZERO_RESULT_NEEDLE");
@@ -939,11 +1144,12 @@ async function runViewport(viewport, chromePath) {
     });
 
 
-    await check(`${label} 截圖已保存`, async () => {
+    await check(`${label} 多段落結果截圖已保存`, async () => {
       await click(cdp, "#nav-documents");
       await waitFor(() => visible(cdp, "#documents-page"));
-      await inputAndSearch(cdp, "UI_SMOKE_INCLUDED_NEEDLE");
-      await waitFor(() => cdp.evaluate("document.querySelectorAll('#document-list .document-row').length > 0"));
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, "private node");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
       const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
       const file = path.join(outputDir, `ui-smoke-${label}.png`);
       writeFileSync(file, Buffer.from(screenshot.result.data, "base64"));
