@@ -126,11 +126,44 @@ async function prepareRefreshFixture(fixture) {
   await rm(path.join(fixture.refreshFolder, "refresh-removed.txt"), { force: true });
   await writeFile(path.join(fixture.refreshFolder, "refresh-added.txt"), "UI_SMOKE_REFRESH_ADDED\n");
 }
+async function prepareIndexingFixture(fixture) {
+  for (let index = 0; index < 600; index += 1) {
+    await writeFile(path.join(fixture.root, `ui-smoke-indexing-${index}.txt`), `UI_SMOKE_INDEXING_${index}\n`);
+  }
+}
 
-function startWorkbench(dataDir) {
+function syntheticEnvironment(fixture) {
+  return {
+    ...process.env,
+    LOCALDOCSEARCH_DATA_DIR: fixture.dataDir,
+    APPDATA: path.join(fixture.temp, "appdata"),
+    LOCALAPPDATA: path.join(fixture.temp, "localappdata"),
+    NODE_NO_WARNINGS: "1",
+  };
+}
+
+function startCliAutoupdate(fixture) {
+  const result = spawnSync(process.execPath, [cli, "autoupdate", "start", "--data-dir", fixture.dataDir], {
+    cwd: project,
+    encoding: "utf8",
+    timeout: 30_000,
+    windowsHide: true,
+    env: syntheticEnvironment(fixture),
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`CLI autoupdate start 結束碼 ${result.status ?? "未知"}：${truncate(result.stderr || result.stdout, 1_200)}`);
+}
+
+function startWorkbench(dataDir, temp) {
   const child = spawn(process.execPath, [cli, "ui", "--no-open"], {
     cwd: project,
-    env: { ...process.env, LOCALDOCSEARCH_DATA_DIR: dataDir, NODE_NO_WARNINGS: "1" },
+    env: {
+      ...process.env,
+      LOCALDOCSEARCH_DATA_DIR: dataDir,
+      APPDATA: path.join(temp, "appdata"),
+      LOCALAPPDATA: path.join(temp, "localappdata"),
+      NODE_NO_WARNINGS: "1",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -279,6 +312,12 @@ async function noBrowserErrorsSince(cdp, start, label) {
   const dimensions = await cdp.evaluate("({ width: window.innerWidth, height: window.innerHeight })");
   expect(dimensions?.width >= 1180, `${label}：viewport 寬度不足（${dimensions?.width}）。`);
 }
+async function noBrowserErrorsExcept(cdp, start, label, allow) {
+  const failures = browserFailuresSince(start).filter(event => !allow(event));
+  if (failures.length) throw new Error(`${label}：${failures.map(event => `${event.kind}: ${truncate(event.message, 240)}`).join(" | ")}`);
+  const dimensions = await cdp.evaluate("({ width: window.innerWidth, height: window.innerHeight })");
+  expect(dimensions?.width >= 1180, `${label}：viewport 寬度不足（${dimensions?.width}）。`);
+}
 
 async function visible(cdp, selector) {
   return await cdp.evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); return Boolean(node && !node.hidden && getComputedStyle(node).display !== "none"); })()`);
@@ -292,19 +331,99 @@ async function click(cdp, selector) {
 async function installPickerPatch(cdp) {
   await cdp.evaluate(`(() => {
     const originalFetch = window.fetch.bind(window);
-    window.__uiSmoke = { selectRoot: null, requests: [] };
+    window.__uiSmoke = {
+      selectRoot: null,
+      requests: [],
+      failNextAutoupdate: false,
+      delayNextSettingsMs: 0,
+      delayNextIndexStatusMs: 0,
+    };
     window.fetch = async (input, init) => {
       const requestUrl = input instanceof Request ? input.url : String(input);
       const requestPath = new URL(requestUrl, location.href).pathname;
       const requestMethod = String(init?.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
-      window.__uiSmoke.requests.push({ path: requestPath, method: requestMethod });
+      let body = null;
+      if (typeof init?.body === "string") {
+        try { body = JSON.parse(init.body); } catch { body = null; }
+      }
+      window.__uiSmoke.requests.push({ path: requestPath, method: requestMethod, body });
       if (requestPath === "/api/select-folder") {
         return new Response(JSON.stringify({ root: window.__uiSmoke.selectRoot }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (requestPath === "/api/settings" && body?.autoupdateEnabled !== undefined && window.__uiSmoke.failNextAutoupdate) {
+        window.__uiSmoke.failNextAutoupdate = false;
+        const response = new Response(JSON.stringify({ error: "煙霧測試模擬設定失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
+        const delay = Number(window.__uiSmoke.delayNextSettingsMs) || 0;
+        window.__uiSmoke.delayNextSettingsMs = 0;
+        return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
+      }
+      if (requestPath === "/api/index-status" && Number(window.__uiSmoke.delayNextIndexStatusMs) > 0) {
+        const delay = Number(window.__uiSmoke.delayNextIndexStatusMs);
+        window.__uiSmoke.delayNextIndexStatusMs = 0;
+        const response = await originalFetch(input, init);
+        return await new Promise(resolve => setTimeout(() => resolve(response), delay));
       }
       return originalFetch(input, init);
     };
     return true;
   })()`);
+}
+
+async function settingSnapshot(cdp) {
+  return await cdp.evaluate(`(() => {
+    const read = id => {
+      const node = document.getElementById(id);
+      return node ? {
+        role: node.getAttribute("role"),
+        ariaChecked: node.getAttribute("aria-checked"),
+        disabled: Boolean(node.disabled),
+        state: document.getElementById(id + "-state")?.textContent?.trim() || "",
+      } : null;
+    };
+    return {
+      auto: read("settings-autoupdate"),
+      startup: read("settings-autoupdate-startup"),
+      status: document.getElementById("settings-status")?.textContent?.trim() || "",
+    };
+  })()`);
+}
+
+async function indexStatus(cdp) {
+  return await cdp.evaluate(`(async () => {
+    const token = decodeURIComponent(location.hash.slice(1));
+    const response = await fetch("/api/index-status", { headers: { "X-LocalDocSearch-Token": token } });
+    return await response.json();
+  })()`);
+}
+async function settingsPost(cdp, body) {
+  return await cdp.evaluate(`(async () => {
+    const token = decodeURIComponent(location.hash.slice(1));
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "X-LocalDocSearch-Token": token, "content-type": "application/json" },
+      body: ${JSON.stringify(JSON.stringify(body))},
+    });
+    return { status: response.status, data: await response.json() };
+  })()`);
+}
+
+async function pressKey(cdp, key, code, virtualKeyCode, textValue) {
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    text: textValue,
+    unmodifiedText: textValue,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+  });
+  await cdp.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: virtualKeyCode,
+    nativeVirtualKeyCode: virtualKeyCode,
+  });
 }
 
 async function setPickerRoot(cdp, root) {
@@ -359,7 +478,7 @@ async function runViewport(viewport, chromePath) {
   let port;
   try {
     fixture = await fixtureFor(viewport);
-    workbench = startWorkbench(fixture.dataDir);
+    workbench = startWorkbench(fixture.dataDir, fixture.temp);
     const url = await waitForWorkbench(workbench);
     port = await unusedPort();
     chromeProfile = await mkdtemp(path.join(outputDir, `chrome-${label}-`));
@@ -438,8 +557,10 @@ async function runViewport(viewport, chromePath) {
       await noBrowserErrorsSince(cdp, start, "垃圾桶頁");
     });
 
-    await check(`${label} 設定頁可開啟且有政策清單、無 exception`, async () => {
+    await installPickerPatch(cdp);
+    await check(`${label} 設定頁 Toggle Switch 可鍵盤操作、狀態與 API 一致且失敗會回復`, async () => {
       const start = browserEvents.length;
+      await cdp.evaluate("window.__uiSmoke.delayNextIndexStatusMs = 2500");
       await click(cdp, "#settings-toggle");
       await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
       const settings = await cdp.evaluate(`(() => ({
@@ -448,7 +569,61 @@ async function runViewport(viewport, chromePath) {
       }))()`);
       expect(settings.policyHeading.includes("哪些位置預設不索引"), "設定頁沒有排除政策標題。");
       expect(settings.policyCount > 0, "設定頁沒有政策清單。");
-      await noBrowserErrorsSince(cdp, start, "設定頁");
+      let snapshot = await settingSnapshot(cdp);
+      expect(snapshot.auto?.role === "switch" && snapshot.startup?.role === "switch", "背景更新開關不是 role=switch。");
+      expect(snapshot.auto?.ariaChecked === "false" && snapshot.startup?.ariaChecked === "false", "初始 aria-checked 不正確。");
+      expect(snapshot.auto?.state === "已關閉" && snapshot.startup?.state === "已關閉", "初始狀態文字不正確。");
+      await cdp.evaluate("document.getElementById('settings-autoupdate')?.focus()");
+      await pressKey(cdp, " ", "Space", 32, " ");
+      await waitFor(async () => {
+        const current = await settingSnapshot(cdp);
+        return current.auto?.ariaChecked === "true" && current.auto?.state === "已開啟" && !current.auto?.disabled;
+      });
+      let apiState = await indexStatus(cdp);
+      expect(apiState?.autoupdate?.enabled === true, "鍵盤開啟後 API autoupdate 沒有 enabled=true。");
+      await sleep(2_700);
+      snapshot = await settingSnapshot(cdp);
+      expect(snapshot.auto?.ariaChecked === "true" && snapshot.auto?.state === "已開啟", "慢速 index-status 回應覆寫了 POST 成功狀態。");
+      await click(cdp, "#settings-autoupdate");
+      await waitFor(async () => {
+        const current = await settingSnapshot(cdp);
+        return current.auto?.ariaChecked === "false" && current.auto?.state === "已關閉" && !current.auto?.disabled;
+      });
+      apiState = await indexStatus(cdp);
+      expect(apiState?.autoupdate?.enabled === false, "點擊關閉後 API autoupdate 沒有 enabled=false。");
+      await click(cdp, "#settings-autoupdate");
+      await waitFor(async () => (await settingSnapshot(cdp)).auto?.ariaChecked === "true");
+      apiState = await indexStatus(cdp);
+      expect(apiState?.autoupdate?.enabled === true, "再次開啟後 API autoupdate 沒有 enabled=true。");
+      await cdp.evaluate("window.__uiSmoke.failNextAutoupdate = true; window.__uiSmoke.delayNextSettingsMs = 250;");
+      await click(cdp, "#settings-autoupdate");
+      await sleep(50);
+      snapshot = await settingSnapshot(cdp);
+      expect(snapshot.auto?.disabled && snapshot.auto?.state === "處理中…", "設定處理期間開關沒有 disabled／處理中狀態。");
+      await waitFor(async () => {
+        const current = await settingSnapshot(cdp);
+        return !current.auto?.disabled && current.auto?.ariaChecked === "true" && current.auto?.state === "已開啟";
+      });
+      snapshot = await settingSnapshot(cdp);
+      expect(snapshot.status.includes("煙霧測試模擬設定失敗"), "設定失敗沒有顯示明確錯誤。");
+      apiState = await indexStatus(cdp);
+      expect(apiState?.autoupdate?.enabled === true, "設定失敗後 API autoupdate 不應改變。");
+      await click(cdp, "#settings-autoupdate");
+      await waitFor(async () => (await settingSnapshot(cdp)).auto?.ariaChecked === "false");
+      apiState = await indexStatus(cdp);
+      expect(apiState?.autoupdate?.enabled === false, "清理背景 daemon 後 API autoupdate 沒有 disabled。");
+      if (!snapshot.startup?.disabled) {
+        await click(cdp, "#settings-autoupdate-startup");
+        await waitFor(async () => (await settingSnapshot(cdp)).startup?.ariaChecked === "true");
+        apiState = await indexStatus(cdp);
+        expect(apiState?.autoupdate?.enabled === false, "登入啟動開啟不應啟動背景 daemon。");
+        expect(apiState?.autoupdateStartup?.enabled === true, "登入啟動開啟後 API 狀態不一致。");
+        await click(cdp, "#settings-autoupdate-startup");
+        await waitFor(async () => (await settingSnapshot(cdp)).startup?.ariaChecked === "false");
+        apiState = await indexStatus(cdp);
+        expect(apiState?.autoupdateStartup?.enabled === false, "登入啟動關閉後 API 狀態不一致。");
+      }
+      await noBrowserErrorsSince(cdp, start, "設定 Toggle Switch");
       await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
     });
 
@@ -494,7 +669,6 @@ async function runViewport(viewport, chromePath) {
       });
     }
 
-    await installPickerPatch(cdp);
     await check(`${label} 加入合成資料夾只顯示預覽、確認按鈕狀態正確且未開始索引`, async () => {
       const start = browserEvents.length;
       await click(cdp, "#nav-roots");
@@ -554,6 +728,114 @@ async function runViewport(viewport, chromePath) {
       expect(result.rootRows === 1 && result.navRootCount === "1", "重新檢查資料夾新增了第二筆根目錄。");
       await noBrowserErrorsSince(cdp, start, "重新檢查資料夾");
     });
+    await check(`${label} CLI autoupdate start 可由工作台讀取並關閉`, async () => {
+      const start = browserEvents.length;
+      startCliAutoupdate(fixture);
+      try {
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.enabled === true && current.autoupdate.live?.mode === "background";
+        }, 30_000);
+        const running = await settingSnapshot(cdp);
+        expect(running.auto?.ariaChecked === "true" && running.auto?.state === "已開啟", "CLI autoupdate start 後 Toggle Switch 沒有顯示已開啟。");
+        await click(cdp, "#settings-autoupdate");
+        await waitFor(async () => (await settingSnapshot(cdp)).auto?.ariaChecked === "false", 30_000);
+        const stopped = await indexStatus(cdp);
+        expect(stopped?.autoupdate?.enabled === false, "工作台關閉 CLI daemon 後 API 仍顯示 enabled。");
+        await noBrowserErrorsSince(cdp, start, "CLI autoupdate start／stop");
+      } finally {
+        try {
+          const current = await indexStatus(cdp);
+          if (current?.autoupdate?.enabled) await settingsPost(cdp, { autoupdateEnabled: false });
+        } catch { /* 主斷言已回報；清理只處理合成 daemon。 */ }
+        await sleep(500);
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+      }
+    });
+
+    await check(`${label} 前景 watch 拒絕遠端關閉且保留實際狀態`, async () => {
+      const start = browserEvents.length;
+      const foreground = spawn(process.execPath, [cli, "watch", fixture.root, "--debounce", "200", "--rescan", "60000"], {
+        cwd: project,
+        env: syntheticEnvironment(fixture),
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      try {
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.live?.mode === "foreground";
+        }, 30_000);
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => (await settingSnapshot(cdp)).auto?.ariaChecked === "true");
+        await click(cdp, "#settings-autoupdate");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          return !current.auto?.disabled && current.auto?.ariaChecked === "true";
+        }, 30_000);
+        const rejected = await settingSnapshot(cdp);
+        expect(rejected.status.includes("原終端按 Ctrl+C"), "前景 watch 拒絕遠端關閉時沒有明確提示。");
+        const current = await indexStatus(cdp);
+        expect(current?.autoupdate?.enabled === true && current.autoupdate.live?.mode === "foreground", "前景 watch 拒絕後 API 狀態不一致。");
+        await noBrowserErrorsExcept(cdp, start, "前景 watch 遠端關閉", event => event.message.includes("/api/settings"));
+      } finally {
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+        if (foreground.exitCode === null) {
+          foreground.kill("SIGINT");
+          await Promise.race([waitForExit(foreground), sleep(2_000)]);
+        }
+        await sleep(500);
+      }
+    });
+
+    await prepareIndexingFixture(fixture);
+    await check(`${label} 索引進行中切換背景更新仍保持 API parity`, async () => {
+      const start = browserEvents.length;
+      try {
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.enabled === false;
+        }, 30_000);
+        const response = await cdp.evaluate(`(async () => {
+          const token = decodeURIComponent(location.hash.slice(1));
+          const result = await fetch("/api/index", {
+            method: "POST",
+            headers: { "X-LocalDocSearch-Token": token, "content-type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          return { status: result.status, data: await result.json() };
+        })()`);
+        expect(response.status === 202, `索引開始回應不是 202：${response.status}`);
+        await click(cdp, "#settings-autoupdate");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          return current.auto?.ariaChecked === "true" && !current.auto?.disabled;
+        }, 30_000);
+        const current = await indexStatus(cdp);
+        expect(current?.autoupdate?.enabled === true, "索引進行中切換後 API autoupdate 沒有 enabled。");
+        expect(current?.indexing && typeof current.indexing.state === "string", "索引進度狀態缺少 state。");
+        await noBrowserErrorsSince(cdp, start, "索引進行中 Toggle Switch");
+      } finally {
+        try {
+          const snapshot = await settingSnapshot(cdp);
+          if (snapshot.auto?.ariaChecked === "true") {
+            await click(cdp, "#settings-autoupdate");
+            await waitFor(async () => (await settingSnapshot(cdp)).auto?.ariaChecked === "false", 30_000);
+          }
+          await waitFor(async () => (await indexStatus(cdp)).indexing?.state !== "running", 30_000);
+        } catch { /* 失敗訊息由主斷言保留；工作台關閉時會停止合成索引。 */ }
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+      }
+    });
+
 
     await check(`${label} 截圖已保存`, async () => {
       await click(cdp, "#nav-documents");
@@ -570,7 +852,11 @@ async function runViewport(viewport, chromePath) {
     results.push({ status: "fail", label: `${label} 煙霧測試執行`, message: truncate(errorText(error)) });
     console.log(`[FAIL] ${label} 煙霧測試執行：${truncate(errorText(error))}`);
   } finally {
-    cdp?.close();
+    if (cdp) {
+      try { await settingsPost(cdp, { autoupdateEnabled: false }); } catch { /* 合成 daemon 已停止或頁面已關閉。 */ }
+      await sleep(3_000);
+      cdp.close();
+    }
     await stopProcess(chrome);
     await stopProcess(workbench?.child);
     if (chromeProfile) await rm(chromeProfile, { recursive: true, force: true });

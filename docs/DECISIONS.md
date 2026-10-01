@@ -1,4 +1,32 @@
 # 設計決策紀錄
+## D111：工作台設定開關改用 Toggle Switch 並以 settings response 保持一致
+
+- 日期：2026-10-01。依 SPEC §79；本分支只處理工作台設定頁布林開關、`test/m75.test.ts` 與 `scripts/ui-smoke.mjs`，不修改 package 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。
+- 調查事實：
+  - 基線的 `settings-autoupdate` 與 `settings-autoupdate-startup` 都是沒有 `role`／`aria-checked` 的原生 checkbox；設定頁另有刪除確認與精確總數兩個同型布林 checkbox。
+  - `src/workbench.ts` 的 `/api/settings` 已能正常處理 `autoupdateEnabled: true／false`，回應含 `autoupdate`；隔離索引實測開啟後 `mode=background`，關閉後 daemon 停止，API 層不是「開了關不掉」的根因。
+  - 基線 `saveAutoupdate()` 在 POST 成功後丟棄回應中的 `autoupdate`，改等 `refreshStatus()`；`refreshStatus()` 忙碌時直接 return，且開設定時已開始的慢速 `index-status` 可能在 POST 後才回來。隔離 CDP 實測：API 已回 `enabled=false`，畫面先顯示關閉，約 2.5 秒後被舊的 enabled=true 回應覆寫，狀態文字也回到「背景自動更新已開啟」。
+  - 隔離 CDP 實測正常「開、關、再開」的 POST 與 API 狀態均正確；CLI `autoupdate start` 啟動後工作台可關閉 daemon；登入啟動開關只改捷徑、背景 daemon 仍關閉；前景 `watch` 的關閉要求被 API 以 `AUTOUPDATE_FOREGROUND_ACTIVE` 拒絕並保留開啟；索引進行中目前仍可切換且 API 正常，但畫面沒有「處理中」的獨立狀態。
+- 決定：
+  - `settings-autoupdate`、`settings-autoupdate-startup`、`settings-delete-confirmation`、`settings-total-exact` 統一改成原生 button（`type=button`、`role=switch`、`aria-checked`）；結果列、臨時文件、根目錄與垃圾桶選取 checkbox 不改，避免與同事的結果列工作衝突。
+  - 共用一組 Toggle Switch 視覺與狀態更新函式：軌道／圓鈕、淺色／深色偏好、focus-visible、Enter／Space 原生 button 操作；成功顯示「已開啟／已關閉」，請求期間 disabled 並顯示「處理中…」。
+  - 背景更新與登入啟動設定成功時直接套用同一個 POST response 的 `autoupdate`／`autoupdateStartup`，立即更新 `state`、`aria-checked`、狀態文字與健康摘要；不再為這兩個切換等待 `refreshStatus()`。
+  - `refreshStatus()` 加入設定版本序號。切換前已發出的舊狀態回應仍可更新索引／排除資料，但不得覆寫較新的 autoupdate 或 startup 結果。
+  - 失敗不以 stale status 猜測：立即回復送出前的值、解除 disabled，並保留 API 的明確錯誤文字。前景 watch 的拒絕是可預期限制，維持開啟並顯示原有 `AUTOUPDATE_FOREGROUND_ACTIVE` 說明。
+  - 不修改 `/api/settings`、CLI、daemon、登入捷徑的既有語意；登入啟動與目前背景 daemon 繼續是兩個獨立開關。
+- 理由：
+  - API 回應已是實際控制通道結果，直接套用可消除慢速 `GET /api/index-status` 與 stale response 造成的畫面回彈；版本序號只保護易受競態影響的兩個欄位，不新增第二個狀態 API。
+  - 原生 button switch 的鍵盤與 screen reader 契約比視覺隱藏 checkbox 清楚；四個設定布林控制一致，結果選取仍保留 checkbox 的多選語意。
+- 驗證：
+  - `test/m75.test.ts`：switch role／`aria-checked`、設定頁無 checkbox、response 直接套用、refresh stale guard、失敗回復與四個設定開關標記；暫時拿掉 switch 或 guard 時測試必須失敗。
+  - `scripts/ui-smoke.mjs`：隔離資料、Chrome CDP、開關開／關／再開、鍵盤操作、API parity、失敗回復、CLI daemon、登入啟動、前景 watch、索引進行中與慢速 status。
+  - 2026-10-01 本機 win32（Node 22.23.2、Chrome）執行 `node scripts/ui-smoke.mjs`：兩個 viewport 共 36 項通過、0 項失敗；覆蓋 CDP 鍵盤／滑鼠切換、慢速 `index-status`、失敗回復、登入啟動、CLI daemon、前景 watch、索引進行中與 API parity。
+  - 2026-10-01 執行完整 `npm test`：452 tests，449 pass、3 skip、0 fail；重建 TypeScript 成功。反向暫存驗證移除 switch role 或 stale guard 時都能被契約偵測。
+- 相容與風險：
+  - 不改 LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／`docsearch` 識別、索引 schema 或文件內容處理。
+  - `aria-checked` 是 UI 對 API 回應的映射，不是另一份持久化設定；若未來 API 移除 `autoupdate` 回應，前端測試應先失敗而不是退回猜測。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D109：狀態 API 截斷上次同步錯誤與通知清單
 
 - 日期：2026-10-01。依 SPEC §77；本分支只處理 `indexStatus` 讀取出口與相關顯示，不修改版本、STATUS、handoff 或 NEXT-TODO。
