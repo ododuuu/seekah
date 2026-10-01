@@ -1,4 +1,23 @@
 # 設計決策紀錄
+## D121：監看局部更新採分階段計時並重疊逐檔穩定等待
+
+- 日期：2026-10-02。依 SPEC §89；本工作只處理 `src/live-update.ts`、`src/local-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts` 與 `test/m85.test.ts`／`test/m86.test.ts`，不修改 package 版本、索引 schema、搜尋核心或背景寫入期間搜尋設定。
+- 事實：
+  - 隔離合成根目錄的基線量測中，寫入至 `fs.watch` callback 約 2.53～2.60 ms；目前局部路徑的單次全批穩定等待為 1,500 ms，安靜案例從寫入至搜尋可見約 3,048.5～3,074.2 ms。
+  - 400 次雜訊寫入的本機案例收到目標 callback 約 2.375 ms、收到 363 個事件，目標搜尋可見約 3,967.3 ms；這些案例沒有證明一般負載會固定遺漏或必然達到約 10 秒。
+- 決定：
+  - 每個局部批次保留最近一次 `lastTiming`，分別記錄事件至局部處理、穩定等待、候選列舉、writer lock 等待與持鎖提交／checkpoint；欄位為可選相容診斷，不寫入索引。
+  - 穩定觀察維持每檔 metadata 第二次 identity 檢查；後續實作讓下一檔在前一檔解析／準備時開始自己的穩定等待，仍不在等待階段持有 writer lock。
+  - 既有批次上限、群組提交、延後不穩定檔案及 queue 語意不變；不以 mtime 排序，不因近期檔案改走第二套 local queue。
+  - 背景寫入期間搜尋變慢不在本工作範圍；不因本次監看量測修改 WAL、autocheckpoint 或唯讀搜尋連線。
+- 理由：
+  - 沒有分段數字就不能區分 watcher callback、排程／穩定等待、目錄列舉、取鎖及提交成本；先保留低成本有界診斷，避免以猜測修正事件遺漏。
+  - 逐檔等待重疊可縮短批次的觀察空窗，但不犧牲每檔 identity 檢查或把 writer lock 變成長鎖；由可控序列測試驗證並行邊界。
+- 否決：
+  - 不把空檔名、callback 缺失或本機未重現直接命名為 OS buffer overflow；不加入 native／USN、外部服務、OCR、embedding、mtime 優先序或第二套 queue。
+- 驗證：
+  - `npm run build` 成功；`node --test --test-concurrency=1 dist/test/m85.test.js` 為 2 pass、0 fail，涵蓋注入 watcher 與本機真實 `fs.watch` 的合成新增檔案，以及 `lastTiming`／status 格式化。
+
 ## D118：監看不確定訊號採區域降級與有界補掃
 
 - 日期：2026-10-01。依 SPEC §86；本分支處理 `src/live-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts`、必要的 `src/live-queue.ts`／`src/workbench.ts` 狀態映射與 `test/m82.test.ts`。不修改 package 版本；所有實驗使用隔離 `LOCALDOCSEARCH_DATA_DIR` 與合成資料。

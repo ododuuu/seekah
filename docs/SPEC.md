@@ -2852,3 +2852,26 @@ docsearch doctor
 - 必須以產品本身的 `LiveUpdateEngine`／`autoupdate` 在隔離合成資料上比較目前拓撲與預設排除後 split 拓撲；writer 必須是獨立程序，測試 150／300／600 writes/s，量測目標檔搜尋延遲、遺失、watch scope／句柄、空檔名與 unknown-filename 補掃，並如實報告無法重現的條件。
 - 不採按子目錄 `mtime` 優先校正、不因近期檔案改走另一套局部佇列、不宣稱空檔名等於 `ERROR_NOTIFY_ENUM_DIR`；不新增 OCR、embedding、USN、native dependency、網路或外部服務。
 - 所有資料仍只在本機處理；不讀取或接觸使用者真實 `LocalDocSearch` 資料目錄／備份，不改既有 IPC／MCP／`docsearch` 識別、索引 schema 或 package 版本。
+
+## 89. 監看局部更新的分階段計時與穩定等待重疊
+
+依 D121。本節只處理 `LiveUpdateEngine` 局部更新的可觀測性與逐檔穩定等待排程；不改索引 schema、搜尋語意、背景寫入期間的搜尋效能或既有 watcher 正確性安全網。
+
+### 89.1 分階段計時
+
+- 每個完成的局部更新批次可在 `LiveRootStatus.lastTiming` 提供最近一次計時；舊 daemon／舊 JSON 可缺少此欄位。欄位至少包含 ISO `at`、`eventToScheduleMs`（有事件來源時）、`stableWaitMs`、`enumerateMs`、`lockMs` 與 `commitMs`，數值以毫秒表示。
+- `eventToScheduleMs` 從第一個已接受事件進入該批次，到局部處理開始前計算；`stableWaitMs` 只計穩定觀察等待；`enumerateMs` 包含候選 metadata 及有界目錄展開；`lockMs` 只計取得 writer lock 的等待；`commitMs` 包含已持鎖的文件提交與既有 WAL checkpoint。各階段不得以總耗時互相冒充。
+- `autoupdate status` 顯示最近局部批次的上述階段；診斷資料不得包含文件正文、標題、片段或解析器原始錯誤。搜尋 query 時間仍由搜尋既有 trace／量測記錄，不能假造為局部更新階段。
+
+### 89.2 逐檔穩定等待與處理
+
+- 同一局部批次的每個檔案仍須先完成自己的穩定 metadata 觀察，再進入既有解析／準備／短 writer lock 提交；不可省略第二次 identity 檢查。
+- 前一份檔案進入解析／準備／提交時，下一份檔案可在 writer lock 外並行進行穩定等待；穩定等待不得持有 writer lock。批次上限、群組提交、延後不穩定檔案及 at-least-once 語意不變。
+- 穩定等待的重疊不得增加第二套 queue、改用檔案 mtime 排序或把近期檔案繞到未規格化的 local queue；§54、§55、§56 的批次、公平與有界目錄展開限制繼續適用。
+
+### 89.3 驗收與明確不做
+
+- `test/m85.test.ts` 必須以隔離合成資料同時覆蓋注入 watcher 與真實 `fs.watch` 的新增檔案路徑，證明搜尋結果與分階段計時欄位可取得；移除計時記錄時測試必須失敗。
+- `test/m86.test.ts` 必須以兩份合成文件的可控解析／等待序列證明下一份檔案的穩定等待已開始後，前一份仍可繼續解析；改回整批單次等待或逐檔串行等待時測試必須失敗。
+- 量測使用本機暫存目錄與合成資料；不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄／備份，不啟動其 daemon，不修改 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`、package 版本或 lockfile。
+- 本節不對背景寫入期間搜尋較慢的根因作判定、不修改 WAL／autocheckpoint／唯讀搜尋連線設定；該問題另由指定工作處理。
