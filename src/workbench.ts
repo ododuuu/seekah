@@ -927,7 +927,9 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
             && (!statuses?.length || statuses.includes(document.status)) && document.filename.normalize("NFKC").toLowerCase().includes(query))
           .map(document => ({ id: document.id, temporary: true, path: document.filename, filename: document.filename,
             extension: document.extension, status: document.status, reason: "臨時文件檔名包含", filenameOnly: true,
-            snippet: document.errorMessage ?? "臨時文件；只以檔名參與搜尋。", location: null })) : [];
+            snippet: document.errorMessage ?? "臨時文件；只以檔名參與搜尋。", location: null, passages: [], omittedTerms:
+              body.mode === "all-terms" ? Math.max(0, new Set((typeof body.query === "string" ? body.query : "").trim()
+                .split(/\s+/u).map(value => value.normalize("NFKC").toLowerCase()).filter(Boolean)).size - 4) : 0 })) : [];
         json(response, 200, { ...result, temporaryResults }); return;
       }
       if (request.method === "POST" && url.pathname === "/api/files") {

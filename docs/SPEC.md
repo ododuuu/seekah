@@ -2557,3 +2557,32 @@ docsearch doctor
 - `test/m71.test.ts`：上限與總數、舊資料缺欄位、CLI／工作台／TUI／MCP 顯示、`--issues` 仍完整、反向驗證（拿掉截斷後新測試失敗）。
 - 合成約 3.5 萬筆同步錯誤的 `LastSyncReport`，量測 `indexStatus()`／`GET /api/index-status` 回應大小與時間；截斷後不得再接近數 MB。
 - 完整 `npm test`。不得宣稱公司 Windows 驗收。
+
+## 80. 全部詞模式的當頁多段落結果
+
+依 D112。本節只擴充搜尋結果在**實際物化頁面**的顯示資料；文件集合、排序、rank、代表位置、舊 `snippet`、總數及 `totalRelation` 沿用第 14、46、48、50、52、62、76、77 節，不因多段落資料改變。
+
+### 80.1 回應欄位
+
+- `mode=all-terms` 的每筆當頁結果追加 `passages` 陣列與 `omittedTerms` 整數。`passages` 元素包含：
+  - `terms`：此段落實際命中的唯一正規化搜尋詞，依搜尋詞在文件中的首次出現順序排列；
+  - `heading`：該段落的既有標題，沒有則為 `null`；
+  - `location`：沿用索引的既有位置標籤，例如行號、段落或頁碼，沒有則為 `null`；
+  - `snippet`、`snippetTruncated`：沿用既有片段產生器、正規化對回原文、約 160 code point 上限及截斷語意。
+- `omittedTerms` 是搜尋詞去重後超過前四詞的數量。多段落資料最多處理前四個搜尋詞；搜尋本身仍以完整詞集合判定，不能因顯示上限改變命中結果。
+- 每個詞取文件正文（標題或文字區塊）第一次出現的 block／行。相同 block，或首次命中 block 的 ordinal 相鄰，合併為一個 passage；`terms` 不重複，段落依文件 ordinal 順序排列。合併段落的 `location` 取第一個 block 的既有位置標籤，片段來源以合併後的原文區塊交給既有片段邏輯。
+- 詞只命中檔名、結果是 `filenameOnly`，或文件沒有可讀文字區塊時，`passages` 為空；既有 `filenameOnly`、`snippet`、`location` 與命中原因仍保留。
+- `mode=phrase` 維持既有搜尋語意；回應可省略 `passages`，或只帶既有代表片段的一段。`omittedTerms` 不適用時為 `0`。
+
+### 80.2 物化邊界與索引相容
+
+- 多段落只在 `materialize` 當頁結果時計算，最多處理當頁的 20 筆文件；建立搜尋 stream、翻頁前的候選／rank、`total`、`totalRelation` 與排序不得讀取或建立多段落資料。
+- `field=content`、`field=all`、`field=filename` 沿用既有欄位範圍。檔名與正文分散命中時，只為實際正文命中詞建立段落；檔名-only 詞沒有虛構的正文段落。
+- current chunk store、完成或未完成 block-index 的舊索引，以及 `createLegacyStore` 形狀都必須經既有 block／payload 讀取邊界取得文字；不得假設另一種形狀的表格存在，也不得因顯示段落觸發索引升級。
+- 舊結果欄位是追加相容；`snippet` 仍是代表片段，不改為第一段或多段拼接。Workbench `/api/search`、MCP `search_documents` 及 CLI `search` 只在既有輸出上追加可讀的段落資料。
+
+### 80.3 驗收
+
+- `test/m76.test.ts` 覆蓋 current、block-index、legacy 三種形狀；不同／同一／相鄰行、重複詞、四詞以上、中文與全形、大小寫、filename-only，以及 `field=content|all|filename`。
+- 差分必須逐筆證明加入多段落前後的文件集合、順序、rank、`total` 與 `totalRelation` 相同；phrase、空正文及不存在段落也要反向驗證。
+- 測試涵蓋 Workbench `/api/search`、MCP `search_documents` 與 CLI 追加欄位，並確認非當頁與總數路徑不物化 passages。執行完整 `npm test`；本機證據不得宣稱公司 Windows 驗收。
