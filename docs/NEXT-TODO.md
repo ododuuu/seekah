@@ -4,7 +4,14 @@
 - [x] 核准 TUI 規格與互動稿存入 [design/](design/SEEKAH-TUI.md)，交接集中 [handoff/CURRENT.md](handoff/CURRENT.md)。
 - [x] 在 0.36.1 落地核准的整體排版與完整焦點／鍵盤操作，不只增加 /select 或 /next；已以 80×24、120×40 render fixture 與真實 PTY 終端轉錄驗收。
 
-更新：2026-10-01。程式基線為 0.45.0（搜尋結果可複製、Toggle 開關、多段落結果、開啟工作台補更新提醒）。公司 Windows 未驗項保留。
+更新：2026-10-01。程式基線為 0.46.0（搜尋可取消、搜尋與狀態速度、監看不確定訊號補掃）。公司 Windows 未驗項保留。
+
+## 0.46.0 後續
+
+- [ ] 部署後觀察 status 的 `emptyFilenameEventCount`／`uncertainRescanCount`／`degradedSubdirectories`，確認監看漏事件是否仍發生；仍有則加階段計時（event→schedule、stable wait、enumerate、lock、commit、query）。
+- [ ] 修正煙霧測試「索引進行中切換背景更新仍保持 API parity」在高負載下的時序敏感。
+- [ ] 公司 Windows 驗收 0.45.0／0.46.0（含搜尋取消、worker 記憶體、背景更新重啟）。
+- [ ] 硬性「N 行內」鄰近搜尋與正規表示式（待使用一陣子後評估）。
 
 ## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
 
