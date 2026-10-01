@@ -6,6 +6,7 @@ import { RootExclusion } from "./root-exclusion.js";
 import { coversPath, resolveUserRootPath, samePath, runtimePathPlatform } from "./root-plan.js";
 import type { DocumentStatus } from "./model.js";
 import type { IndexStore } from "./store.js";
+import { cachedExclusionPolicies } from "./index-status-cache.js";
 import {
   pathResultFromExplanation,
   type ExclusionIgnoreFile,
@@ -56,26 +57,42 @@ export function previewExclusionPolicy(rootInput: string): ExclusionPolicy {
   };
 }
 
-export function readExclusionPolicy(store: IndexStore, root: string): ExclusionPolicy {
+function buildExclusionPolicy(store: IndexStore, root: string): ExclusionPolicy {
   const counts = historicalRuleCounts(store, root);
   const rules: ExclusionPolicyRule[] = listDefaultExclusions(root).map(rule => ({
     ...rule,
     ...(counts ? { lastSkipped: counts[rule.id] ?? 0 } : {}),
   }));
+  const ignoreFiles = uniqueBases(root, store.ignoreBases(root)).map(ignoreFilePolicy);
+  const cleanup = store.getLastSyncReport(root).summary?.exclusionCleanup;
   return {
     root,
     rules,
-    ignoreFiles: uniqueBases(root, store.ignoreBases(root)).map(ignoreFilePolicy),
+    ignoreFiles,
     ...(counts ? { skippedByRule: counts } : {}),
-    ...(() => {
-      const cleanup = store.getLastSyncReport(root).summary?.exclusionCleanup;
-      return cleanup ? { exclusionCleanup: cleanup } : {};
-    })(),
+    ...(cleanup ? { exclusionCleanup: cleanup } : {}),
   };
 }
 
-export function readExclusionPolicies(store: IndexStore, roots: readonly string[] = store.roots()): ExclusionPolicy[] {
-  return roots.map(root => readExclusionPolicy(store, root));
+export function readExclusionPolicy(store: IndexStore, root: string): ExclusionPolicy {
+  return cachedExclusionPolicies(
+    store,
+    [root],
+    () => [buildExclusionPolicy(store, root)],
+    policies => policies.flatMap(policy => policy.ignoreFiles.map(ignoreFile => ignoreFile.path)),
+  )[0]!;
+}
+
+export function readExclusionPolicies(store: IndexStore, roots?: readonly string[]): ExclusionPolicy[] {
+  return cachedExclusionPolicies(
+    store,
+    roots,
+    () => {
+      const rootList = roots ?? store.roots();
+      return rootList.map(root => buildExclusionPolicy(store, root));
+    },
+    policies => policies.flatMap(policy => policy.ignoreFiles.map(ignoreFile => ignoreFile.path)),
+  );
 }
 
 function matchingRoot(store: IndexStore, absPath: string): string | null {

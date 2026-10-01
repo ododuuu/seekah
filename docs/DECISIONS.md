@@ -1,4 +1,29 @@
 # 設計決策紀錄
+## D117：索引狀態採資料版本快取並分離輕量進度輪詢
+
+- 日期：2026-10-01。依 SPEC §85；本分支處理狀態讀取快取、`GET /api/index-progress`、工作台索引進度輪詢與 `test/m81.test.ts`，不修改 package 版本、索引格式或本機資料目錄相容入口。
+- 事實：
+  - §77／D109 已把 `errors`／`notices` 限為前 100 筆，但 `indexStatus()` 每次仍需開啟唯讀 SQLite、解析根目錄 `LastSyncReport`、計算 `documentCountForRoot()`、`formatStatus()`、`counts()` 與排除政策；工作台索引中的 750 ms 輪詢會重做這些重工作。
+  - 在隔離複製的合成索引上注入 35,000 筆錯誤，錯誤 JSON 約 11,305,001 bytes（約 12 MB 報告形狀）；未快取 `GET /api/index-status` 的三次端到端測量為 544.7、521.5、507.3 ms，回應約 35,630 bytes。分段範圍為 `formatStatus()` 167.1～171.2 ms、`counts()` 155.4～159.4 ms、根目錄報告解析 26.1～34.7 ms、根目錄文件數 49.0～49.7 ms、排除政策 43.4～46.3 ms、唯讀 store close 45.9～47.1 ms；autoupdate、登入啟動與 JSON 序列化各低於 2 ms。
+  - 大錯誤清單已被 §77 截斷，不能再以減少回應欄位或刪除持久化報告解決；MCP `index_status`、CLI `--issues` 與工作台仍需讀到既有語意。
+- 決定：
+  - 新增程序內 `index-status-cache`，按資料庫路徑保存有界的完整 `indexStatus()` 衍生結果。命中前以 `PRAGMA data_version` 與資料庫／WAL 檔案指紋檢查 SQLite 外部提交，並檢查政策回應列出的 ignore file 存在／mtime／大小；快取輸出以 `structuredClone` 複製，不把可變物件交給工作台或 MCP 呼叫者。
+  - `readExclusionPolicies()` 另以資料庫版本、根目錄清單與 ignore file 指紋快取排除政策；預設排除規則版本由程式碼版本自然區分。cache miss 仍經既有 `loadIgnoreRulesSync` 與 `IGNORE_CONFIGURATION_ERROR` 路徑，不保存文件正文。
+  - `recordSync()`、`recordReconcileSummary()` 在 transaction commit 後清除狀態／排除 cache；工作台設定、根目錄註冊／合併／移至垃圾桶／清空垃圾桶／移除、`setRoot` 等會改變回應的 store 寫入也清除。其他程序提交由同一連線的 `data_version` 與資料庫／WAL 檔案指紋共同偵測，ignore file 由檔案指紋偵測。
+  - 新增 token／同源保護的 `GET /api/index-progress`，只回 `{ indexing, autoupdate }`。它不開 SQLite、不回傳 roots、counts、format、exclusions、錯誤預覽或設定；`autoupdate` 重用既有 bounded live summary 與 unavailable 錯誤語意。
+  - 工作台首次／手動／設定／根目錄／垃圾桶／索引完成的完整刷新維持 `/api/index-status` 與 `/api/exclusions`；索引進行中、升級等待及週期輪詢改用 `/api/index-progress`，只合併 `indexing`／`autoupdate`。MCP `index_status` 工具名稱、欄位與 structured／JSON 形狀不變。
+- 理由：
+  - `data_version` 適合辨識仍開啟的連線看見的背景 autoupdate 或另一個 CLI writer 提交；資料庫／WAL 指紋補足工作台每次以新唯讀連線開庫時 `data_version` 無法跨連線比較的情況。ignore file 指紋補足 SQLite 不知道的檔案規則變更；明確 commit 後失效則涵蓋同一 process 的 writer 與測試 store。
+  - 不新增 SQLite 欄位或報告 preview schema，避免 migration、舊索引讀寫與完整 `LastSyncReport` 真相分裂；代價是程序重啟後第一次狀態仍需冷讀取，這個成本分段記錄而不以暖 cache 數字掩飾。
+  - 進度輪詢只需要內存中的 indexing 與 daemon 控制狀態，分離後不會把根目錄統計、排除規則與狀態報告的資料庫成本乘上輪詢頻率。
+- 否決：
+  - 不把完整錯誤／通知清單寫回 cache 或回應、不修改 §77 的 100 筆上限、不刪除 persistent report、不新增 MCP status 工具或 `errors=all` API。
+  - 不用固定 TTL 取代資料版本／檔案指紋失效，不在 cache miss 以 stale 值或猜測的 indexing 狀態回應；不為了進度端點新增另一份持久化狀態檔。
+  - 不讀取、複製或開啟使用者真實資料目錄，不啟動／停止／干擾使用者 daemon，不新增外部服務、OCR、embedding、LAN 暴露或 package 版本變更。
+- 驗證：
+  - `test/m81.test.ts` 必須證明冷讀取與 cache hit 深度等價、sync／reconcile／settings／root／ignore 失效、MCP 形狀與 `/api/index-progress` 欄位邊界；反向移除失效或誤把完整 status 放入 progress 時測試必須失敗。
+  - 交付前以隔離合成索引量測暖 cache 端到端目標約 300 ms 內，並執行 `node scripts/ui-smoke.mjs` 與完整 `npm test`；本機 win32 證據不宣稱公司 Windows 人工驗收。
+
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

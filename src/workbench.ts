@@ -36,6 +36,7 @@ import { isStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup
 import { isWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
 import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
 
+
 const HOST = "127.0.0.1";
 const JSON_LIMIT = 128 * 1024;
 
@@ -732,10 +733,19 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           fileLimit: WORKBENCH_FILE_LIMIT,
         }); return;
       }
-      if (request.method === "GET" && url.pathname === "/api/index-status") {
-        json(response, 200, { ...await readWorkbenchIndexStatus(options.databasePath, options.createIndexStore), indexing,
+      if (request.method === "GET" && url.pathname === "/api/index-progress") {
+        json(response, 200, {
+          indexing,
           autoupdate: await readAutoupdateStatus(options.databasePath),
-          autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options) }); return;
+        });
+        return;
+      }
+      if (request.method === "GET" && url.pathname === "/api/index-status") {
+        const index = await readWorkbenchIndexStatus(options.databasePath, options.createIndexStore);
+        const autoupdate = await readAutoupdateStatus(options.databasePath);
+        const autoupdateStartup = readAutoupdateStartupStatus(options.databasePath, options);
+        json(response, 200, { ...index, indexing, autoupdate, autoupdateStartup });
+        return;
       }
       if (request.method === "GET" && url.pathname === "/api/exclusions") {
         const requestedInput = url.searchParams.get("root");

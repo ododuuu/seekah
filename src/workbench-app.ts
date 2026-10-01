@@ -947,6 +947,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     indexNotice: "",
     indexNoticeKind: "",
     statusRefreshBusy: false,
+    statusProgressBusy: false,
     statusRevision: 0,
     supportedExtensions: [],
     addRootDraft: "",
@@ -1817,7 +1818,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         state.searchKind = "warn";
         renderDocuments();
         await new Promise(resolve => setTimeout(resolve, 500));
-        const status = await api("/api/index-status");
+        const status = await api("/api/index-progress");
         if (["failed", "stopped"].includes(status.indexing?.state)) throw new Error(status.indexing.message);
         data = await api("/api/search", { method: "POST", body: searchPayload(page) });
       }
@@ -2496,6 +2497,39 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
     renderAutoupdateSummary();
   }
+  async function refreshIndexProgress() {
+    if (state.statusProgressBusy) return;
+    state.statusProgressBusy = true;
+    const revision = state.statusRevision;
+    try {
+      const data = await api("/api/index-progress");
+      if (revision !== state.statusRevision) return;
+      if (!data || !data.indexing || typeof data.indexing.state !== "string"
+        || !data.autoupdate || typeof data.autoupdate.enabled !== "boolean") {
+        throw new Error("索引進度回應格式無效。");
+      }
+      state.indexStatus = {
+        ...(state.indexStatus || {}),
+        indexing: data.indexing,
+        autoupdate: data.autoupdate,
+      };
+      state.workbenchOpenStatusStale = state.indexStatus.autoupdate.available === false;
+      syncAutoupdateControls();
+      renderSidebar();
+      renderRoots();
+      renderTrash();
+      if (!state.indexNotice && data.indexing.state === "failed") setNotice(data.indexing.message, "error");
+    } catch {
+      if (revision !== state.statusRevision) return;
+      if (!isIndexing()) {
+        state.workbenchOpenStatusStale = true;
+        renderSidebar();
+        renderAutoupdateSummary();
+      }
+    } finally {
+      state.statusProgressBusy = false;
+    }
+  }
   async function refreshStatus() {
     if (state.statusRefreshBusy) return;
     state.statusRefreshBusy = true;
@@ -2574,7 +2608,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderRoots(); renderTrash(); renderSidebar();
       while (state.indexStatus && state.indexStatus.indexing && ["running", "stopping"].includes(state.indexStatus.indexing.state)) {
         await new Promise(resolve => setTimeout(resolve, 500));
-        await refreshStatus();
+        await refreshIndexProgress();
       }
       await refreshStatus();
       const success = state.indexStatus && state.indexStatus.indexing && state.indexStatus.indexing.state === "complete";
@@ -3228,7 +3262,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     await refreshStatus();
   }
   buildApp();
-  setInterval(() => { if (isIndexing()) void refreshStatus(); }, 750);
+  setInterval(() => { if (isIndexing()) void refreshIndexProgress(); }, 750);
   void initialize();
 })();
 </script>

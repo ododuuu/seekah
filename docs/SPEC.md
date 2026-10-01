@@ -2707,3 +2707,34 @@ docsearch doctor
 - `test/m78.test.ts` 必須靜態檢查列表／表格共用或等價的多段落 DOM、`passages.length > 1` 邊界、`omittedTerms` 提示、安全節點、高亮、清單語意、可選取／不可選取 CSS，以及既有複製控制未被移除；以反向變體證明移除關鍵邊界或標籤契約時測試會失敗。
 - `scripts/ui-smoke.mjs` 必須只用隔離合成資料，在 1180×800 與 1440×900 以 Chrome CDP 實際驗證 `all-terms` 的不同位置多段落、單一 passage、phrase、列表／表格、snippet Selection API 原文相等、複製按鈕、模式切換、分頁與上下文抽屜；並保存兩種視窗大小截圖供人工檢視。
 - 不讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份；不新增文件內容 endpoint、外部服務、OCR、embedding、LAN 暴露、格式支援、版本變更或 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`。
+
+## 85. 工作台索引狀態快取與輕量進度輪詢
+
+依 D117。本節只改善索引狀態讀取的重複成本與索引進行中的工作台輪詢；完整狀態欄位、MCP `index_status` 物件形狀、持久化同步報告與本機資料邊界不變。
+
+### 85.1 完整狀態與快取
+
+- `GET /api/index-status` 必須維持既有成功、缺少索引與不可用錯誤語意，以及既有 `roots`、`counts`、`format`、`exclusions`、垃圾桶、工作台設定、`indexing`、`autoupdate` 與登入啟動欄位。`errors`／`notices` 必須繼續遵守 §77 的前 100 筆、總數與截斷旗標；不得因快取回傳完整持久化清單。
+- MCP `index_status` 必須繼續回傳同一個 structured object 與 JSON 文字內容；只能改變計算與重用方式，不得新增、刪除或改名欄位。工作台與 MCP 可共用狀態快取，但不得共用可變的回應物件。
+- 狀態讀取可使用程序內、有界的 per-database cache 重用 `indexStatus()` 的根目錄預覽、計數、格式摘要與排除政策。快取值必須在交給呼叫者前複製，呼叫者修改回應不得污染下一次讀取。
+- 快取命中條件至少包含 SQLite `PRAGMA data_version`、資料庫／WAL 檔案指紋、已登錄排除作用域所列 `.localdocsearchignore` 的存在／`mtime`／大小指紋，以及目前預設排除規則版本。資料庫／WAL 指紋補足工作台每次以新唯讀連線開庫時 `data_version` 無法跨連線比較的情況；SQLite 外部提交、排除檔案建立／刪除／修改或規則版本改變時不得沿用舊值。
+- 寫入端在同步報告完成或背景校正摘要提交後、設定／根目錄／垃圾桶／根目錄歸屬變更提交後必須使對應資料庫快取失效。失效只清除衍生狀態，不刪除完整 `LastSyncReport`、文件、來源檔案或 `.localdocsearchignore`。
+- 排除政策的快取不得讀取或保存文件正文；只可保存規則、作用域、ignore file 的有界 metadata 與 §77 已允許的摘要。ignore file 內容變更時重新讀取規則，解析失敗仍回傳既有 `IGNORE_CONFIGURATION_ERROR`。
+- 快取是效能最佳化，不是新的持久化真相。程序重啟、cache miss 或任一失效訊號都必須重新由唯讀 `IndexStore` 計算；不得以固定逾時掩蓋未知的資料庫變更。
+
+### 85.2 輕量進度端點
+
+- 新增 token／同源保護的 `GET /api/index-progress`，成功回應只包含：
+  - `indexing`：目前工作台索引工作的完整既有狀態物件；
+  - `autoupdate`：既有 `readAutoupdateStatus()` 的背景更新摘要，包含 `enabled`、`available`、`message`，背景程序存在時可包含既有 bounded `live` 摘要。
+- `/api/index-progress` 不回傳根目錄、錯誤／通知預覽、`counts`、`format`、`exclusions`、垃圾桶或工作台設定，不為了進度輪詢開啟 SQLite。背景控制通道無回應時沿用既有可理解的 `autoupdate` unavailable 語意。
+- 工作台首次載入、手動重新整理、設定／根目錄／垃圾桶操作完成與索引完成後仍使用完整 `refreshStatus()`；索引進行中的週期輪詢、索引等待迴圈及只需要索引狀態的升級等待改用 `/api/index-progress`，取得進度後只合併 `indexing`／`autoupdate` 並重新繪製受影響區域。
+- MCP 不使用此端點，也不改 `index_status` 的欄位或輪詢語意。
+
+### 85.3 成本、相容與驗收
+
+- 量測目標是隔離合成索引（約 35,000 筆同步錯誤、約 12 MB `LastSyncReport`）的暖快取 `GET /api/index-status` 端到端時間約 300 ms 以內；本次改動前冷讀 507.3～544.7 ms、改動後冷讀 556.2 ms，視為冷讀沒有改善，收益在暖讀的重複狀態查詢與工作台輪詢，不得把暖 cache 數據冒充冷讀取。冷 cache 的資料庫讀取成本仍須在報告中分段列出。
+  - 在隔離合成根目錄以獨立背景 daemon 每 500 ms 改寫一份已索引文字檔，20 次完整 `/api/index-status` 讀取期間觀察到 `eventCount` 2→44、`localUpdateCount` 0→19；cache 為 0 hit／20 miss。daemon 每次局部寫入改變資料庫／WAL 指紋，所以完整狀態 cache 在持續寫入期間幾乎每次失效；此情境的主要收益是 `/api/index-progress` 不開 SQLite、不重做完整狀態計算。
+- `test/m81.test.ts` 必須覆蓋：冷讀取與快取命中回應深度等價、MCP 形狀不變、同步完成／背景摘要／設定／根目錄變更失效、ignore file 存在／修改／刪除失效、`/api/index-progress` 只回傳兩個頂層欄位、錯誤與停止狀態邊界，以及反向移除失效或欄位合併時測試會失敗。
+- 必須以只在本機建立的暫存合成資料測量；不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份，不得啟動、停止或干擾使用者 daemon，不新增文件內容 endpoint、OCR、embedding、外部服務、LAN 暴露、索引格式或 package 版本。
+- `scripts/ui-smoke.mjs` 與完整 `npm test` 必須在交付前執行；本機合成／win32 證據不得宣稱公司 Windows 人工驗收。

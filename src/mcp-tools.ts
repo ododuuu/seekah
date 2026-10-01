@@ -5,6 +5,7 @@ import type { IndexStore } from "./store.js";
 import { explainPathSync, readExclusionPolicies } from "./exclusion-visibility.js";
 import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 import { previewStatusList } from "./status-preview.js";
+import { cachedIndexStatus } from "./index-status-cache.js";
 
 
 export class McpToolError extends Error {
@@ -135,53 +136,55 @@ export async function prepareContextTool(store: IndexStore, input: PrepareContex
 }
 
 export function indexStatus(store: IndexStore) {
-  const roots = store.roots().map(root => {
-    const report = store.getLastSyncReport(root);
-    const errors = previewStatusList(report.errors);
-    const notices = previewStatusList(report.notices);
+  return cachedIndexStatus(store, () => {
+    const roots = store.roots().map(root => {
+      const report = store.getLastSyncReport(root);
+      const errors = previewStatusList(report.errors);
+      const notices = previewStatusList(report.notices);
+      return {
+        path: root,
+        documentCount: store.documentCountForRoot(root),
+        lastAttemptedSync: report.attemptedAt,
+        lastSuccessfulSync: report.successfulAt,
+        lastSyncComplete: report.complete,
+        errors: errors.items,
+        errorsTotal: errors.total,
+        errorsTruncated: errors.truncated,
+        notices: notices.items,
+        noticesTotal: notices.total,
+        noticesTruncated: notices.truncated,
+        summary: report.summary,
+        diagnostics: Array.isArray(report.diagnostics) ? report.diagnostics.length : 0,
+      };
+    });
+    const format = store.formatStatus();
+    const exclusions = readExclusionPolicies(store).map(policy => ({
+      ...policy,
+      summary: formatExclusionPolicySummary(policy),
+    }));
     return {
-      path: root,
-      documentCount: store.documentCountForRoot(root),
-      lastAttemptedSync: report.attemptedAt,
-      lastSuccessfulSync: report.successfulAt,
-      lastSyncComplete: report.complete,
-      errors: errors.items,
-      errorsTotal: errors.total,
-      errorsTruncated: errors.truncated,
-      notices: notices.items,
-      noticesTotal: notices.total,
-      noticesTruncated: notices.truncated,
-      summary: report.summary,
-      diagnostics: Array.isArray(report.diagnostics) ? report.diagnostics.length : 0,
+      databasePath: store.databasePath,
+      readOnly: true,
+      counts: store.counts(),
+      roots,
+      exclusions,
+      format: {
+        contentStorageVersion: format.contentStorageVersion,
+        payloadBloomVersion: format.payloadBloomVersion,
+        ngramIndexVersion: format.ngramIndexVersion,
+        ngramCompletedDocuments: format.ngramCompletedDocuments,
+        ngramTablesReady: format.ngramTablesReady,
+        blockIndexVersion: format.blockIndexVersion,
+        blockIndexCompletedDocuments: format.blockIndexCompletedDocuments,
+        chunkStoreVersion: format.chunkStoreVersion,
+        chunkStoreCompletedDocuments: format.chunkStoreCompletedDocuments,
+        legacySearchStructures: format.legacySearchStructures,
+        needsUpgrade: format.needsUpgrade,
+        completedDocuments: format.completedDocuments,
+        totalDocuments: format.totalDocuments,
+      },
     };
-  });
-  const format = store.formatStatus();
-  const exclusions = readExclusionPolicies(store).map(policy => ({
-    ...policy,
-    summary: formatExclusionPolicySummary(policy),
-  }));
-  return {
-    databasePath: store.databasePath,
-    readOnly: true,
-    counts: store.counts(),
-    roots,
-    exclusions,
-    format: {
-      contentStorageVersion: format.contentStorageVersion,
-      payloadBloomVersion: format.payloadBloomVersion,
-      ngramIndexVersion: format.ngramIndexVersion,
-      ngramCompletedDocuments: format.ngramCompletedDocuments,
-      ngramTablesReady: format.ngramTablesReady,
-      blockIndexVersion: format.blockIndexVersion,
-      blockIndexCompletedDocuments: format.blockIndexCompletedDocuments,
-      chunkStoreVersion: format.chunkStoreVersion,
-      chunkStoreCompletedDocuments: format.chunkStoreCompletedDocuments,
-      legacySearchStructures: format.legacySearchStructures,
-      needsUpgrade: format.needsUpgrade,
-      completedDocuments: format.completedDocuments,
-      totalDocuments: format.totalDocuments,
-    },
-  };
+  }, value => value.exclusions.flatMap(policy => policy.ignoreFiles.map(file => file.path)));
 }
 
 

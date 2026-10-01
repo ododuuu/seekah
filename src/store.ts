@@ -19,6 +19,7 @@ export { indexArtifactPaths, isIndexArtifact };
 import { purgeWorkStateRoots } from "./live-queue.js";
 import { resolveStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
 import { resolveWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
+import { invalidateIndexStatusCache } from "./index-status-cache.js";
 
 
 function bestEffortPurgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): void {
@@ -530,6 +531,9 @@ export class IndexStore {
 
   private blockMetaSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private cachedWritesSchema = -1;
+  private invalidateStatusCache(): void {
+    invalidateIndexStatusCache(this.databasePath);
+  }
 
   constructor(databasePath = defaultDatabasePath(), options: IndexStoreOptions = {}) {
     this.databasePath = databasePath;
@@ -964,6 +968,7 @@ export class IndexStore {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('ui_delete_confirmation', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(enabled ? "true" : "false");
+    this.invalidateStatusCache();
   }
 
   /** Workbench total count mode (SPEC §52.3); fast unless explicitly set to exact. */
@@ -974,6 +979,7 @@ export class IndexStore {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('search_total_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(mode);
+    this.invalidateStatusCache();
   }
 
   /** Workbench background autoupdate settings; defaults match the CLI defaults. */
@@ -992,6 +998,7 @@ export class IndexStore {
       .run(String(settings.debounceMs));
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('autoupdate_reconcile_ms', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(String(settings.reconcileMs));
+    this.invalidateStatusCache();
   }
 
   startupCatchupMode(): StartupCatchupMode {
@@ -1002,6 +1009,7 @@ export class IndexStore {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('startup_catchup_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(mode);
+    this.invalidateStatusCache();
   }
 
   workbenchOpenMode(): WorkbenchOpenMode {
@@ -1012,6 +1020,7 @@ export class IndexStore {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('workbench_open_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(mode);
+    this.invalidateStatusCache();
   }
 
 
@@ -1042,6 +1051,7 @@ export class IndexStore {
           if (next) this.setRoot(next);
         }
         this.db.exec("COMMIT");
+        this.invalidateStatusCache();
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
       this.bestEffortPurgeRemovedWorkStateRoots(result.map(item => item.path));
       return result;
@@ -1065,6 +1075,7 @@ export class IndexStore {
         }
       } finally { release(); }
     }
+    if (removed > 0) this.invalidateStatusCache();
     this.bestEffortPurgeRemovedWorkStateRoots(removedRoots);
     return removed;
   }
@@ -1075,7 +1086,10 @@ export class IndexStore {
     bestEffortPurgeWorkStateRoots(this.databasePath, removedRoots);
   }
 
-  registerRoot(root: string): void { this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(root); }
+  registerRoot(root: string): void {
+    const changes = this.db.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)").run(root);
+    if (Number(changes.changes) > 0) this.invalidateStatusCache();
+  }
 
   documentCountForRoot(root: string): number {
     return Number((this.db.prepare("SELECT count(*) AS count FROM document_roots WHERE root_path = ?").get(root) as { count: number }).count);
@@ -1170,6 +1184,7 @@ export class IndexStore {
       } satisfies LastSyncReport), parent);
       options.beforeCommit?.();
       this.db.exec("COMMIT");
+      this.invalidateStatusCache();
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.bestEffortPurgeRemovedWorkStateRoots(children);
     return { transferred };
@@ -1183,6 +1198,7 @@ export class IndexStore {
     const release = acquireWriteLock(this.databasePath);
     try {
       const removed = this.removeRootLocked(root);
+      this.invalidateStatusCache();
       this.bestEffortPurgeRemovedWorkStateRoots([root]);
       return removed;
     } finally { release(); }
@@ -1201,6 +1217,7 @@ export class IndexStore {
         if (next) this.setRoot(next);
       }
       this.db.exec("COMMIT");
+      this.invalidateStatusCache();
       return Number(result.changes);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
@@ -1214,6 +1231,7 @@ export class IndexStore {
 
   setRoot(root: string): void {
     this.db.prepare("INSERT INTO metadata (key, value) VALUES ('root', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(root);
+    this.invalidateStatusCache();
   }
 
   getDocumentById(id: number): StoredDocumentRow | undefined {
@@ -2840,6 +2858,7 @@ export class IndexStore {
       if (rootChanged) this.db.prepare("DELETE FROM metadata WHERE key IN ('last_successful_sync', 'last_sync')").run();
       if (complete) set.run("last_successful_sync", attemptedAt);
       this.db.exec("COMMIT");
+      this.invalidateStatusCache();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -2878,6 +2897,7 @@ export class IndexStore {
       this.db.prepare("UPDATE roots SET report = ? WHERE path = ?").run(JSON.stringify(report), root);
       set.run("last_sync_summary", JSON.stringify(summary));
       this.db.exec("COMMIT");
+      this.invalidateStatusCache();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
