@@ -24,6 +24,10 @@
 - 驗證：
   - `test/m77.test.ts` 覆蓋 metadata round-trip、舊索引 default、ask／auto／off、四動作、明確事件、C:\ 警告文案、POST 失敗恢復與 stale-response；反向移除 guard／action／restore 時測試失敗。
   - `scripts/ui-smoke.mjs` 以隔離索引在 1440×900、1180×800 進行 ask／四動作／auto／off／執行中／設定恢復與瀏覽器錯誤檢查。
+- 補充：另新增索引 metadata `workbench_open_mode`，有效值為 `ask`、`auto`、`off`；新索引與舊索引都預設 `ask`。它只決定工作台開啟時發現背景更新未執行的處理，不取代 `startup_catchup_mode` 對 daemon 啟動後 downtime gap 的策略。
+- 工作台 `ask` 只顯示不遮擋提醒列，不自行啟動程序；`auto` 才能透過既有開啟流程啟動 daemon，且該次明確傳入 `--startup-catchup auto`，避免保存的 `startupCatchupMode=ask` 再次詢問；`off` 不提醒也不啟動。
+- 工作台載入必須同時確認索引存在、至少一個已登錄根目錄、索引不在進行中，且背景 daemon／前景 `watch` 都未執行；daemon 已執行時只顯示原有 startup catch-up pending 提醒，不重複顯示工作台開啟提醒。
+- 工作台開啟提醒的四動作分離為「開啟背景更新並補上遺漏」（啟動並補捉）、「只做一次完整校正」（既有 `/api/index`、不啟動 daemon）、「稍後再說」（只隱藏本次工作階段）及「不再提醒」（保存 `off`，說明可在設定恢復）。處理中、失敗恢復、stale response 與 aria 契約沿用既有設定／startup catch-up。
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

@@ -12,6 +12,7 @@ import { search } from "../src/search.js";
 import { IndexStore } from "../src/store.js";
 import { sync } from "../src/sync.js";
 import { workbenchHtml } from "../src/workbench-app.js";
+import { createWorkbench } from "../src/workbench.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -30,6 +31,8 @@ async function waitUntil(check: () => boolean, timeoutMs = 10_000): Promise<void
 const workbenchSource = readFileSync(path.resolve("src/workbench-app.ts"), "utf8");
 const liveSource = readFileSync(path.resolve("src/live-update.ts"), "utf8");
 const smokeSource = readFileSync(path.resolve("scripts/ui-smoke.mjs"), "utf8");
+const workbenchServerSource = readFileSync(path.resolve("src/workbench.ts"), "utf8");
+const autoupdateSource = readFileSync(path.resolve("src/autoupdate.ts"), "utf8");
 
 function section(source: string, start: string, end: string): string {
   const startAt = source.indexOf(start);
@@ -58,9 +61,43 @@ function assertStartupCatchupContract(html: string): void {
   assert.doesNotMatch(html, /innerHTML|outerHTML|insertAdjacentHTML/u);
 }
 
+function assertWorkbenchOpenContract(html: string): void {
+  for (const id of [
+    "workbench-open-banner", "workbench-open-start", "workbench-open-index", "workbench-open-later",
+    "workbench-open-disable", "settings-workbench-open-mode", "workbench-open-status", "workbench-open-warning",
+  ]) assert.match(html, new RegExp(id, "u"), `缺少 ${id}`);
+  for (const label of ["開啟背景更新並補上遺漏", "只做一次完整校正", "稍後再說", "不再提醒"]) {
+    assert.match(html, new RegExp(label, "u"));
+  }
+  assert.match(html, /\/api\/autoupdate\/workbench-open/u);
+  assert.match(html, /workbenchOpenMode/u);
+  assert.match(html, /上次成功同步/u);
+  assert.match(html, /關閉期間新增或修改的檔案可能還沒進入索引/u);
+  assert.match(html, /state\.workbenchOpenMode = previous/u);
+  assert.match(html, /workbenchOpenActionBusy/u);
+  assert.match(html, /workbenchOpenStatusStale/u);
+  assert.match(html, /狀態過期/u);
+}
+
+function assertWorkbenchOpenEvaluationContract(html: string): void {
+  const evaluation = section(html, "async function evaluateWorkbenchOpenMode()", "async function runIndex(");
+  assert.match(evaluation, /if \(mode === "auto"\)/u);
+  assert.match(evaluation, /performWorkbenchOpenAction\("start", true\)/u);
+  assert.equal((evaluation.match(/performWorkbenchOpenAction\("start", true\)/gu) || []).length, 1);
+  assert.doesNotMatch(evaluation, /mode === "ask"[\s\S]*performWorkbenchOpenAction\("start", true\)/u);
+  assert.doesNotMatch(evaluation, /mode === "off"[\s\S]*performWorkbenchOpenAction\("start", true\)/u);
+  const action = section(html, "async function performWorkbenchOpenAction(action", "function deferWorkbenchOpen");
+  assert.match(action, /automatic && state\.workbenchOpenMode !== "auto"/u);
+  assert.match(workbenchServerSource, /body\.automatic === true/u);
+  assert.match(workbenchServerSource, /mode !== "auto"/u);
+  assert.match(autoupdateSource, /startupCatchupMode: "auto"/u);
+}
+
 test("M77 workbench 提供 ask／auto／off、四個鍵盤動作與失敗回復契約", () => {
   const html = workbenchHtml("m77-contract");
   assertStartupCatchupContract(html);
+  assertWorkbenchOpenContract(html);
+  assertWorkbenchOpenEvaluationContract(html);
   const refresh = section(html, "async function refreshStatus()", "async function runIndex(");
   assert.doesNotMatch(refresh, /performStartupCatchupAction\("start"\)/u, "狀態刷新不可偷偷開始補捉。" );
   const saveMode = section(html, "async function saveStartupCatchupMode(mode)", "async function performStartupCatchupAction(action)");
@@ -71,6 +108,7 @@ test("M77 workbench 提供 ask／auto／off、四個鍵盤動作與失敗回復�
   assert.match(warning, /root\.path/u);
   const preserve = section(workbenchSource, "function preserveSettingResponses", "function validStartupCatchupMode");
   assert.match(preserve, /startupCatchupMode/u);
+  assert.match(preserve, /workbenchOpenMode/u);
 });
 
 test("M77 live queue 只略過 downtime gap，保留明確路徑事件", async t => {
@@ -108,6 +146,67 @@ test("M77 startupCatchupMode 舊 metadata 預設 auto 並可持久化 ask／off"
   const off = new IndexStore(databasePath);
   assert.equal(off.startupCatchupMode(), "off");
   off.close();
+});
+
+test("M77 workbenchOpenMode 新舊索引預設 ask 並可往返三態", async t => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m77-open-mode-"));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const databasePath = path.join(temp, "index.db");
+  const initial = new IndexStore(databasePath);
+  assert.equal(initial.workbenchOpenMode(), "ask");
+  initial.setWorkbenchOpenMode("auto");
+  initial.close();
+  const auto = new IndexStore(databasePath);
+  assert.equal(auto.workbenchOpenMode(), "auto");
+  auto.setWorkbenchOpenMode("off");
+  auto.close();
+  const off = new IndexStore(databasePath);
+  assert.equal(off.workbenchOpenMode(), "off");
+  off.setWorkbenchOpenMode("ask");
+  off.close();
+  const ask = new IndexStore(databasePath);
+  assert.equal(ask.workbenchOpenMode(), "ask");
+  ask.close();
+});
+
+test("M77 workbench API 回傳並保存 workbenchOpenMode，ask／off 拒絕自動啟動", async t => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "lds-m77-open-api-"));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const databasePath = path.join(temp, "index.db");
+  const root = path.join(temp, "資料根目錄");
+  await mkdir(root, { recursive: true });
+  await writeFile(path.join(root, "seed.txt"), "M77_OPEN_API\n");
+  const store = new IndexStore(databasePath);
+  try { await sync(root, store); }
+  finally { store.close(); }
+  const handle = await createWorkbench({
+    databasePath, token: "m77-open-api", secret: Buffer.alloc(32, 77), environment: {}, tempParent: temp,
+    startupOptions: { platform: "linux" },
+  });
+  t.after(() => handle.close());
+  const origin = handle.url.split("/#")[0]!;
+  const headers = { "X-LocalDocSearch-Token": handle.token, origin, "content-type": "application/json" };
+  const status = await fetch(origin + "/api/index-status", { headers });
+  assert.equal(status.status, 200);
+  assert.equal((await status.json() as { workbenchOpenMode: string }).workbenchOpenMode, "ask");
+  for (const mode of ["ask", "auto", "off"] as const) {
+    const saved = await fetch(origin + "/api/settings", {
+      method: "POST", headers, body: JSON.stringify({ workbenchOpenMode: mode }),
+    });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json() as { workbenchOpenMode: string }).workbenchOpenMode, mode);
+  }
+  for (const mode of ["ask", "off"] as const) {
+    const saved = await fetch(origin + "/api/settings", {
+      method: "POST", headers, body: JSON.stringify({ workbenchOpenMode: mode }),
+    });
+    assert.equal(saved.status, 200);
+    const blocked = await fetch(origin + "/api/autoupdate/workbench-open", {
+      method: "POST", headers, body: JSON.stringify({ automatic: true }),
+    });
+    assert.equal(blocked.status, 400);
+    assert.match((await blocked.json() as { error: string }).error, /明確保存/u);
+  }
 });
 
 test("M77 daemon ask／auto／off 狀態與 off 明確事件行為", async t => {
@@ -182,6 +281,12 @@ test("M77 反向移除四動作、策略選擇或 catchup API 時契約會失敗
   assert.throws(() => assertStartupCatchupContract(withoutApi));
   const withoutRestore = html.replace("state.startupCatchupMode = previous;", "state.startupCatchupMode = state.startupCatchupMode;");
   assert.throws(() => assertStartupCatchupContract(withoutRestore));
+  const withoutOpenAction = html.replaceAll("workbench-open-start", "removed-open-action");
+  assert.throws(() => assertWorkbenchOpenContract(withoutOpenAction));
+  const withoutOpenApi = html.replaceAll("/api/autoupdate/workbench-open", "/api/autoupdate/removed-open");
+  assert.throws(() => assertWorkbenchOpenContract(withoutOpenApi));
+  const withoutOpenRestore = html.replace("state.workbenchOpenMode = previous;", "state.workbenchOpenMode = state.workbenchOpenMode;");
+  assert.throws(() => assertWorkbenchOpenContract(withoutOpenRestore));
 });
 
 test("M77 live engine、smoke 與文件契約保留三態行為入口", () => {
@@ -192,6 +297,8 @@ test("M77 live engine、smoke 與文件契約保留三態行為入口", () => {
   assert.match(liveSource, /queue\.skipDowntimeGap\(state\.root\)/u);
   assert.match(liveSource, /queue\.listPaths\(state\.root\)/u);
   assert.match(smokeSource, /startupCatchup|startup-catchup/u);
+  assert.match(smokeSource, /workbenchOpen|workbench-open/u);
   assert.match(smokeSource, /立即補捉|稍後提醒|略過本次|關閉開機補捉/u);
+  assert.match(smokeSource, /開啟背景更新並補上遺漏|只做一次完整校正|稍後再說|不再提醒/u);
   assert.match(smokeSource, /delayNextIndexStatusMs = 2500/u);
 });

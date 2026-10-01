@@ -830,6 +830,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   background: #fff7df;
   color: var(--ink);
 }
+.workbench-open-banner { border-color: #4f8eb5; border-left-color: #4f8eb5; background: #eaf5fb; }
+.workbench-open-banner .startup-catchup-warning { color: #2e5c78; }
 .startup-catchup-banner h2 { margin: 0; font-size: 16px; }
 .startup-catchup-banner p { margin: 0; }
 .startup-catchup-warning { color: #815b00; font-size: 12px; font-weight: 650; }
@@ -966,6 +968,15 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     startupCatchupActionMessage: "",
     startupCatchupDeferred: false,
     startupCatchupDeferredInstanceId: "",
+    workbenchOpenMode: "ask",
+    workbenchOpenSaving: false,
+    workbenchOpenPendingMode: "ask",
+    workbenchOpenActionBusy: false,
+    workbenchOpenActionFailed: false,
+    workbenchOpenActionMessage: "",
+    workbenchOpenDismissed: false,
+    workbenchOpenEvaluationDone: false,
+    workbenchOpenStatusStale: false,
     autoupdateStartupSupported: false,
     autoupdateStartupEnabled: false,
     autoupdateStartupSaving: false,
@@ -1126,12 +1137,48 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       ...(current.deleteConfirmation !== undefined ? { deleteConfirmation: current.deleteConfirmation } : {}),
       ...(current.totalMode !== undefined ? { totalMode: current.totalMode } : {}),
       ...(current.startupCatchupMode !== undefined ? { startupCatchupMode: current.startupCatchupMode } : {}),
+      ...(current.workbenchOpenMode !== undefined ? { workbenchOpenMode: current.workbenchOpenMode } : {}),
       ...(current.autoupdate ? { autoupdate: current.autoupdate } : {}),
       ...(current.autoupdateStartup ? { autoupdateStartup: current.autoupdateStartup } : {}),
     };
   }
   function validStartupCatchupMode(value) {
     return value === "ask" || value === "auto" || value === "off";
+  }
+  function validWorkbenchOpenMode(value) {
+    return value === "ask" || value === "auto" || value === "off";
+  }
+  function workbenchOpenModeLabel(mode) {
+    return mode === "ask" ? "開啟時提醒" : mode === "auto" ? "開啟時自動補捉" : "不主動處理";
+  }
+  function workbenchOpenLive() {
+    const autoupdate = state.indexStatus && state.indexStatus.autoupdate;
+    return autoupdate && autoupdate.enabled === true && autoupdate.live ? autoupdate.live : null;
+  }
+  function workbenchOpenIsRunning() {
+    const live = workbenchOpenLive();
+    return Boolean(live && (live.mode === "background" || live.mode === "foreground"));
+  }
+  function workbenchOpenHasVolumeRoot() {
+    const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
+    return roots.some(root => {
+      const value = typeof root === "string" ? root : root && typeof root.path === "string" ? root.path : "";
+      return /^[A-Za-z]:[\\\\/]*$/u.test(value);
+    });
+  }
+  function workbenchOpenLastSuccessfulSync() {
+    const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
+    const values = roots.map(root => root && typeof root.lastSuccessfulSync === "string" ? root.lastSuccessfulSync : "")
+      .filter(value => value);
+    const latest = values.sort().pop();
+    return latest ? autoupdateTimeText(latest) : "尚無成功同步記錄";
+  }
+  function workbenchOpenEligible() {
+    const status = state.indexStatus;
+    return Boolean(status && status.state === "available"
+      && (!status.autoupdate || status.autoupdate.available !== false)
+      && Array.isArray(status.roots) && status.roots.length > 0
+      && !isIndexing() && !workbenchOpenIsRunning());
   }
   function startupCatchupModeLabel(mode) {
     return mode === "ask" ? "詢問後補捉" : mode === "off" ? "不補捉" : "自動補捉";
@@ -1153,16 +1200,20 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   function applyAutoupdateResponse(data) {
     if (!data || !data.autoupdate || typeof data.autoupdate.enabled !== "boolean") return false;
+    state.workbenchOpenStatusStale = false;
     state.autoupdateEnabled = data.autoupdate.enabled;
     const responseMode = data.startupCatchupMode
       ?? (data.autoupdate.live && data.autoupdate.live.startupCatchup && data.autoupdate.live.startupCatchup.mode);
+    const responseWorkbenchMode = data.workbenchOpenMode;
     state.indexStatus = {
       ...(state.indexStatus || {}),
       autoupdate: data.autoupdate,
       ...(data.autoupdateSettings ? { autoupdateSettings: data.autoupdateSettings } : {}),
       ...(validStartupCatchupMode(responseMode) ? { startupCatchupMode: responseMode } : {}),
+      ...(validWorkbenchOpenMode(responseWorkbenchMode) ? { workbenchOpenMode: responseWorkbenchMode } : {}),
     };
     if (!state.startupCatchupSaving && validStartupCatchupMode(responseMode)) state.startupCatchupMode = responseMode;
+    if (!state.workbenchOpenSaving && validWorkbenchOpenMode(responseWorkbenchMode)) state.workbenchOpenMode = responseWorkbenchMode;
     syncSettingSwitch("settings-autoupdate", state.autoupdateEnabled, { busy: state.autoupdateSaving });
     renderAutoupdateSummary();
     return true;
@@ -2235,6 +2286,67 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   function autoupdateTimeText(value) {
     return value ? formatLocalDateTime(value) : "—";
   }
+  function renderWorkbenchOpenBanner() {
+    const banner = $("workbench-open-banner");
+    if (!banner) return;
+    const mode = validWorkbenchOpenMode(state.workbenchOpenMode) ? state.workbenchOpenMode : "ask";
+    const modeStatus = $("workbench-open-mode-status");
+    const selector = $("settings-workbench-open-mode");
+    const controlBusy = state.workbenchOpenSaving || state.workbenchOpenActionBusy;
+    if (modeStatus) modeStatus.textContent = controlBusy
+      ? "處理中…" : "目前策略：" + workbenchOpenModeLabel(mode);
+    if (selector) {
+      selector.disabled = controlBusy;
+      selector.setAttribute("aria-busy", String(controlBusy));
+      selector.value = state.workbenchOpenSaving ? state.workbenchOpenPendingMode : mode;
+    }
+    const stale = state.workbenchOpenStatusStale;
+    const staleContext = stale && state.indexStatus && state.indexStatus.state === "available"
+      && Array.isArray(state.indexStatus.roots) && state.indexStatus.roots.length > 0;
+    const eligible = !stale && workbenchOpenEligible();
+    const failed = state.workbenchOpenActionFailed;
+    const visible = state.workbenchOpenActionBusy
+      || failed && !workbenchOpenIsRunning()
+      || (!state.workbenchOpenDismissed && mode === "ask" && (staleContext || eligible));
+    banner.hidden = !visible;
+    if (!visible) return;
+    const title = $("workbench-open-title");
+    const message = $("workbench-open-message");
+    const warning = $("workbench-open-warning");
+    const status = $("workbench-open-status");
+    if (title) title.textContent = state.workbenchOpenActionBusy
+      ? "正在處理背景更新"
+      : failed ? "背景更新開啟失敗"
+        : stale ? "背景更新狀態暫時無法確認" : "背景更新目前沒有執行";
+    if (message) message.textContent = state.workbenchOpenActionBusy
+      ? "正在處理；請不要重複送出操作。"
+      : failed
+        ? "上一個操作未完成；索引與檔案不會因失敗而被標記為已處理。"
+        : stale
+          ? "目前無法確認背景更新是否正在執行；請重新整理工作台後再操作。"
+          : "背景更新目前沒有執行（上次成功同步：" + workbenchOpenLastSuccessfulSync()
+            + "）。關閉期間新增或修改的檔案可能還沒進入索引。";
+    if (warning) {
+      warning.hidden = stale || !workbenchOpenHasVolumeRoot();
+      warning.textContent = "偵測到 C:" + String.fromCharCode(92) + " 根目錄；補捉可能重新檢查大量檔案、耗用磁碟與 CPU，時間可能較長。";
+    }
+    if (status) {
+      status.textContent = state.workbenchOpenActionBusy
+        ? "處理中…"
+        : state.workbenchOpenActionMessage || (stale ? "狀態過期；四個動作目前停用。" : "請選擇處理方式。");
+      status.className = "status" + (failed || stale ? " error" : "");
+    }
+    const busy = state.workbenchOpenActionBusy;
+    const actionsDisabled = busy || stale || !eligible;
+    const start = $("workbench-open-start");
+    const index = $("workbench-open-index");
+    const later = $("workbench-open-later");
+    const disable = $("workbench-open-disable");
+    if (start) start.disabled = actionsDisabled;
+    if (index) index.disabled = actionsDisabled;
+    if (later) later.disabled = actionsDisabled;
+    if (disable) disable.disabled = actionsDisabled;
+  }
   function renderStartupCatchupBanner() {
     const banner = $("startup-catchup-banner");
     if (!banner) return;
@@ -2293,12 +2405,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     summary.hidden = true;
     if (status) { status.textContent = ""; status.hidden = true; }
     const autoupdate = state.indexStatus && state.indexStatus.autoupdate;
-    if (!autoupdate) { renderStartupCatchupBanner(); return; }
+    if (!autoupdate) { renderWorkbenchOpenBanner(); renderStartupCatchupBanner(); return; }
     if (!autoupdate.live) {
       if (status) {
         status.hidden = false;
         status.textContent = autoupdate.message || "背景自動更新未執行。";
       }
+      renderWorkbenchOpenBanner();
       renderStartupCatchupBanner();
       return;
     }
@@ -2326,6 +2439,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const catchup = live.startupCatchup;
     if (catchup) row("開機補捉", startupCatchupModeLabel(catchup.mode) + " · " + startupCatchupStateLabel(catchup.state)
       + (Array.isArray(catchup.roots) && catchup.roots.length ? " · 根目錄 " + catchup.roots.length : ""));
+    renderWorkbenchOpenBanner();
     renderStartupCatchupBanner();
   }
   function syncAutoupdateControls() {
@@ -2351,6 +2465,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       || liveSettings && liveSettings.startupCatchupMode
       || indexStatus.startupCatchupMode;
     if (!state.startupCatchupSaving && validStartupCatchupMode(responseMode)) state.startupCatchupMode = responseMode;
+    if (!state.workbenchOpenSaving && validWorkbenchOpenMode(indexStatus.workbenchOpenMode)) state.workbenchOpenMode = indexStatus.workbenchOpenMode;
     if (!state.autoupdateSaving) state.autoupdateEnabled = Boolean(indexStatus.autoupdate && indexStatus.autoupdate.enabled);
     syncSettingSwitch("settings-autoupdate", state.autoupdateEnabled, { busy: state.autoupdateSaving });
     syncSettingSwitch("settings-autoupdate-startup", state.autoupdateStartupEnabled, {
@@ -2373,6 +2488,12 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       selector.setAttribute("aria-busy", String(state.startupCatchupSaving));
       selector.value = state.startupCatchupSaving ? state.startupCatchupPendingMode : state.startupCatchupMode;
     }
+    const workbenchSelector = $("settings-workbench-open-mode");
+    if (workbenchSelector) {
+      workbenchSelector.disabled = state.workbenchOpenSaving || state.workbenchOpenActionBusy;
+      workbenchSelector.setAttribute("aria-busy", String(state.workbenchOpenSaving || state.workbenchOpenActionBusy));
+      workbenchSelector.value = state.workbenchOpenSaving ? state.workbenchOpenPendingMode : state.workbenchOpenMode;
+    }
     renderAutoupdateSummary();
   }
   async function refreshStatus() {
@@ -2383,6 +2504,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     try {
       const [indexStatus, exclusions] = await Promise.all([api("/api/index-status"), api("/api/exclusions")]);
       state.indexStatus = preserveSettingResponses(indexStatus, revision);
+      state.workbenchOpenStatusStale = state.indexStatus.autoupdate?.available === false;
       state.exclusions = exclusions;
       state.deleteConfirmation = state.indexStatus.deleteConfirmation !== false;
       syncSettingSwitch("settings-delete-confirmation", state.deleteConfirmation, { busy: state.deleteConfirmationSaving });
@@ -2398,6 +2520,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       if (state.route === "temporary") renderTemporary();
       if (!state.indexNotice && state.indexStatus.indexing && state.indexStatus.indexing.state === "failed") setNotice(state.indexStatus.indexing.message, "error");
       else if (!state.indexNotice) setStatus("index-status-message", "", "");
+      void evaluateWorkbenchOpenMode();
     } catch (error) {
       if (revision !== state.statusRevision) return;
       state.indexStatus = previous || { state: "unavailable", roots: [], trash: [], indexing: { state: "idle", message: "索引狀態暫時無法讀取。" } };
@@ -2406,8 +2529,33 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderScopeSummaries();
       renderRoots();
       renderTrash();
+      state.workbenchOpenStatusStale = true;
+      renderAutoupdateSummary();
     } finally {
       state.statusRefreshBusy = false;
+    }
+  }
+  async function evaluateWorkbenchOpenMode() {
+    if (state.workbenchOpenEvaluationDone || state.workbenchOpenActionBusy || state.workbenchOpenSaving) return;
+    const status = state.indexStatus;
+    if (!status || status.state !== "available" || !Array.isArray(status.roots) || !status.roots.length || isIndexing()) return;
+    if (status.autoupdate && status.autoupdate.available === false) {
+      state.workbenchOpenStatusStale = true;
+      renderWorkbenchOpenBanner();
+      return;
+    }
+    state.workbenchOpenStatusStale = false;
+    if (workbenchOpenIsRunning()) {
+      state.workbenchOpenEvaluationDone = true;
+      renderWorkbenchOpenBanner();
+      return;
+    }
+    const mode = validWorkbenchOpenMode(state.workbenchOpenMode) ? state.workbenchOpenMode : "ask";
+    state.workbenchOpenEvaluationDone = true;
+    if (mode === "auto") {
+      await performWorkbenchOpenAction("start", true);
+    } else {
+      renderWorkbenchOpenBanner();
     }
   }
   async function runIndex(root, scope) {
@@ -2622,6 +2770,87 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       syncAutoupdateControls();
     }
   }
+  async function saveWorkbenchOpenMode(mode) {
+    if (!validWorkbenchOpenMode(mode)) {
+      setStatus("settings-status", "工作台開啟提醒策略無效。", "error");
+      syncAutoupdateControls();
+      return false;
+    }
+    const previous = state.workbenchOpenMode;
+    const previousDismissed = state.workbenchOpenDismissed;
+    state.workbenchOpenPendingMode = mode;
+    state.workbenchOpenSaving = true;
+    state.workbenchOpenActionFailed = false;
+    state.workbenchOpenActionMessage = "";
+    state.statusRevision += 1;
+    syncAutoupdateControls();
+    try {
+      const data = await api("/api/settings", { method: "POST", body: { workbenchOpenMode: mode } });
+      if (!validWorkbenchOpenMode(data.workbenchOpenMode)) throw new Error("設定回應缺少工作台開啟提醒策略。");
+      if (!applyAutoupdateResponse(data)) throw new Error("設定回應缺少背景自動更新狀態。");
+      state.workbenchOpenMode = data.workbenchOpenMode;
+      state.indexStatus = { ...(state.indexStatus || {}), workbenchOpenMode: state.workbenchOpenMode };
+      state.workbenchOpenDismissed = state.workbenchOpenMode !== "ask";
+      setStatus("settings-status", "工作台開啟提醒策略已保存為「" + workbenchOpenModeLabel(state.workbenchOpenMode) + "」。", "ok");
+      return true;
+    } catch (error) {
+      state.workbenchOpenMode = previous;
+      state.workbenchOpenDismissed = previousDismissed;
+      state.workbenchOpenActionFailed = true;
+      state.workbenchOpenActionMessage = error.message || "工作台開啟提醒策略保存失敗。";
+      setStatus("settings-status", state.workbenchOpenActionMessage, "error");
+      return false;
+    } finally {
+      state.workbenchOpenSaving = false;
+      syncAutoupdateControls();
+    }
+  }
+  async function performWorkbenchOpenAction(action, automatic = false) {
+    if (state.workbenchOpenActionBusy || state.workbenchOpenSaving) return false;
+    if (automatic && state.workbenchOpenMode !== "auto") return false;
+    if (!workbenchOpenEligible()) return false;
+    state.workbenchOpenActionBusy = true;
+    state.workbenchOpenActionFailed = false;
+    state.workbenchOpenActionMessage = "";
+    state.statusRevision += 1;
+    renderWorkbenchOpenBanner();
+    try {
+      if (action === "start") {
+        const data = await api("/api/autoupdate/workbench-open", { method: "POST", body: { automatic } });
+        if (!applyAutoupdateResponse(data)) throw new Error("開啟背景更新回應缺少目前狀態。");
+        state.workbenchOpenDismissed = true;
+        setStatus("settings-status", automatic ? "已依工作台開啟策略啟動背景更新並補捉遺漏。" : "已開啟背景更新並補捉遺漏。", "ok");
+        showToast(automatic ? "背景更新已自動啟動，正在補捉關閉期間的變更。" : "背景更新已啟動，正在補捉關閉期間的變更。");
+        return true;
+      }
+      const success = await runIndex();
+      if (!success) throw new Error("完整校正尚未完成；請稍後重試。");
+      state.workbenchOpenDismissed = true;
+      setStatus("settings-status", "已只做一次完整校正；背景更新仍未啟動。", "ok");
+      showToast("完整校正已完成；背景更新仍未啟動。");
+      return true;
+    } catch (error) {
+      state.workbenchOpenActionFailed = true;
+      state.workbenchOpenActionMessage = error.message || "工作台開啟處理失敗。";
+      setStatus("settings-status", state.workbenchOpenActionMessage, "error");
+      return false;
+    } finally {
+      state.workbenchOpenActionBusy = false;
+      renderWorkbenchOpenBanner();
+    }
+  }
+  function deferWorkbenchOpen() {
+    if (state.workbenchOpenActionBusy || !workbenchOpenEligible()) return;
+    state.workbenchOpenDismissed = true;
+    state.workbenchOpenActionFailed = false;
+    state.workbenchOpenActionMessage = "";
+    renderWorkbenchOpenBanner();
+    showToast("已暫緩背景更新提醒；下次開啟工作台仍會提醒。");
+  }
+  async function disableWorkbenchOpen() {
+    if (state.workbenchOpenActionBusy || state.workbenchOpenSaving) return false;
+    return saveWorkbenchOpenMode("off");
+  }
   async function performStartupCatchupAction(action) {
     if (state.startupCatchupActionBusy) return false;
     state.startupCatchupActionBusy = true;
@@ -2784,6 +3013,27 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const footer = make("div", "sidebar-footer"); const footerStatus = make("strong", "", "讀取中…"); footerStatus.id = "sidebar-status"; footer.append(footerStatus, make("br"), make("span", "", "搜尋與臨時解析留在這台電腦。")); sidebar.append(footer); shell.append(sidebar);
 
     const main = make("main", "main"); main.id = "main"; main.tabIndex = -1;
+    const workbenchOpenBanner = make("section", "startup-catchup-banner workbench-open-banner", "");
+    workbenchOpenBanner.id = "workbench-open-banner";
+    workbenchOpenBanner.hidden = true;
+    workbenchOpenBanner.setAttribute("role", "region");
+    workbenchOpenBanner.setAttribute("aria-labelledby", "workbench-open-title");
+    const workbenchOpenTitle = make("h2", "", "背景更新目前沒有執行"); workbenchOpenTitle.id = "workbench-open-title";
+    const workbenchOpenMessage = make("p", "", "關閉期間新增或修改的檔案可能還沒進入索引。"); workbenchOpenMessage.id = "workbench-open-message";
+    const workbenchOpenWarning = make("p", "startup-catchup-warning", ""); workbenchOpenWarning.id = "workbench-open-warning"; workbenchOpenWarning.hidden = true;
+    const workbenchOpenStatus = make("div", "status startup-catchup-status", ""); workbenchOpenStatus.id = "workbench-open-status"; workbenchOpenStatus.setAttribute("role", "status"); workbenchOpenStatus.setAttribute("aria-live", "polite");
+    const workbenchOpenActions = make("div", "startup-catchup-actions", "");
+    const workbenchOpenStart = button("開啟背景更新並補上遺漏（推薦）", "primary", () => void performWorkbenchOpenAction("start"));
+    const workbenchOpenIndex = button("只做一次完整校正", "", () => void performWorkbenchOpenAction("index"));
+    const workbenchOpenLater = button("稍後再說", "", deferWorkbenchOpen);
+    const workbenchOpenDisable = button("不再提醒", "danger", () => void disableWorkbenchOpen());
+    workbenchOpenStart.id = "workbench-open-start";
+    workbenchOpenIndex.id = "workbench-open-index";
+    workbenchOpenLater.id = "workbench-open-later";
+    workbenchOpenDisable.id = "workbench-open-disable";
+    workbenchOpenActions.append(workbenchOpenStart, workbenchOpenIndex, workbenchOpenLater, workbenchOpenDisable);
+    workbenchOpenBanner.append(workbenchOpenTitle, workbenchOpenMessage, workbenchOpenWarning, workbenchOpenStatus, workbenchOpenActions);
+    main.append(workbenchOpenBanner);
     const startupCatchupBanner = make("section", "startup-catchup-banner", "");
     startupCatchupBanner.id = "startup-catchup-banner";
     startupCatchupBanner.hidden = true;
@@ -2864,6 +3114,23 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const autoupdateLabel = settingSwitch("settings-autoupdate", "settings-autoupdate-label", "背景自動更新", enabled => saveAutoupdate(enabled));
     const startupLabel = settingSwitch("settings-autoupdate-startup", "settings-autoupdate-startup-label", "登入 Windows 時自動啟動背景自動更新", enabled => saveAutoupdateStartup(enabled));
     const startupHelp = make("p", "settings-help", "僅 Windows 支援"); startupHelp.id = "settings-autoupdate-startup-help";
+    const workbenchOpenModeSection = make("section", "startup-catchup-mode-section", "");
+    const workbenchOpenModeRow = make("div", "startup-catchup-mode-row", "");
+    const workbenchOpenModeLabelNode = make("label", "", "");
+    workbenchOpenModeLabelNode.htmlFor = "settings-workbench-open-mode";
+    workbenchOpenModeLabelNode.append(make("strong", "", "工作台開啟提醒策略"), make("span", "startup-catchup-mode-help", "開啟工作台時，若背景更新沒在執行要怎麼處理。"));
+    const workbenchOpenModeSelect = document.createElement("select");
+    workbenchOpenModeSelect.id = "settings-workbench-open-mode";
+    workbenchOpenModeSelect.setAttribute("aria-label", "工作台開啟提醒策略");
+    workbenchOpenModeSelect.setAttribute("aria-describedby", "workbench-open-mode-status");
+    workbenchOpenModeSelect.append(new Option("開啟時提醒", "ask"), new Option("開啟時自動補捉", "auto"), new Option("不主動處理", "off"));
+    workbenchOpenModeSelect.addEventListener("change", () => void saveWorkbenchOpenMode(workbenchOpenModeSelect.value));
+    workbenchOpenModeRow.append(workbenchOpenModeLabelNode, workbenchOpenModeSelect);
+    const workbenchOpenModeStatus = make("p", "startup-catchup-mode-status", "目前策略：開啟時提醒");
+    workbenchOpenModeStatus.id = "workbench-open-mode-status";
+    workbenchOpenModeStatus.setAttribute("role", "status");
+    workbenchOpenModeStatus.setAttribute("aria-live", "polite");
+    workbenchOpenModeSection.append(workbenchOpenModeRow, workbenchOpenModeStatus);
     const startupCatchupModeSection = make("section", "startup-catchup-mode-section", "");
     const startupCatchupModeRow = make("div", "startup-catchup-mode-row", "");
     const startupCatchupModeLabel = make("label", "", "");
@@ -2887,7 +3154,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const autoupdateSummary = make("div", "autoupdate-summary", ""); autoupdateSummary.id = "settings-autoupdate-summary"; autoupdateSummary.hidden = true; autoupdateSettings.append(autoupdateSummary);
     const debounceRow = make("div", "settings-number-row", ""); const debounceLabel = make("label", "", ""); debounceLabel.htmlFor = "settings-autoupdate-debounce"; debounceLabel.append(make("strong", "", "變更等待"), make("small", "", "秒（0.2～60）")); const debounceField = document.createElement("input"); debounceField.type = "number"; debounceField.id = "settings-autoupdate-debounce"; debounceField.min = "0.2"; debounceField.max = "60"; debounceField.step = "0.1"; debounceField.addEventListener("change", () => void saveAutoupdateParameters()); debounceRow.append(debounceLabel, debounceField); autoupdateSettings.append(debounceRow);
     const reconcileRow = make("div", "settings-number-row", ""); const reconcileLabel = make("label", "", ""); reconcileLabel.htmlFor = "settings-autoupdate-reconcile"; reconcileLabel.append(make("strong", "", "完整校正間隔"), make("small", "", "小時（0.25～24）")); const reconcileField = document.createElement("input"); reconcileField.type = "number"; reconcileField.id = "settings-autoupdate-reconcile"; reconcileField.min = "0.25"; reconcileField.max = "24"; reconcileField.step = "0.25"; reconcileField.addEventListener("change", () => void saveAutoupdateParameters()); reconcileRow.append(reconcileLabel, reconcileField); autoupdateSettings.append(reconcileRow);
-    autoupdateSection.append(autoupdateLabel, startupLabel, startupHelp, startupCatchupModeSection, autoupdateSettings);
+    autoupdateSection.append(autoupdateLabel, startupLabel, startupHelp, workbenchOpenModeSection, startupCatchupModeSection, autoupdateSettings);
     const totalLabelEl = settingSwitch("settings-total-exact", "settings-total-exact-label", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）", enabled => saveTotalMode(enabled));
     const exclusionPolicySection = make("section", "settings-section", "");
     exclusionPolicySection.id = "settings-exclusion-policy";

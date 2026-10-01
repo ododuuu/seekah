@@ -2644,6 +2644,17 @@ docsearch doctor
 - `test/m77.test.ts` 必須覆蓋三態 metadata/API round-trip、舊索引預設 `auto`、daemon 的 ask／auto／off 行為、四個動作、明確事件在 `off` 仍處理、C:\ 成本提醒、失敗恢復與 stale-response 保護；反向移除策略 guard、控制動作或恢復邏輯時，對應契約至少一項失敗。
 - `scripts/ui-smoke.mjs` 必須使用隔離合成資料與 CDP，在 1440×900 及 1180×800 驗證 ask 提醒的四動作、auto／off、補捉執行中狀態、設定保存失敗恢復、API 與畫面一致及瀏覽器無錯誤。測試不得讀取或接觸使用者真實資料目錄與備份。
 - 驗證必須執行 `npm run build`、M77／相關自動測試及完整 `npm test`；本機 Chrome／win32 證據不得宣稱為公司 Windows 人工驗收。
+### 81.5 工作台開啟時背景更新未執行
+
+- 索引 metadata 另持久化 `workbenchOpenMode`，只接受 `ask`、`auto`、`off`；新索引與既有舊索引都預設 `ask`。它與 `startupCatchupMode` 必須在設定頁並列但用白話區分：前者是「開啟工作台時，若背景更新沒在執行」；後者是「背景更新啟動時，如何處理停止期間的變更」。
+- 工作台載入後，只有在索引存在、至少一個根目錄已登錄、索引沒有進行中，且背景 autoupdate 沒有執行時才評估此模式。背景 daemon 執行中或前景 `watch` 執行中都視為更新正在執行；若 daemon 正在執行且有 startup catch-up pending，優先只顯示 §81 的補捉提醒，不顯示本節提醒。
+- `ask` 只在頁面頂端顯示不遮擋的提醒列，內容必須包含「背景更新目前沒有執行」、上次成功同步時間，以及關閉期間新增或修改的檔案可能尚未進入索引。不得因載入、status refresh 或 `ask` 自動啟動任何程序。
+- 提醒列提供四個可鍵盤操作的動作：「開啟背景更新並補上遺漏」（推薦，呼叫既有開啟流程並以明確參數讓該次 daemon 使用 `startupCatchupMode=auto`，不可因保存的 `ask` 再次詢問）、「只做一次完整校正」（呼叫既有 `POST /api/index`，不得啟動 daemon）、「稍後再說」（只隱藏本次工作階段，下次開啟仍提醒）及「不再提醒」（保存 `workbenchOpenMode=off`，並說明可在設定恢復）。
+- `auto` 只有在使用者已保存此值時，才可在工作台載入時呼叫既有開啟流程並帶明確 `startup-catchup auto` 參數；啟動後顯示通知。`off` 不顯示提醒、不啟動程序、不執行隱藏校正。未明確選擇 `auto` 時，工作台載入不得自動啟動任何程序。
+- 若任一已登錄根目錄是整顆 Windows 磁碟（例如 `C:\`），本節提醒沿用 §81 的成本文案，說明可能重新檢查大量檔案、耗用磁碟與 CPU、需要較長時間，不承諾固定完成時間。
+- 四個動作與三態選擇必須沿用既有 stale-response 保護、處理中 disabled／可見狀態、失敗回復及 aria／live notification 契約。工作台開啟提醒與 daemon startup catch-up 提醒不得同時重複打擾。
+- `test/m77.test.ts` 必須覆蓋 metadata round-trip、新舊索引預設 `ask`、三態行為、auto 啟動且不二次詢問，以及明確反向驗證 ask／off 不得啟動 daemon。`scripts/ui-smoke.mjs` 必須在 1440×900 與 1180×800 覆蓋 daemon 未執行時的 ask 四動作、auto 通知、off 無提醒、daemon 已執行時無本節提醒、「不再提醒」保存 off 且可在設定恢復，以及瀏覽器錯誤／截圖檢查。
+
 ## 80. 全部詞模式的當頁多段落結果
 
 依 D112。本節只擴充搜尋結果在**實際物化頁面**的顯示資料；文件集合、排序、rank、代表位置、舊 `snippet`、總數及 `totalRelation` 沿用第 14、46、48、50、52、62、76、77 節，不因多段落資料改變。

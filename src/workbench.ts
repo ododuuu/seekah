@@ -28,11 +28,12 @@ import { productVersion } from "./version.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { isSqliteBusy, IndexBusyError } from "./write-lock.js";
 import { INDEX_BUSY_CLIENT_MESSAGE, INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
-import { AutoupdateError, autoupdateCatchup, autoupdateStart, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
+import { AutoupdateError, autoupdateCatchup, autoupdateStart, autoupdateStartForWorkbench, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
 import { resolveWatchDebounce } from "./live-update.js";
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus, type StartupCommandOptions } from "./autoupdate-startup.js";
 import type { AutoupdateSettings } from "./autoupdate-control.js";
 import { isStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
+import { isWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
 import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
 
 const HOST = "127.0.0.1";
@@ -212,7 +213,7 @@ async function readWorkbenchIndexStatus(
   const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
   if (!existsSync(databasePath)) return {
     state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true,
-    totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const,
+    totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
   };
   try {
     return await openStore(databasePath, store => {
@@ -224,7 +225,7 @@ async function readWorkbenchIndexStatus(
         trash: store.trashRoots(),
         deleteConfirmation: store.deleteConfirmationEnabled(),
         totalMode: store.searchTotalMode(),
-        autoupdateSettings: store.autoupdateSettings(), startupCatchupMode: store.startupCatchupMode(),
+        autoupdateSettings: store.autoupdateSettings(), startupCatchupMode: store.startupCatchupMode(), workbenchOpenMode: store.workbenchOpenMode(),
       };
     }, createStore);
   } catch (error) {
@@ -233,14 +234,14 @@ async function readWorkbenchIndexStatus(
         state: "unavailable" as const, readAt, errorCode: "INDEX_RECOVERY_REQUIRED",
         message: INDEX_RECOVERY_REQUIRED_MESSAGE,
         trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
-        autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const,
+        autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
       };
     }
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
     return {
       state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。",
       trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
-      autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const,
+      autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
     };
   }
 }
@@ -294,6 +295,13 @@ function resolveWorkbenchStartupCatchupMode(body: Record<string, unknown>, curre
   const value = body.startupCatchupMode;
   if (value === undefined) return current;
   if (!isStartupCatchupMode(value)) throw new Error("開機補捉策略無效。");
+  return value;
+}
+
+function resolveWorkbenchOpenMode(body: Record<string, unknown>, current: WorkbenchOpenMode): WorkbenchOpenMode {
+  const value = body.workbenchOpenMode;
+  if (value === undefined) return current;
+  if (!isWorkbenchOpenMode(value)) throw new Error("工作台開啟提醒策略無效。");
   return value;
 }
 
@@ -812,29 +820,55 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         });
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/autoupdate/workbench-open") {
+        const body = await readJson(request);
+        if (body.automatic === true) {
+          const mode = await openStore(options.databasePath, store => store.workbenchOpenMode(), options.createIndexStore);
+          if (mode !== "auto") throw new Error("只有明確保存為「開啟時自動補捉」時，工作台才能自動啟動背景更新。");
+        }
+        if (indexingBusy || indexing.state === "running" || indexing.state === "stopping") {
+          throw Object.assign(new Error("索引進行中，請完成後再開啟背景更新。"), { statusCode: 409 });
+        }
+        const result = await autoupdateStartForWorkbench(options.databasePath, {
+          cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)),
+        });
+        const startupCatchupMode = await openStore(options.databasePath, store => store.startupCatchupMode(), options.createIndexStore);
+        json(response, 200, {
+          message: result.text,
+          startupCatchupMode,
+          autoupdate: await readAutoupdateStatus(options.databasePath),
+        });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/settings") {
         const body = await readJson(request);
         if (body.deleteConfirmation !== undefined && typeof body.deleteConfirmation !== "boolean") throw new Error("刪除提醒設定無效。");
         if (body.autoupdateEnabled !== undefined && typeof body.autoupdateEnabled !== "boolean") throw new Error("背景自動更新設定無效。");
         if (body.autoupdateStartup !== undefined && typeof body.autoupdateStartup !== "boolean") throw new Error("登入啟動設定無效。");
+        if (body.workbenchOpenMode !== undefined && !isWorkbenchOpenMode(body.workbenchOpenMode)) throw new Error("工作台開啟提醒策略無效。");
         if (body.totalMode !== undefined && body.totalMode !== "fast" && body.totalMode !== "exact") throw new Error("總筆數設定無效。");
         const hasAutoupdateParameterUpdate = body.autoupdateDebounceMs !== undefined
           || body.autoupdateReconcileMs !== undefined || body.startupCatchupMode !== undefined;
+        const hasWorkbenchOpenModeUpdate = body.workbenchOpenMode !== undefined;
         const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
         let currentAutoupdateSettings = defaultAutoupdateSettings;
         let currentStartupCatchupMode: StartupCatchupMode = "auto";
+        let currentWorkbenchOpenMode: WorkbenchOpenMode = "ask";
         if (existsSync(options.databasePath)) {
           const current = await withIndexStore(options.databasePath, { readOnly: true, ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => ({
             settings: store.autoupdateSettings(),
             startupCatchupMode: store.startupCatchupMode(),
+            workbenchOpenMode: store.workbenchOpenMode(),
           }));
           currentAutoupdateSettings = current.settings;
           currentStartupCatchupMode = current.startupCatchupMode;
+          currentWorkbenchOpenMode = current.workbenchOpenMode;
         }
         const autoupdateSettings = resolveWorkbenchAutoupdateSettings(body, currentAutoupdateSettings);
         const startupCatchupMode = resolveWorkbenchStartupCatchupMode(body, currentStartupCatchupMode);
-        if (hasAutoupdateParameterUpdate && !existsSync(options.databasePath)) {
-          throw new Error("索引尚未建立；無法保存背景自動更新參數。");
+        const workbenchOpenMode = resolveWorkbenchOpenMode(body, currentWorkbenchOpenMode);
+        if ((hasAutoupdateParameterUpdate || hasWorkbenchOpenModeUpdate) && !existsSync(options.databasePath)) {
+          throw new Error("索引尚未建立；無法保存工作台開啟提醒／背景自動更新設定。");
         }
         const liveBefore = hasAutoupdateParameterUpdate
           ? (await readAutoupdateStatus(options.databasePath)).live
@@ -851,7 +885,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         }
         let deleteConfirmation = true;
         let totalMode: "fast" | "exact" = "fast";
-        if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || existsSync(options.databasePath)) {
+        if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || hasAutoupdateParameterUpdate || hasWorkbenchOpenModeUpdate || existsSync(options.databasePath)) {
           const saved = await withIndexStore(options.databasePath, { ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => {
             if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
             if (body.totalMode === "fast" || body.totalMode === "exact") store.setSearchTotalMode(body.totalMode);
@@ -859,6 +893,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
               store.setAutoupdateSettings(autoupdateSettings);
               store.setStartupCatchupMode(startupCatchupMode);
             }
+            if (hasWorkbenchOpenModeUpdate) store.setWorkbenchOpenMode(workbenchOpenMode);
             return { deleteConfirmation: store.deleteConfirmationEnabled(), totalMode: store.searchTotalMode() };
           });
           deleteConfirmation = saved.deleteConfirmation;
@@ -904,6 +939,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           totalMode,
           autoupdateSettings,
           startupCatchupMode,
+          workbenchOpenMode,
           autoupdate: await readAutoupdateStatus(options.databasePath),
           autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options),
           ...(settingsMessage ? { message: settingsMessage } : {}),

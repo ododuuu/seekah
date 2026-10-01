@@ -18,6 +18,7 @@ import { indexArtifactPaths, isIndexArtifact } from "./index-artifacts.js";
 export { indexArtifactPaths, isIndexArtifact };
 import { purgeWorkStateRoots } from "./live-queue.js";
 import { resolveStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
+import { resolveWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
 
 
 function bestEffortPurgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): void {
@@ -1000,6 +1001,16 @@ export class IndexStore {
   setStartupCatchupMode(mode: StartupCatchupMode): void {
     if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('startup_catchup_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(mode);
+  }
+
+  workbenchOpenMode(): WorkbenchOpenMode {
+    return resolveWorkbenchOpenMode(this.metadata("workbench_open_mode"));
+  }
+
+  setWorkbenchOpenMode(mode: WorkbenchOpenMode): void {
+    if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('workbench_open_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(mode);
   }
 

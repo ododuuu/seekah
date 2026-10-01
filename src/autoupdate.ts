@@ -270,6 +270,20 @@ export async function autoupdateStart(
   }
 }
 
+export async function autoupdateStartForWorkbench(
+  databasePath = defaultDatabasePath(),
+  options: AutoupdateCliOptions = {},
+): Promise<{ code: number; text: string }> {
+  const store = new IndexStore(databasePath, { readOnly: true });
+  let settings: { debounceMs: number; reconcileMs: number };
+  try {
+    settings = store.autoupdateSettings();
+  } finally {
+    store.close();
+  }
+  return autoupdateStart({ ...settings, startupCatchupMode: "auto" }, databasePath, options);
+}
+
 export async function runAutoupdateDaemon(
   settings: AutoupdateSettings,
   databasePath = defaultDatabasePath(),
