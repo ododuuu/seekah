@@ -11,6 +11,7 @@
 - [ ] 部署後觀察 status 的 `emptyFilenameEventCount`／`uncertainRescanCount`／`degradedSubdirectories`，確認監看漏事件是否仍發生；仍有則加階段計時（event→schedule、stable wait、enumerate、lock、commit、query）。
 - [ ] 修正煙霧測試「索引進行中切換背景更新仍保持 API parity」在高負載下的時序敏感。
 - [ ] 公司 Windows 驗收 0.45.0／0.46.0（含搜尋取消、worker 記憶體、背景更新重啟）。
+- [ ] 工作台加主題切換鈕（自動／淺色／深色，存在瀏覽器；目前只依系統 `prefers-color-scheme` 自動切換，無手動切換，見 `.theme-button` 樣式但未建立按鈕）。下一版規劃，使用者 2026-10-02 指示。
 - [ ] 硬性「N 行內」鄰近搜尋與正規表示式（待使用一陣子後評估）。
 
 ## 研究：搜尋架構 prototype（2026-09-27，ADR 前）
