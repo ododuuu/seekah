@@ -1736,7 +1736,7 @@ docsearch doctor
 ### 54.2 穩定確認
 
 - 本輪的檔案先各觀察一次 metadata（大小、修改時間、檔案身分）。
-- 整批只等一次防抖時間，再各觀察一次：相同者立即解析寫入；不同者延後。§46.6「兩次相同觀察、間隔至少防抖時間」的保證不變。
+- 本輪各檔依自己的事件落點或排入時間等待防抖期限，等待可在其他檔案解析／準備時重疊，再各觀察一次 metadata：相同者立即解析寫入；不同者延後。§46.6「兩次相同觀察、間隔至少防抖時間」的保證不變。
 - 不存在、目錄、連結與其他類型沿用既有處理（刪除、子樹校正、略過）。
 
 ### 54.3 延後而不原地等待
@@ -1747,7 +1747,7 @@ docsearch doctor
 
 ### 54.4 驗收
 
-- 2,000 個新檔案同時進入佇列時，穩定等待只有每批一次；最後加入的一般檔案在分批處理完成後即可搜尋，不需等待「檔案數 × 防抖時間」。
+- 2,000 個新檔案同時進入佇列時，各檔依自己的防抖期限等待；同批穩定等待可重疊，不按檔案數相加防抖時間，最後加入的一般檔案在分批處理完成後即可搜尋。
 - 持續變動的檔案被延後，不阻擋同批其他檔案；連續延後超過上限後確認完成並保留既有索引。
 - 每輪之間釋放 writer lock。
 - 真實 fs.watch 量測：數千個檔案湧入時，新檔可搜尋延遲與整批處理時間，寫入 `0.39.2-VALIDATION.md`。
@@ -2002,7 +2002,7 @@ docsearch doctor
 
 ### 63.1 鎖外準備、群組邊界與鎖內確認
 
-- 局部更新先在 writer lock 外完成檔案 metadata 觀察、一次穩定等待、第二次 metadata 觀察、讀檔與解析。
+- 局部更新先在 writer lock 外完成檔案 metadata 觀察、各檔自己的穩定等待、第二次 metadata 觀察、讀檔與解析；不同檔案的穩定等待可重疊。
 - 已準備文件以群組累積；群組最多 `LOCAL_PREPARED_GROUP_MAX_ITEMS = 50` 份，或從第一份準備結果起算 `LOCAL_PREPARED_GROUP_MAX_MS = 250` ms，先到者立即封存群組。
 - 每個已封存群組只取得一次 writer lock，逐份重新 `lstat` 後提交；`size`、`mtime` 與檔案身分必須與準備完成時相同，才可執行 `upsert` 或 metadata 提交。
 - 鎖內重新確認不同、檔案消失或根目錄已移除時，不得提交過期解析結果。檔案變動依 §54.3 延後；檔案消失沿用既有刪除安全核對與刪除語意；同群組其他文件仍照常逐份確認與提交。
@@ -2018,7 +2018,7 @@ docsearch doctor
 
 - writer lock 在穩定等待、讀檔與解析期間可由其他 writer 取得；多份已準備文件在同一群組共用一次 lock acquire。
 - 準備完成後來源 metadata 改變或檔案消失時，不寫入過期解析內容，並維持 §54 的延後／刪除結果；同群組未變動文件仍可提交。
-- §54 的每輪最多 500 筆／約 5 秒、每輪只等一次穩定、連續 5 次延後後保留既有索引、§61 的 exclusion 傳遞，以及根目錄下線、刪除與改名語意不變。
+- §54 的每輪最多 500 筆／約 5 秒、每檔各自穩定等待且等待可重疊、連續 5 次延後後保留既有索引、§61 的 exclusion 傳遞，以及根目錄下線、刪除與改名語意不變。
 - `test/m52.test.ts` 覆蓋鎖外等待、單群組一次取鎖提交多份、提交前變動、提交前刪除、取消與程序停止；量測記錄大量檔案湧入時新檔搜尋延遲、局部更新數及其他 writer 的鎖等待時間。
 
 - package 版本 0.42.0。
@@ -2205,7 +2205,7 @@ docsearch doctor
 
 - 公平輪替狀態只存在程序記憶體，不新增 work state、索引或佇列 schema；程序重啟後依既有 at-least-once 佇列與校正 checkpoint 接續。
 - `localUpdateCount`、校正 `checked`／`frontier`、`lastReconcileBatchAt`、status 欄位與搜尋結果維持既有語意；只改背景 root branch 的選擇與下一輪排程時點。
-- 局部更新仍遵守 §54 的每輪上限、一次穩定等待、延後與 writer lock 釋放；背景校正仍遵守 §60、§64 的 checkpoint、失敗分類與刪除安全前提。
+- 局部更新仍遵守 §54 的每輪上限、每檔穩定等待與等待重疊、延後與 writer lock 釋放；背景校正仍遵守 §60、§64 的 checkpoint、失敗分類與刪除安全前提。
 
 ### 68.3 驗收與測試計畫
 
@@ -2358,7 +2358,7 @@ docsearch doctor
 - 在未嘗試路徑中，近期剛以同一 work item generation 延後的檔案視為 noise/deferred；穩定候選優先。新 generation 不沿用舊 generation 的 deferred 分類。
 - 一個優先級的穩定候選若超過可用名額，保留約 80% 名額給最舊候選、約 20% 名額給最新候選：目前固定為最多 400 筆 oldest 加最多 100 筆 newest，兩段均維持 `created_at_ms` 順序。最新保留名額讓新事件不必排在 500 筆舊待辦之後；最舊名額與 sweep 讓舊待辦不被持續新事件永久餓死。
 - 穩定候選不足 500 筆時，先取全部穩定候選，再以仍未嘗試的 deferred 候選依 `created_at_ms` 舊到新補足名額；沒有穩定候選時才處理 deferred 候選。deferred 不會被永久丟棄，仍受既有連續延後上限與 sweep 控制。
-- `applyLocalBatch` 的一次穩定等待、第二次 metadata／identity 確認、§54.3 延後、連續 5 次上限、§63 鎖外準備與群組提交完全不變；本節只改進入該批的順序。
+- `applyLocalBatch` 的逐檔穩定等待、第二次 metadata／identity 確認、§54.3 延後、連續 5 次上限、§63 鎖外準備與群組提交完全不變；本節只改進入該批的順序。
 
 ### 73.2 公平界線與相容性
 
@@ -2372,7 +2372,7 @@ docsearch doctor
 - 不永遠 oldest-first：目前做法會讓第 501 筆之後的新檔在大型積壓下延後多輪。
 - 不永遠 newest-first：事件湧入時舊待辦會被無限推後，違反 §55.2 的輪替意圖。
 - 不把 deferred/noise 永久跳過、不直接 ack 未成功寫入的項目、不刪除或重建 work queue；這會留下舊索引或破壞 at-least-once。
-- 不把一次穩定等待改成逐檔等待、不取消延後上限、不把 `LOCAL_BATCH_MAX_ITEMS` 無界加大、不以平行 writer 解決順序。
+- 不取消逐檔穩定等待、不取消延後上限、不把 `LOCAL_BATCH_MAX_ITEMS` 無界加大、不以平行 writer 解決順序。
 - 不修改 `runRoot` 的校正／局部分支選擇、`isExcluded`／排除入口、`reconcile.ts` 或 §68 的 timer／localPriority；這些是其他規格與分支的邊界。
 
 ### 73.4 驗收
@@ -2893,3 +2893,25 @@ docsearch doctor
 - 段落清單的位置標籤欄必須比既有版面窄：一般列表最大比例為 24%，表格最大比例為 28%，仍保留至少 72px／60px 並允許文字換行；窄桌面規則不得恢復舊的 31%／36% 比例。
 - `test/m84.test.ts` 必須以隔離合成索引驗證 phrase 第二片段、檔名與內文共命中、all-terms 最近區段、filename 欄位不讀內文、三種索引形狀相容及位置欄寬度契約；至少一項反向恢復第一次出現或移除第二片段時測試必須失敗。
 - Workbench、MCP 與既有搜尋 API 共用同一份 `passages` materialization；不新增 OCR、embedding、新格式、外部服務或真實使用者索引操作。
+## 89. 監看局部更新的分階段計時與穩定等待重疊
+
+依 D121。本節只處理 `LiveUpdateEngine` 局部更新的可觀測性與逐檔穩定等待排程；不改索引 schema、搜尋語意、背景寫入期間的搜尋效能或既有 watcher 正確性安全網。
+
+### 89.1 分階段計時
+
+- 每個完成的局部更新批次可在 `LiveRootStatus.lastTiming` 提供最近一次計時；舊 daemon／舊 JSON 可缺少此欄位。欄位至少包含 ISO `at`、`eventToScheduleMs`（有事件來源時）、`stableWaitMs`、`enumerateMs`、`lockMs` 與 `commitMs`，數值以毫秒表示。
+- `eventToScheduleMs` 從第一個已接受事件進入該批次，到局部處理開始前計算；`stableWaitMs` 只計穩定觀察等待；`enumerateMs` 包含候選 metadata 及有界目錄展開；`lockMs` 只計取得 writer lock 的等待；`commitMs` 包含已持鎖的文件提交與既有 WAL checkpoint。各階段不得以總耗時互相冒充。
+- `autoupdate status` 顯示最近局部批次的上述階段；診斷資料不得包含文件正文、標題、片段或解析器原始錯誤。搜尋 query 時間仍由搜尋既有 trace／量測記錄，不能假造為局部更新階段。
+
+### 89.2 逐檔穩定等待與處理
+
+- 同一局部批次的每個檔案仍須先完成自己的穩定 metadata 觀察，再進入既有解析／準備／短 writer lock 提交；不可省略第二次 identity 檢查。
+- 批次開始處理前可在 writer lock 外啟動後續檔案的穩定等待；前一份檔案進入解析／準備／提交時，後續等待可繼續進行。穩定等待不得持有 writer lock。批次上限、群組提交、延後不穩定檔案及 at-least-once 語意不變。
+- 穩定等待的重疊不得增加第二套 queue、改用檔案 mtime 排序或把近期檔案繞到未規格化的 local queue；§54、§55、§56 的批次、公平與有界目錄展開限制繼續適用。
+
+### 89.3 驗收與明確不做
+
+- `test/m85.test.ts` 必須以隔離合成資料同時覆蓋注入 watcher 與真實 `fs.watch` 的新增檔案路徑，證明搜尋結果與分階段計時欄位可取得；移除計時記錄時測試必須失敗。
+- `test/m86.test.ts` 必須以兩份合成文件的可控解析／等待序列證明下一份檔案的穩定等待已開始後，前一份仍可繼續解析；改回整批單次等待或逐檔串行等待時測試必須失敗。
+- 量測使用本機暫存目錄與合成資料；不得讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄／備份，不啟動其 daemon，不修改 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`、package 版本或 lockfile。
+- 本節不對背景寫入期間搜尋較慢的根因作判定、不修改 WAL／autocheckpoint／唯讀搜尋連線設定；該問題另由指定工作處理。

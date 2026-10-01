@@ -41,6 +41,8 @@ export interface LocalUpdateOptions {
   signal?: AbortSignal;
   lockHeld?: boolean;
   acquireLock?: (databasePath: string) => () => void;
+  /** 供監看診斷記錄每次成功取得 writer lock 的等待時間。 */
+  onLockWait?: (elapsedMs: number) => void;
   lstat?: typeof lstat;
   readdir?: typeof readdir;
   stat?: typeof stat;
@@ -77,13 +79,15 @@ export async function withWriterBackoff<T>(
   options: LocalUpdateOptions,
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (options.lockHeld) return fn();
   const acquire = options.acquireLock ?? acquireWriteLock;
   const sleep = options.sleep ?? sleepMs;
+  if (options.lockHeld) return fn();
   for (let attempt = 0; attempt < WRITER_BACKOFF_MAX_ATTEMPTS; attempt++) {
     throwIfAborted(options.signal);
+    const acquireStarted = performance.now();
     try {
       const release = acquire(databasePath);
+      options.onLockWait?.(performance.now() - acquireStarted);
       try { return await fn(); }
       finally { release(); }
     } catch (error) {

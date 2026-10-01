@@ -13,7 +13,7 @@ import { coversPath, runtimePathPlatform, samePath } from "./root-plan.js";
 import { RootError } from "./scanner.js";
 import { OperationCancelledError, throwIfAborted, type ProgressUpdate } from "./progress.js";
 import { shouldIgnoreWatchPath } from "./watch-path.js";
-import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, RootWatchState } from "./autoupdate-control.js";
+import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, LiveTimingSample, RootWatchState } from "./autoupdate-control.js";
 import { DEFAULT_QUEUE_LIMIT, LiveWorkQueue, QueuePersistError, type LiveWorkQueueOptions } from "./live-queue.js";
 import { RootExclusion } from "./root-exclusion.js";
 import { runBackgroundReconcileBatch, DEFAULT_RECONCILE_BATCH_ENTRIES, DEFAULT_RECONCILE_BATCH_MS } from "./reconcile.js";
@@ -107,7 +107,8 @@ export interface LiveUpdateOptions {
   readdir?: (directory: fs.PathLike) => Promise<fs.Dirent[]>;
 }
 
-type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
+type StableObservation = { at: number };
+type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean; stableSince?: StableObservation };
 
 function localWorkKey(item: Pick<LocalWorkItem, "filePath" | "generation">): string {
   return `${item.filePath}\u0000${item.generation}`;
@@ -128,6 +129,13 @@ function preparedDocumentCharacters(prepared: PreparedFileUpdate): number {
   return characters;
 }
 
+type LocalBatchTiming = {
+  stableWaitMs: number;
+  enumerateMs: number;
+  lockMs: number;
+  commitMs: number;
+};
+
 type LocalBatchResult = {
   updated: number;
   unchanged: number;
@@ -139,6 +147,7 @@ type LocalBatchResult = {
   attempted: Set<string>;
   deferred: boolean;
   interrupted: boolean;
+  timing: LocalBatchTiming;
   /** 本批已提交部分完成後，交給 root catch 的原始 busy 錯誤。 */
   busy?: unknown;
 };
@@ -169,6 +178,9 @@ type RootState = {
   running: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
   firstScheduledAt: number | undefined;
+  firstEventClock?: number;
+  /** 事件／工作佇列項目進入穩定觀察的時間；只存在記憶體。 */
+  stableSince: Map<string, StableObservation>;
   exclusion: RootExclusion;
   /** 局部更新輪替的本圈已處理路徑（SPEC §55.2）。 */
   sweep: Set<string>;
@@ -208,6 +220,7 @@ type RootState = {
   emptyFilenameEventCount: number;
   uncertainRescanCount: number;
   lastUncertainRescanAt?: string;
+  lastTiming?: LiveTimingSample;
 };
 
 export class WatchError extends Error {
@@ -238,12 +251,19 @@ export function resolveAutoupdateReconcile(ms: number | undefined): number {
   return value;
 }
 
-function absorb(pending: Set<string>, candidate: string): void {
+function absorb(pending: Set<string>, candidate: string, stableSince?: Map<string, StableObservation>): void {
   for (const existing of pending) {
-    if (samePath(existing, candidate) || coversPath(existing, candidate)) return;
+    if (samePath(existing, candidate)) return;
+    if (coversPath(existing, candidate)) {
+      stableSince?.delete(candidate);
+      return;
+    }
   }
   for (const existing of [...pending]) {
-    if (coversPath(candidate, existing)) pending.delete(existing);
+    if (coversPath(candidate, existing)) {
+      pending.delete(existing);
+      stableSince?.delete(existing);
+    }
   }
   pending.add(candidate);
 }
@@ -371,7 +391,7 @@ export class LiveUpdateEngine {
   private newState(root: string): RootState {
     return {
       root, pending: new Set(), reconcile: false, localPriority: false, dirty: false, running: false,
-      timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), sweep: new Set(), walks: new Map(), failed: false, offline: false, syncFailed: false, removed: false,
+      timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), stableSince: new Map(), sweep: new Set(), walks: new Map(), failed: false, offline: false, syncFailed: false, removed: false,
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
       degradedChildren: new Map(), uncertainRescans: new Map(), emptyFilenameEventCount: 0, uncertainRescanCount: 0,
@@ -406,6 +426,7 @@ export class LiveUpdateEngine {
         uncertainRescanCount: state.uncertainRescanCount,
         uncertainRescanStateCount: state.uncertainRescans.size,
         ...(state.lastUncertainRescanAt ? { lastUncertainRescanAt: state.lastUncertainRescanAt } : {}),
+        ...(state.lastTiming ? { lastTiming: { ...state.lastTiming } } : {}),
         ...(state.reconcileSkippedByRule ? { skippedByRule: { ...state.reconcileSkippedByRule } } : {}),
         ...(state.exclusionCleanup ? { exclusionCleanup: { ...state.exclusionCleanup } } : {}),
         ...(reconcile ? {
@@ -561,6 +582,23 @@ export class LiveUpdateEngine {
   private printLocal(root: string, updated: number, unchanged: number, removed: number, elapsedMs: number, complete: boolean): void {
     this.log(`根目錄：${root}；更新 ${updated}、未變更 ${unchanged}、移除 ${removed}；耗時 ${elapsedMs} ms；完整：${complete ? "是" : "否"}`);
   }
+  private recordLocalTiming(state: RootState, eventClock: number | undefined, scheduleClock: number, timing: LocalBatchTiming): void {
+    const sample: LiveTimingSample = {
+      at: new Date(this.now()).toISOString(),
+      ...(eventClock === undefined ? {} : {
+        eventToScheduleMs: Math.round((scheduleClock - eventClock) * 100) / 100,
+      }),
+      stableWaitMs: Math.round(timing.stableWaitMs * 100) / 100,
+      enumerateMs: Math.round(timing.enumerateMs * 100) / 100,
+      lockMs: Math.round(timing.lockMs * 100) / 100,
+      commitMs: Math.round(timing.commitMs * 100) / 100,
+    };
+    state.lastTiming = sample;
+    if (this.options.verbose) {
+      this.log(`局部更新計時：事件→排程 ${sample.eventToScheduleMs ?? "—"} ms；穩定等待 ${sample.stableWaitMs} ms；列舉 ${sample.enumerateMs} ms；取鎖 ${sample.lockMs} ms；提交 ${sample.commitMs} ms`);
+    }
+  }
+
 
   private syncFn(): typeof sync {
     return this.options.sync ?? sync;
@@ -576,6 +614,7 @@ export class LiveUpdateEngine {
     this.running = true;
     state.running = true;
     state.dirty = false;
+    const firstEventClock = state.firstEventClock;
     if (state.timer) this.clearTimer(state.timer);
     state.timer = undefined;
     if (state.rescanTimer) this.clearTimer(state.rescanTimer);
@@ -690,6 +729,7 @@ export class LiveUpdateEngine {
         if (!state.dirty) state.reconcile = false;
         else if (!initialForegroundSync) {
           state.pending.clear();
+          state.stableSince.clear();
           state.reconcile = true;
         } else {
           state.reconcile = false;
@@ -697,8 +737,23 @@ export class LiveUpdateEngine {
       } else {
         this.phase = "updating";
         const work: LocalWorkItem[] = queued.length
-          ? queued.map(item => ({ filePath: path.resolve(state.root, item.relPath), generation: item.generation, relPath: item.relPath, expand: item.reason === "expand" }))
-          : pending.map(filePath => ({ filePath, generation: 0, relPath: path.relative(state.root, filePath), expand: false }));
+          ? queued.map(item => {
+            const filePath = path.resolve(state.root, item.relPath);
+            return {
+              filePath,
+              generation: item.generation,
+              relPath: item.relPath,
+              expand: item.reason === "expand",
+              ...(state.stableSince.has(filePath) ? { stableSince: state.stableSince.get(filePath)! } : {}),
+            };
+          })
+          : pending.map(filePath => ({
+            filePath,
+            generation: 0,
+            relPath: path.relative(state.root, filePath),
+            expand: false,
+            ...(state.stableSince.has(filePath) ? { stableSince: state.stableSince.get(filePath)! } : {}),
+          }));
         // 輪替（SPEC §55.2）：先處理本圈尚未處理過的待辦，全部處理過一次後開始下一圈。
         // 以 path + generation 識別工作項，避免同一路徑的新事件沿用舊 generation 的本圈標記。
         const queuedKeys = new Set(work.map(localWorkKey));
@@ -711,11 +766,14 @@ export class LiveUpdateEngine {
         // 同一圈內事件待辦先於資料夾展開出來的待辦（SPEC §56.1）。
         order = [...order.filter(item => !item.expand), ...order.filter(item => item.expand)];
         const candidateCount = order.length;
+        const scheduleClock = performance.now();
         const batch = await this.applyLocalBatch(state, this.selectLocalWork(order, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
+        this.recordLocalTiming(state, firstEventClock, scheduleClock, batch.timing);
+        delete state.firstEventClock;
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
         if (batch.busy) throw batch.busy;
-        moreLocal = batch.interrupted || candidateCount > LOCAL_BATCH_MAX_ITEMS;
+        moreLocal = batch.interrupted || batch.deferred || candidateCount > LOCAL_BATCH_MAX_ITEMS;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
         if (!batch.complete) state.syncFailed = true;
@@ -730,7 +788,7 @@ export class LiveUpdateEngine {
         state.dirty = true;
         if (batchReconcile || fullReconcile) state.reconcile = true;
         else for (const item of pending) {
-          if (state.pending.has(item)) absorb(state.pending, item);
+          if (state.pending.has(item)) absorb(state.pending, item, state.stableSince);
         }
       } else if (error instanceof RootError || error instanceof IgnoreConfigurationError) {
         state.syncFailed = true;
@@ -807,6 +865,7 @@ export class LiveUpdateEngine {
   ): Promise<LocalBatchResult> {
     const result: LocalBatchResult = {
       updated: 0, unchanged: 0, removed: 0, complete: true, finished: new Set(), attempted: new Set(), deferred: false, interrupted: false,
+      timing: { stableWaitMs: 0, enumerateMs: 0, lockMs: 0, commitMs: 0 },
     };
     const finish = (item: LocalWorkItem, applied?: { updated: number; unchanged: number; removed: number; complete: boolean; path: string }) => {
       if (applied) {
@@ -819,8 +878,7 @@ export class LiveUpdateEngine {
           state.lastLocalUpdateAt = this.lastLocalUpdate.at;
         }
       }
-      this.deferrals.delete(item.filePath);
-      this.deferredGenerations.delete(item.filePath);
+      if (state.stableSince.get(item.filePath) === item.stableSince) state.stableSince.delete(item.filePath);
       result.finished.add(item.filePath);
       result.attempted.add(localWorkKey(item));
       if (item.generation > 0) this.ackPath(state.root, item.relPath, item.generation);
@@ -837,6 +895,7 @@ export class LiveUpdateEngine {
         return;
       }
       this.deferrals.set(item.filePath, count);
+      state.stableSince.set(item.filePath, { at: this.now() });
       result.deferred = true;
       result.attempted.add(localWorkKey(item));
 
@@ -847,6 +906,7 @@ export class LiveUpdateEngine {
     }
     const candidates: { item: LocalWorkItem; key: string; sizeBytes: number }[] = [];
     let walkBudget = this.options.localWalkEntries ?? LOCAL_WALK_MAX_ENTRIES;
+    const enumerateStarted = performance.now();
     for (const item of work) {
       if (this.stopping && !this.options.applyFileUpdate) { result.interrupted = true; break; }
       if (this.isExcluded(state, item.filePath, false)) { finish(item); continue; }
@@ -865,37 +925,51 @@ export class LiveUpdateEngine {
       }
       if (!info || !info.isFile()) {
         // 不存在、連結與其他類型沿用單一路徑處理（刪除、整根校正、略過）。
-        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+        finish(item, await this.applyOne(state, item.filePath, inner, syncOptions, result.timing));
         continue;
       }
       candidates.push({ item, key: identityKey(info), sizeBytes: info.size });
     }
+    result.timing.enumerateMs += performance.now() - enumerateStarted;
     if (!candidates.length) return result;
 
-    await (this.options.sleep ?? sleepMs)(this.debounceMs);
-    // 處理時間上限從穩定等待之後起算：事件湧入時觀察階段本身可能就要數秒（SPEC §54.1）。
-    const processStarted = this.now();
+    const waitForStable = async (candidate: { item: LocalWorkItem; key: string; sizeBytes: number }): Promise<fs.Stats | undefined> => {
+      const stableStarted = performance.now();
+      const stableSince = candidate.item.stableSince?.at ?? this.now();
+      const remaining = Math.max(0, stableSince + this.debounceMs - this.now());
+      if (remaining > 0) await (this.options.sleep ?? sleepMs)(remaining);
+      result.timing.stableWaitMs += performance.now() - stableStarted;
+      try { return await fs.promises.lstat(candidate.item.filePath); } catch { return undefined; }
+    };
+    let processStarted: number | undefined;
     const apply = this.options.applyFileUpdate;
     let processed = 0;
 
     // 舊有測試 hook 仍維持逐檔 apply 行為；正式路徑在下方以 prepared 群組提交。
     if (apply) {
-      for (const { item, key } of candidates) {
+      const stablePromises = candidates.map(waitForStable);
+      for (let index = 0; index < candidates.length; index++) {
+        const candidate = candidates[index]!;
+        const second = await stablePromises[index]!;
+        if (processStarted === undefined) processStarted = this.now();
         if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) { result.interrupted = true; break; }
         processed++;
-        let second: fs.Stats | undefined;
-        try { second = await fs.promises.lstat(item.filePath); } catch { second = undefined; }
         if (!second) {
-          finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
+          finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions, result.timing));
           continue;
         }
-        if (identityKey(second) !== key) { defer(item); continue; }
+        if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
         this.localUpdateCount++;
-        const update = await withWriterBackoff(this.store.databasePath, inner, () => apply(item.filePath, state.root, this.store, {
+        const commitStarted = performance.now();
+        const update = await withWriterBackoff(this.store.databasePath, {
+          ...inner,
+          onLockWait: elapsedMs => { result.timing.lockMs += elapsedMs; },
+        }, () => apply(candidate.item.filePath, state.root, this.store, {
           ...inner, lockHeld: true, stableMs: 0, deferUnstable: true,
         }));
-        if (update.deferred) { defer(item); continue; }
-        finish(item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: item.filePath });
+        result.timing.commitMs += performance.now() - commitStarted;
+        if (update.deferred) { defer(candidate.item); continue; }
+        finish(candidate.item, { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: candidate.item.filePath });
       }
       return result;
     }
@@ -920,7 +994,7 @@ export class LiveUpdateEngine {
       let updates: readonly LocalUpdateResult[];
       let partialBusy = false;
       try {
-        updates = await this.commitPreparedBatch(group, inner);
+        updates = await this.commitPreparedBatch(group, inner, result.timing);
       } catch (error) {
         if (!(error instanceof PreparedBatchBusyError)) throw error;
         updates = error.completed;
@@ -942,29 +1016,30 @@ export class LiveUpdateEngine {
       }
     };
 
-    for (const candidate of candidates) {
+    const stablePromises = candidates.map(waitForStable);
+    for (let index = 0; index < candidates.length; index++) {
       if (this.stopping) {
         result.interrupted = true;
         discardPrepared();
         break;
       }
+      const candidate = candidates[index]!;
+      const second = await stablePromises[index]!;
+      if (processStarted === undefined) processStarted = this.now();
       if (processed > 0 && this.now() - processStarted >= LOCAL_BATCH_MAX_MS) {
         await flushPrepared();
         result.interrupted = true;
         break;
       }
       processed++;
-      let second: fs.Stats | undefined;
-      try { second = await fs.promises.lstat(candidate.item.filePath); } catch { second = undefined; }
       if (!second) {
         await flushPrepared();
         if (result.busy) { result.interrupted = true; break; }
         if (this.stopping) { result.interrupted = true; break; }
-        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions));
+        finish(candidate.item, await this.applyOne(state, candidate.item.filePath, inner, syncOptions, result.timing));
         continue;
       }
       if (identityKey(second) !== candidate.key) { defer(candidate.item); continue; }
-
       const estimatedCharacters = Math.max(0, candidate.sizeBytes);
       if (preparedGroup.length > 0 && (
         preparedGroup.length >= LOCAL_PREPARED_GROUP_MAX_ITEMS ||
@@ -1087,33 +1162,45 @@ export class LiveUpdateEngine {
   private async commitPreparedBatch(
     prepared: readonly PreparedLocalItem[],
     options: LocalUpdateOptions,
+    timing: LocalBatchTiming,
   ): Promise<LocalUpdateResult[]> {
-    return withWriterBackoff(this.store.databasePath, options, async () => {
-      const sleep = options.sleep ?? sleepMs;
-      const results: LocalUpdateResult[] = [];
-      for (const item of prepared) {
-        for (let attempt = 0; ; attempt++) {
-          throwIfAborted(options.signal);
-          try {
-            results.push(await commitPreparedFileUpdateLocked(
-              item.prepared,
-              this.store,
-              { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
-            ));
-            break;
-          } catch (error) {
-            if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
-            const delay = PREPARED_COMMIT_BUSY_RETRY_MS[attempt];
-            if (delay === undefined) {
-              this.store.checkpointWal();
-              throw new PreparedBatchBusyError(results, error);
+    return withWriterBackoff(this.store.databasePath, {
+      ...options,
+      onLockWait: elapsedMs => {
+        options.onLockWait?.(elapsedMs);
+        timing.lockMs += elapsedMs;
+      },
+    }, async () => {
+      const commitStarted = performance.now();
+      try {
+        const sleep = options.sleep ?? sleepMs;
+        const results: LocalUpdateResult[] = [];
+        for (const item of prepared) {
+          for (let attempt = 0; ; attempt++) {
+            throwIfAborted(options.signal);
+            try {
+              results.push(await commitPreparedFileUpdateLocked(
+                item.prepared,
+                this.store,
+                { ...options, lockHeld: true, stableMs: 0, deferUnstable: true },
+              ));
+              break;
+            } catch (error) {
+              if (!(error instanceof IndexBusyError) && !isSqliteBusy(error)) throw error;
+              const delay = PREPARED_COMMIT_BUSY_RETRY_MS[attempt];
+              if (delay === undefined) {
+                this.store.checkpointWal();
+                throw new PreparedBatchBusyError(results, error);
+              }
+              await sleep(delay);
             }
-            await sleep(delay);
           }
         }
+        this.store.checkpointWal();
+        return results;
+      } finally {
+        timing.commitMs += performance.now() - commitStarted;
       }
-      this.store.checkpointWal();
-      return results;
     });
   }
 
@@ -1122,34 +1209,47 @@ export class LiveUpdateEngine {
     filePath: string,
     localOpts: LocalUpdateOptions,
     syncOptions: SyncOptions,
+    timing?: LocalBatchTiming,
   ): Promise<{ updated: number; unchanged: number; removed: number; complete: boolean; path: string }> {
-    return withWriterBackoff(this.store.databasePath, localOpts, async () => {
-      const locked = { ...localOpts, lockHeld: true };
-      let info: fs.Stats | undefined;
+    const options = timing ? {
+      ...localOpts,
+      onLockWait: (elapsedMs: number) => {
+        localOpts.onLockWait?.(elapsedMs);
+        timing.lockMs += elapsedMs;
+      },
+    } : localOpts;
+    return withWriterBackoff(this.store.databasePath, options, async () => {
+      const commitStarted = timing ? performance.now() : 0;
       try {
-        info = await fs.promises.lstat(filePath);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        const locked = { ...localOpts, lockHeld: true };
+        let info: fs.Stats | undefined;
+        try {
+          info = await fs.promises.lstat(filePath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            this.localUpdateCount++;
+            const del = await (this.options.applyFileDelete ?? applyFileDelete)(filePath, state.root, this.store, locked);
+            return { updated: 0, unchanged: 0, removed: del.removed, complete: del.complete, path: filePath };
+          }
           this.localUpdateCount++;
-          const del = await (this.options.applyFileDelete ?? applyFileDelete)(filePath, state.root, this.store, locked);
-          return { updated: 0, unchanged: 0, removed: del.removed, complete: del.complete, path: filePath };
+          const change = await applyPathChange(filePath, state.root, this.store, locked);
+          return { updated: change.updated, unchanged: change.unchanged, removed: change.removed, complete: change.complete, path: filePath };
+        }
+        if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
+        if (info.isDirectory()) {
+          if (this.isExcluded(state, filePath, true)) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: "" };
+          if (samePath(filePath, state.root)) this.rootScanCount++;
+          else this.subtreeScanCount++;
+          const report = await this.syncFn()(filePath, this.store, { ...syncOptions, lockHeld: true, requireRegistered: false });
+          this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
+          return { updated: report.updated, unchanged: report.unchanged, removed: report.removed, complete: report.complete, path: filePath };
         }
         this.localUpdateCount++;
-        const change = await applyPathChange(filePath, state.root, this.store, locked);
-        return { updated: change.updated, unchanged: change.unchanged, removed: change.removed, complete: change.complete, path: filePath };
+        const update = await (this.options.applyFileUpdate ?? applyFileUpdate)(filePath, state.root, this.store, locked);
+        return { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: filePath };
+      } finally {
+        if (timing) timing.commitMs += performance.now() - commitStarted;
       }
-      if (info.isSymbolicLink()) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: filePath };
-      if (info.isDirectory()) {
-        if (this.isExcluded(state, filePath, true)) return { updated: 0, unchanged: 0, removed: 0, complete: true, path: "" };
-        if (samePath(filePath, state.root)) this.rootScanCount++;
-        else this.subtreeScanCount++;
-        const report = await this.syncFn()(filePath, this.store, { ...syncOptions, lockHeld: true, requireRegistered: false });
-        this.lastReconcile = { at: new Date(this.now()).toISOString(), root: state.root, complete: report.complete };
-        return { updated: report.updated, unchanged: report.unchanged, removed: report.removed, complete: report.complete, path: filePath };
-      }
-      this.localUpdateCount++;
-      const update = await (this.options.applyFileUpdate ?? applyFileUpdate)(filePath, state.root, this.store, locked);
-      return { updated: update.updated, unchanged: update.unchanged, removed: update.removed, complete: update.complete, path: filePath };
     });
   }
 
@@ -1222,6 +1322,7 @@ export class LiveUpdateEngine {
     if (state.rescanTimer) this.clearTimer(state.rescanTimer);
     if (state.retryTimer) this.clearTimer(state.retryTimer);
     state.pending.clear();
+    state.stableSince.clear();
     state.degradedChildren.clear();
     state.uncertainRescans.clear();
     try { this.queue.isolateRoot(state.root); } catch (error) { this.onQueueFailure(state, error); }
@@ -1372,7 +1473,7 @@ export class LiveUpdateEngine {
     state.degradedChildren.set(dir, reason);
     this.rememberError("WATCH_SCOPE_ERROR", `${dir}: ${reason}`);
     this.persistPath(state, dir, "expand");
-    absorb(state.pending, dir);
+    absorb(state.pending, dir, state.stableSince);
     state.reconcile = true;
     state.localPriority = true;
     this.schedule(state);
@@ -1385,7 +1486,7 @@ export class LiveUpdateEngine {
     this.log(`監看錯誤：${handle.path}：${message}`);
     this.rememberError("WATCH_SCOPE_ERROR", `${handle.path}: ${message}`);
     this.persistPath(state, handle.path, "expand");
-    absorb(state.pending, handle.path);
+    absorb(state.pending, handle.path, state.stableSince);
     this.schedule(state);
     try { handle.watcher.close(); } catch { /* ignore */ }
     state.uncertainRescans.delete(handle.path);
@@ -1427,7 +1528,7 @@ export class LiveUpdateEngine {
     const handle = state.handles.find(item => samePath(item.path, dir));
     if (!handle || samePath(handle.path, state.root)) return;
     this.persistPath(state, dir);
-    absorb(state.pending, dir);
+    absorb(state.pending, dir, state.stableSince);
     this.schedule(state);
     try { handle.watcher.close(); } catch { /* ignore */ }
     state.uncertainRescans.delete(handle.path);
@@ -1486,7 +1587,7 @@ export class LiveUpdateEngine {
       return false;
     }
     if (!this.persistPath(state, dir, "expand")) return false;
-    absorb(state.pending, dir);
+    absorb(state.pending, dir, state.stableSince);
     rescan.accepted++;
     rescan.nextAllowedAt = now + this.uncertainRescanCooldownMs;
     const at = new Date(now).toISOString();
@@ -1537,6 +1638,7 @@ export class LiveUpdateEngine {
     const at = new Date(this.now()).toISOString();
     state.lastEventAt = at;
     this.lastEvent = { at, root: state.root };
+    state.firstEventClock ??= performance.now();
     if (this.options.verbose) this.log(`變更：${watchDir}${label ? path.sep + label : ""} @${this.now()}`);
     if (!label) {
       if (samePath(watchDir, state.root)) {
@@ -1564,7 +1666,7 @@ export class LiveUpdateEngine {
       this.ensureChildWatch(state, abs);
     }
     if (!this.persistPath(state, abs)) return;
-    absorb(state.pending, abs);
+    absorb(state.pending, abs, state.stableSince);
     if (this.overflowRoot(state)) this.markReconcile(state);
     this.schedule(state);
   }
@@ -1574,6 +1676,7 @@ export class LiveUpdateEngine {
       const relPath = path.relative(state.root, abs);
       if (reason === "expand" && (!relPath || relPath === ".")) this.queue.acceptDirectory(state.root, relPath);
       else this.queue.acceptPath(state.root, relPath, reason);
+      state.stableSince.set(abs, { at: this.now() });
       return true;
     } catch (error) {
       this.onQueueFailure(state, error);
@@ -1642,7 +1745,9 @@ export class LiveUpdateEngine {
         }
       } else if (hadScope) state.reconcile = true;
       for (const item of this.queue.listPaths(state.root)) {
-        absorb(state.pending, path.resolve(state.root, item.relPath));
+        const filePath = path.resolve(state.root, item.relPath);
+        state.stableSince.set(filePath, { at: this.now() });
+        absorb(state.pending, filePath, state.stableSince);
       }
     }
   }
@@ -1650,6 +1755,7 @@ export class LiveUpdateEngine {
   private markReconcile(state: RootState): void {
     state.reconcile = true;
     state.pending.clear();
+    state.stableSince.clear();
   }
 
   refreshRoots(): void {

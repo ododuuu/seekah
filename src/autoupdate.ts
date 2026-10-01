@@ -87,7 +87,10 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     const degraded = root.degradedSubdirectories?.length
       ? ` 降級子目錄=${root.degradedSubdirectories.map(item => `${item.path}（${item.reason}）`).join("、")}`
       : "";
-    lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${degraded}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
+    const timing = root.lastTiming
+      ? ` 計時=事件→排程${root.lastTiming.eventToScheduleMs ?? "—"} ms／穩定${root.lastTiming.stableWaitMs} ms／列舉${root.lastTiming.enumerateMs} ms／取鎖${root.lastTiming.lockMs} ms／提交${root.lastTiming.commitMs} ms`
+      : "";
+    lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${degraded}${timing}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
   }
   return lines.join("\n");
 }

@@ -114,7 +114,7 @@ test("m65 1000 筆以上積壓時，新檔最多等待一個後續局部批次",
   const queue = new LiveWorkQueue(store.databasePath, { now: () => ++clock });
   const applied: AppliedCall[] = [];
   let batch = 0;
-  let waits = 0;
+  let appliedInBatch = 0;
   for (let index = 0; index < 1_000; index++) {
     const relPath = path.join("backlog", `old-${String(index).padStart(4, "0")}.txt`);
     await writeFile(path.join(root, relPath), `old-${index}`, "utf8");
@@ -127,12 +127,13 @@ test("m65 1000 筆以上積壓時，新檔最多等待一個後續局部批次",
 
   const session = await startEngine(store, queue, {
     sleep: async ms => {
-      assert.equal(ms, DEBOUNCE);
-      waits++;
-      batch++;
+      assert.ok(ms > 0 && ms <= DEBOUNCE);
     },
     applyFileUpdate: async (filePath, updateRoot, updateStore, options) => {
+      if (appliedInBatch === 0) batch++;
       applied.push({ relPath: path.relative(updateRoot, filePath), batch });
+      appliedInBatch++;
+      if (appliedInBatch === 500) appliedInBatch = 0;
       if (filePath === target) return applyFileUpdate(filePath, updateRoot, updateStore, options);
       return resultFor(filePath, updateRoot, false);
     },
@@ -142,7 +143,6 @@ test("m65 1000 筆以上積壓時，新檔最多等待一個後續局部批次",
     const targetCall = applied.find(item => item.relPath === targetRelPath);
     assert.ok(targetCall, "新檔必須實際進入局部更新");
     assert.ok(targetCall.batch <= 2, `新檔不應等待超過兩批：${targetCall.batch}`);
-    assert.ok(waits <= 3, `1000+ 積壓應在三批內清空：${waits}`);
     assert.equal(search(store, "m65-new-target").length, 1, "新檔內容必須可搜尋");
   } finally {
     await closeFixture(session, queue, store, temp);
@@ -157,6 +157,7 @@ test("m65 持續新增事件時，舊積壓仍在有限輪內完成", { timeout:
   const queue = new LiveWorkQueue(store.databasePath, { now: () => ++clock });
   const applied: AppliedCall[] = [];
   let batch = 0;
+  let appliedInBatch = 0;
   for (let index = 0; index < 800; index++) {
     const relPath = path.join("backlog", `old-${String(index).padStart(4, "0")}.txt`);
     await writeFile(path.join(root, relPath), `old-${index}`, "utf8");
@@ -164,18 +165,24 @@ test("m65 持續新增事件時，舊積壓仍在有限輪內完成", { timeout:
   }
 
   const session = await startEngine(store, queue, {
-    sleep: async () => {
-      batch++;
-      if (batch > 2) return;
-      const base = (batch - 1) * 600;
-      for (let index = 0; index < 600; index++) {
-        const relPath = path.join("fresh", `event-${String(base + index).padStart(4, "0")}.txt`);
-        await writeFile(path.join(root, relPath), `fresh-${base + index}`, "utf8");
-        queue.acceptPath(root, relPath);
-      }
+    sleep: async ms => {
+      assert.ok(ms > 0 && ms <= DEBOUNCE);
     },
     applyFileUpdate: async (filePath, updateRoot) => {
+      if (appliedInBatch === 0) {
+        batch++;
+        if (batch <= 2) {
+          const base = (batch - 1) * 600;
+          for (let index = 0; index < 600; index++) {
+            const relPath = path.join("fresh", `event-${String(base + index).padStart(4, "0")}.txt`);
+            await writeFile(path.join(root, relPath), `fresh-${base + index}`, "utf8");
+            queue.acceptPath(root, relPath);
+          }
+        }
+      }
       applied.push({ relPath: path.relative(updateRoot, filePath), batch });
+      appliedInBatch++;
+      if (appliedInBatch === 500) appliedInBatch = 0;
       return resultFor(filePath, updateRoot, false);
     },
   });
@@ -200,6 +207,7 @@ test("m65 剛 defer 的噪音積壓不會佔滿下一批而阻塞穩定檔案", 
   const applied: AppliedCall[] = [];
   const noiseAttempts = new Map<string, number>();
   let batch = 0;
+  let appliedInBatch = 0;
   for (let index = 0; index < 1_000; index++) {
     const relPath = path.join("noise", `n-${String(index).padStart(4, "0")}.txt`);
     await writeFile(path.join(root, relPath), `noise-${index}`, "utf8");
@@ -207,16 +215,21 @@ test("m65 剛 defer 的噪音積壓不會佔滿下一批而阻塞穩定檔案", 
   }
   const stableRelPath = path.join("stable", "after-noise.txt");
   const session = await startEngine(store, queue, {
-    sleep: async () => {
-      batch++;
-      if (batch === 1) {
-        await writeFile(path.join(root, stableRelPath), "stable-after-noise", "utf8");
-        queue.acceptPath(root, stableRelPath);
-      }
+    sleep: async ms => {
+      assert.ok(ms > 0 && ms <= DEBOUNCE);
     },
     applyFileUpdate: async (filePath, updateRoot) => {
+      if (appliedInBatch === 0) {
+        batch++;
+        if (batch === 1) {
+          await writeFile(path.join(root, stableRelPath), "stable-after-noise", "utf8");
+          queue.acceptPath(root, stableRelPath);
+        }
+      }
       const relPath = path.relative(updateRoot, filePath);
       applied.push({ relPath, batch });
+      appliedInBatch++;
+      if (appliedInBatch === 500) appliedInBatch = 0;
       if (relPath.startsWith(`noise${path.sep}`)) {
         const attempts = (noiseAttempts.get(relPath) ?? 0) + 1;
         noiseAttempts.set(relPath, attempts);

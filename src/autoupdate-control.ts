@@ -55,6 +55,20 @@ export interface LiveReconcileStatus {
   startedAt: string;
   updatedAt: string;
 }
+export interface LiveTimingSample {
+  at: string;
+  /** 事件收到後至本批開始排程處理的經過時間。沒有事件來源的批次省略。 */
+  eventToScheduleMs?: number;
+  /** 本批檔案穩定觀察等待的總時間。 */
+  stableWaitMs: number;
+  /** 事件／局部佇列候選的檔案系統觀察與目錄展開時間。 */
+  enumerateMs: number;
+  /** writer lock 取得等待時間。 */
+  lockMs: number;
+  /** 已取得 writer lock 後的 SQLite 提交與 checkpoint 時間。 */
+  commitMs: number;
+}
+
 
 export interface LiveRootStatus {
   path: string;
@@ -74,7 +88,7 @@ export interface LiveRootStatus {
   uncertainRescanCount?: number;
   /** §86；目前保留的每根目錄空檔名 watchDir 狀態數，舊程序可缺少。 */
   uncertainRescanStateCount?: number;
-  lastUncertainRescanAt?: string;
+  lastTiming?: LiveTimingSample;
 }
 
 export interface LiveStartupCatchupStatus {
