@@ -163,8 +163,11 @@ function syntheticEnvironment(fixture) {
   };
 }
 
-function startCliAutoupdate(fixture) {
-  const result = spawnSync(process.execPath, [cli, "autoupdate", "start", "--data-dir", fixture.dataDir], {
+function startCliAutoupdate(fixture, startupCatchupMode) {
+  const args = [cli, "autoupdate", "start"];
+  if (startupCatchupMode) args.push("--startup-catchup", startupCatchupMode);
+  args.push("--data-dir", fixture.dataDir);
+  const result = spawnSync(process.execPath, args, {
     cwd: project,
     encoding: "utf8",
     timeout: 30_000,
@@ -173,6 +176,20 @@ function startCliAutoupdate(fixture) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`CLI autoupdate start 結束碼 ${result.status ?? "未知"}：${truncate(result.stderr || result.stdout, 1_200)}`);
+}
+
+function stopCliAutoupdate(fixture) {
+  const result = spawnSync(process.execPath, [cli, "autoupdate", "stop", "--data-dir", fixture.dataDir], {
+    cwd: project,
+    encoding: "utf8",
+    timeout: 30_000,
+    windowsHide: true,
+    env: syntheticEnvironment(fixture),
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0 && !/AUTOUPDATE_NOT_RUNNING|沒有正在執行的自動更新/u.test(result.stderr || result.stdout)) {
+    throw new Error(`CLI autoupdate stop 結束碼 ${result.status ?? "未知"}：${truncate(result.stderr || result.stdout, 1_200)}`);
+  }
 }
 
 function startWorkbench(dataDir, temp) {
@@ -361,7 +378,10 @@ async function installPickerPatch(cdp) {
       documentActions: [],
       clipboardText: null,
       failNextAutoupdate: false,
+      failNextStartupCatchupMode: false,
+      failNextWorkbenchOpenMode: false,
       delayNextSettingsMs: 0,
+      delayNextCatchupMs: 0,
       delayNextIndexStatusMs: 0,
     };
     try {
@@ -387,6 +407,26 @@ async function installPickerPatch(cdp) {
         window.__uiSmoke.documentActions.push(body);
         return new Response(JSON.stringify({ changed: false }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (requestPath === "/api/settings" && body?.startupCatchupMode !== undefined && window.__uiSmoke.failNextStartupCatchupMode) {
+        window.__uiSmoke.failNextStartupCatchupMode = false;
+        const response = new Response(JSON.stringify({ error: "煙霧測試模擬開機補捉策略保存失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
+        const delay = Number(window.__uiSmoke.delayNextSettingsMs) || 0;
+        window.__uiSmoke.delayNextSettingsMs = 0;
+        return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
+      }
+      if (requestPath === "/api/settings" && body?.workbenchOpenMode !== undefined && window.__uiSmoke.failNextWorkbenchOpenMode) {
+        window.__uiSmoke.failNextWorkbenchOpenMode = false;
+        const response = new Response(JSON.stringify({ error: "煙霧測試模擬工作台開啟策略保存失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
+        const delay = Number(window.__uiSmoke.delayNextSettingsMs) || 0;
+        window.__uiSmoke.delayNextSettingsMs = 0;
+        return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
+      }
+      if (requestPath === "/api/autoupdate/catchup" && Number(window.__uiSmoke.delayNextCatchupMs) > 0) {
+        const delay = Number(window.__uiSmoke.delayNextCatchupMs);
+        window.__uiSmoke.delayNextCatchupMs = 0;
+        const response = await originalFetch(input, init);
+        return await new Promise(resolve => setTimeout(() => resolve(response), delay));
+      }
       if (requestPath === "/api/settings" && body?.autoupdateEnabled !== undefined && window.__uiSmoke.failNextAutoupdate) {
         window.__uiSmoke.failNextAutoupdate = false;
         const response = new Response(JSON.stringify({ error: "煙霧測試模擬設定失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
@@ -394,18 +434,17 @@ async function installPickerPatch(cdp) {
         window.__uiSmoke.delayNextSettingsMs = 0;
         return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
       }
-      if (requestPath === "/api/index-status" && Number(window.__uiSmoke.delayNextIndexStatusMs) > 0) {
-        const delay = Number(window.__uiSmoke.delayNextIndexStatusMs);
-        window.__uiSmoke.delayNextIndexStatusMs = 0;
-        const response = await originalFetch(input, init);
-        return await new Promise(resolve => setTimeout(() => resolve(response), delay));
-      }
       return originalFetch(input, init);
     };
     return true;
   })()`);
 }
 
+async function reloadWorkbench(cdp) {
+  await cdp.send("Page.reload", { ignoreCache: true });
+  await waitFor(() => cdp.evaluate("document.readyState === 'complete' && Boolean(document.getElementById('settings-toggle'))"), 30_000);
+  await installPickerPatch(cdp);
+}
 async function settingSnapshot(cdp) {
   return await cdp.evaluate(`(() => {
     const read = id => {
@@ -420,6 +459,29 @@ async function settingSnapshot(cdp) {
     return {
       auto: read("settings-autoupdate"),
       startup: read("settings-autoupdate-startup"),
+      mode: {
+        value: document.getElementById("settings-startup-catchup-mode")?.value || "",
+        disabled: Boolean(document.getElementById("settings-startup-catchup-mode")?.disabled),
+        status: document.getElementById("startup-catchup-mode-status")?.textContent?.trim() || "",
+      },
+      openMode: {
+        value: document.getElementById("settings-workbench-open-mode")?.value || "",
+        disabled: Boolean(document.getElementById("settings-workbench-open-mode")?.disabled),
+        status: document.getElementById("workbench-open-mode-status")?.textContent?.trim() || "",
+      },
+      catchup: {
+        hidden: Boolean(document.getElementById("startup-catchup-banner")?.hidden),
+        status: document.getElementById("startup-catchup-status")?.textContent?.trim() || "",
+        actionsDisabled: Array.from(document.querySelectorAll("#startup-catchup-banner button")).every(node => node.disabled),
+      },
+      open: {
+        hidden: Boolean(document.getElementById("workbench-open-banner")?.hidden),
+        title: document.getElementById("workbench-open-title")?.textContent?.trim() || "",
+        message: document.getElementById("workbench-open-message")?.textContent?.trim() || "",
+        warning: document.getElementById("workbench-open-warning")?.textContent?.trim() || "",
+        status: document.getElementById("workbench-open-status")?.textContent?.trim() || "",
+        actionsDisabled: Array.from(document.querySelectorAll("#workbench-open-banner button")).every(node => node.disabled),
+      },
       status: document.getElementById("settings-status")?.textContent?.trim() || "",
     };
   })()`);
@@ -1059,6 +1121,300 @@ async function runViewport(viewport, chromePath) {
           if (current?.autoupdate?.enabled) await settingsPost(cdp, { autoupdateEnabled: false });
         } catch { /* 主斷言已回報；清理只處理合成 daemon。 */ }
         await sleep(500);
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+      }
+    });
+    await check(`${label} 開機補捉 ask 四動作、auto／off、執行中與設定失敗回復`, async () => {
+      const start = browserEvents.length;
+      const refreshCatchup = async () => {
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.live?.mode === "background";
+        }, 30_000);
+      };
+      const catchupStatus = async () => {
+        const current = await indexStatus(cdp);
+        return current?.autoupdate?.live?.startupCatchup;
+      };
+      const chooseMode = async mode => {
+        await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-startup-catchup-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = ${JSON.stringify(mode)};
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        await waitFor(async () => {
+          const snapshot = await settingSnapshot(cdp);
+          return snapshot.mode?.value === mode && !snapshot.mode?.disabled;
+        }, 30_000);
+      };
+      const refreshPendingAsk = async () => {
+        try {
+          await refreshCatchup();
+          await waitFor(async () => {
+            const status = await catchupStatus();
+            return status?.mode === "ask" && status?.state === "pending";
+          }, 30_000);
+          await waitFor(async () => {
+            const snapshot = await settingSnapshot(cdp);
+            return snapshot.catchup?.hidden === false && snapshot.mode?.value === "ask";
+          }, 30_000);
+        } catch (error) {
+          const current = await indexStatus(cdp).catch(() => null);
+          const snapshot = await settingSnapshot(cdp).catch(() => null);
+          const live = current?.autoupdate?.live;
+          throw new Error(`startup catch-up pending 等待失敗：${JSON.stringify({
+            autoupdate: { enabled: current?.autoupdate?.enabled, live: live ? { mode: live.mode, startupCatchup: live.startupCatchup } : null },
+            snapshot,
+          })}；${error instanceof Error ? error.message : String(error)}`);
+        }
+      };
+
+      const initial = await settingsPost(cdp, { autoupdateEnabled: false, startupCatchupMode: "ask" });
+      expect(initial.status === 200 && initial.data?.startupCatchupMode === "ask", "無法先保存 ask 策略。");
+      startCliAutoupdate(fixture, "ask");
+      try {
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await refreshPendingAsk();
+        let snapshot = await settingSnapshot(cdp);
+        expect(snapshot.catchup?.status.includes("等待你的選擇"), "ask pending 狀態沒有明確文字。");
+        expect(snapshot.catchup?.actionsDisabled === false, "ask pending 四個動作全部停用。");
+
+        await cdp.evaluate("window.__uiSmoke.failNextStartupCatchupMode = true; window.__uiSmoke.delayNextSettingsMs = 250;");
+        await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-startup-catchup-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = "auto";
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        await sleep(50);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.mode?.disabled === true, "開機補捉策略保存期間沒有停用選擇器。");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          return current.mode?.value === "ask" && !current.mode?.disabled;
+        }, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.status.includes("煙霧測試模擬開機補捉策略保存失敗"), "策略保存失敗沒有顯示明確錯誤。");
+
+        await click(cdp, "#startup-catchup-later");
+        await waitFor(async () => (await settingSnapshot(cdp)).catchup?.hidden === true);
+        expect((await catchupStatus())?.state === "pending", "稍後提醒不應消費 downtime gap。");
+
+        stopCliAutoupdate(fixture);
+        startCliAutoupdate(fixture, "ask");
+        await refreshPendingAsk();
+        await click(cdp, "#startup-catchup-skip");
+        await waitFor(async () => (await catchupStatus())?.state === "skipped", 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "略過本次後 banner 沒有隱藏。");
+
+        stopCliAutoupdate(fixture);
+        startCliAutoupdate(fixture, "ask");
+        await refreshPendingAsk();
+        await click(cdp, "#startup-catchup-disable");
+        await waitFor(async () => {
+          const mode = await settingSnapshot(cdp);
+          const status = await catchupStatus();
+          return mode.mode?.value === "off" && !mode.mode?.disabled && status?.mode === "off" && status?.state === "skipped";
+        }, 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "關閉開機補捉後 banner 沒有隱藏。");
+
+        await chooseMode("auto");
+        await waitFor(async () => {
+          const status = await catchupStatus();
+          return status?.mode === "auto" && ["running", "complete"].includes(status?.state);
+        }, 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "auto 模式不應顯示 ask banner。");
+
+        await chooseMode("off");
+        await waitFor(async () => {
+          const status = await catchupStatus();
+          return status?.mode === "off" && status?.state === "skipped";
+        }, 30_000);
+        const explicitBefore = (await indexStatus(cdp)).autoupdate?.live?.localUpdateCount ?? 0;
+        await writeFile(path.join(fixture.root, `ui-smoke-explicit-${viewport.width}.txt`), "UI_SMOKE_EXPLICIT_EVENT\n");
+        await waitFor(async () => ((await indexStatus(cdp)).autoupdate?.live?.localUpdateCount ?? 0) > explicitBefore, 30_000);
+
+        await chooseMode("ask");
+        await refreshPendingAsk();
+        await cdp.evaluate("window.__uiSmoke.delayNextCatchupMs = 1_000");
+        await click(cdp, "#startup-catchup-start");
+        await sleep(50);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.catchup?.actionsDisabled === true && snapshot.catchup?.status.includes("處理中"), "立即補捉執行中沒有停用四個動作或顯示處理中。");
+        await waitFor(async () => ["running", "complete"].includes((await catchupStatus())?.state), 30_000);
+        expect((await catchupStatus())?.mode === "ask", "立即補捉後策略不應被改寫。");
+        await noBrowserErrorsSince(cdp, start, "開機補捉 ask／四動作／auto／off");
+      } finally {
+        try { stopCliAutoupdate(fixture); } catch { /* 主斷言保留；finally 僅清理合成 daemon。 */ }
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+      }
+    });
+    await check(`${label} 工作台開啟模式覆蓋未執行 ask 四動作、auto／off 與設定恢復`, async () => {
+      const start = browserEvents.length;
+      const chooseMode = async mode => {
+        const changed = await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-workbench-open-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = ${JSON.stringify(mode)};
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        expect(changed, "找不到工作台開啟提醒策略選擇器。");
+        await waitFor(async () => {
+          const snapshot = await settingSnapshot(cdp);
+          return snapshot.openMode?.value === mode && !snapshot.openMode?.disabled;
+        }, 30_000);
+      };
+      const chooseStartupMode = async mode => {
+        const changed = await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-startup-catchup-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = ${JSON.stringify(mode)};
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        expect(changed, "找不到 startup catch-up 策略選擇器。");
+        await waitFor(async () => {
+          const snapshot = await settingSnapshot(cdp);
+          return snapshot.mode?.value === mode && !snapshot.mode?.disabled;
+        }, 30_000);
+      };
+      const openSettingsAndRefresh = async () => {
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => (await indexStatus(cdp)).autoupdate?.enabled === false, 30_000);
+      };
+      const waitForStopped = async () => {
+        await waitFor(async () => (await indexStatus(cdp)).autoupdate?.enabled === false, 30_000);
+      };
+      try {
+        try { stopCliAutoupdate(fixture); } catch { /* 已停止即可。 */ }
+        const initial = await settingsPost(cdp, {
+          autoupdateEnabled: false,
+          startupCatchupMode: "ask",
+          workbenchOpenMode: "ask",
+        });
+        expect(initial.status === 200 && initial.data?.workbenchOpenMode === "ask", "無法先保存 workbenchOpenMode ask。");
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+        await reloadWorkbench(cdp);
+        await waitFor(async () => (await indexStatus(cdp)).state === "available", 30_000);
+        await openSettingsAndRefresh();
+        await sleep(500);
+        const initialSnapshot = await settingSnapshot(cdp);
+        const initialStatus = await indexStatus(cdp);
+        expect(initialSnapshot.openMode?.value === "ask" && initialSnapshot.open?.hidden === false,
+          `daemon 未執行時沒有工作台開啟提醒：${JSON.stringify({ status: initialStatus, snapshot: initialSnapshot })}`);
+        let snapshot = initialSnapshot;
+        expect(snapshot.open.title.includes("背景更新目前沒有執行"), "daemon 未執行時沒有工作台開啟提醒。");
+        expect(snapshot.open.message.includes("上次成功同步") && snapshot.open.message.includes("關閉期間新增或修改"), "工作台開啟提醒沒有顯示上次同步與遺漏文字。");
+        expect(snapshot.open.warning.includes("耗用磁碟") && snapshot.open.warning.includes("CPU"), "工作台開啟提醒沒有保留 C:\\ 成本警告文字。");
+        expect(snapshot.open.actionsDisabled === false, "工作台開啟提醒四個動作全部停用。");
+        expect(snapshot.catchup.hidden === true, "daemon 未執行時不應同時顯示 startup catch-up 提醒。");
+
+        await cdp.evaluate("window.__uiSmoke.failNextWorkbenchOpenMode = true; window.__uiSmoke.delayNextSettingsMs = 250;");
+        await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-workbench-open-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = "off";
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        await sleep(50);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.openMode?.disabled === true, "工作台開啟策略保存期間沒有停用選擇器。");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          return current.openMode?.value === "ask" && !current.openMode?.disabled;
+        }, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.status.includes("煙霧測試模擬工作台開啟策略保存失敗"), "工作台開啟策略保存失敗沒有顯示明確錯誤。");
+
+        await click(cdp, "#workbench-open-later");
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === true);
+        expect((await indexStatus(cdp)).autoupdate?.enabled === false, "稍後再說不應啟動 daemon。");
+
+        await chooseMode("off");
+        await chooseMode("ask");
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === false);
+        await click(cdp, "#workbench-open-start");
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.live?.mode === "background"
+            && current.autoupdate.live.startupCatchup?.mode === "auto"
+            && ["running", "complete"].includes(current.autoupdate.live.startupCatchup?.state);
+        }, 30_000);
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === true, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.open?.hidden === true, "明確開啟背景更新並補捉後提醒沒有隱藏。");
+        expect(snapshot.status.includes("啟動背景更新") || snapshot.status.includes("開啟背景更新"), "明確開啟後沒有通知。");
+        stopCliAutoupdate(fixture);
+        await waitForStopped();
+
+        await chooseMode("off");
+        await chooseMode("ask");
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === false);
+        await click(cdp, "#workbench-open-index");
+        await waitFor(async () => (await indexStatus(cdp)).indexing?.state === "complete", 30_000);
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === true, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.open?.hidden === true, "只做一次完整校正後提醒沒有隱藏。");
+        expect((await indexStatus(cdp)).autoupdate?.enabled === false, "只做一次完整校正不應啟動 daemon。");
+
+        await chooseMode("off");
+        await chooseMode("ask");
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === false);
+        await click(cdp, "#workbench-open-disable");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          const status = await indexStatus(cdp);
+          return current.openMode?.value === "off" && current.open?.hidden === true && status.workbenchOpenMode === "off";
+        }, 30_000);
+        await chooseMode("ask");
+        expect((await settingSnapshot(cdp)).openMode?.value === "ask", "工作台開啟提醒策略無法在設定恢復 ask。");
+        await chooseMode("off");
+
+        await chooseMode("auto");
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+        await reloadWorkbench(cdp);
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.live?.mode === "background"
+            && current.autoupdate.live.startupCatchup?.mode === "auto";
+        }, 30_000);
+        await waitFor(async () => (await settingSnapshot(cdp)).open?.hidden === true, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.open?.hidden === true, "workbenchOpenMode auto 啟動後仍顯示工作台開啟提醒。");
+        stopCliAutoupdate(fixture);
+        await waitForStopped();
+
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await chooseMode("off");
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+        await reloadWorkbench(cdp);
+        await waitForStopped();
+        expect((await settingSnapshot(cdp)).open?.hidden === true, "workbenchOpenMode off 仍顯示提醒。");
+
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await chooseMode("ask");
+        await chooseStartupMode("ask");
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+        await writeFile(path.join(fixture.root, `workbench-open-pending-${viewport.width}.txt`), "UI_SMOKE_WORKBENCH_OPEN_PENDING\n");
+        startCliAutoupdate(fixture, "ask");
+        await reloadWorkbench(cdp);
+        await waitFor(async () => (await indexStatus(cdp)).autoupdate?.live?.mode === "background", 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.open?.hidden === true, "daemon 已執行時不應顯示工作台開啟提醒。");
+        await noBrowserErrorsSince(cdp, start, "工作台開啟模式 ask／四動作／auto／off");
+      } finally {
+        try { stopCliAutoupdate(fixture); } catch { /* 主斷言保留；清理合成 daemon。 */ }
         await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
       }
     });

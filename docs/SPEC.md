@@ -2612,6 +2612,49 @@ docsearch doctor
 - `scripts/ui-smoke.mjs` 必須在隔離合成資料及本機 Chrome CDP 實際操作背景更新開關「開、關、再開」，檢查狀態文字、`aria-checked`、POST 回應與 `GET /api/index-status` 一致；另覆蓋登入啟動分離、CLI daemon、前景 watch 拒絕、索引進行中、慢速 status 與失敗回復。
 - 不修改 `src/workbench.ts` 的既有 settings API 行為、autoupdate IPC／MCP／CLI 識別、資料目錄、索引 schema、搜尋結果列、文件選取 checkbox 或 package 版本。
 
+## 81. 背景自動更新的開機補捉策略
+
+依 D113。背景自動更新在程序停止期間無法接收 `fs.watch` 事件；程序下次啟動時，既有 `.work.sqlite` 會留下 downtime gap。工作台需要讓使用者選擇是否在登入啟動或其他背景 daemon 啟動時補捉這段離線期間，而不是把大型根目錄的成本藏起來。本節只處理補捉決策、狀態呈現與本機控制，不改索引內容格式或同步安全邊界。
+
+### 81.1 策略與預設
+
+- 索引 metadata 持久化 `startupCatchupMode`，只接受 `ask`、`auto`、`off`；舊索引沒有此 metadata 時使用 `auto`，保持既有「啟動後校正」行為。
+- `auto`：背景 daemon 建立監看後，對每個已登錄根目錄處理 downtime gap，接續既有可中斷、可恢復、分批校正；校正尚未完成時保留既有工作佇列與 at-least-once 語意。
+- `ask`：daemon 先建立監看並處理已落盤的明確檔案事件，但 downtime gap 保留為待決狀態；工作台顯示補捉提醒，使用者明確選擇後才開始或略過該次補捉。提醒尚未決定時不得以慢速狀態輪詢或頁面重新整理偷偷開始補捉。
+- `off`：不因 downtime gap 啟動整根校正；已落盤的明確檔案待辦仍依既有局部更新處理。略過只移除該次 downtime gap，不刪來源檔案、不刪既有索引列、不改根目錄登錄。
+- `auto` 為手動 `autoupdate start` 的相容預設；登入 Windows 的 Seekah Startup 捷徑須攜帶已保存的策略。既有沒有策略參數的捷徑依 `auto` 解讀。TUI／CLI 不新增互動式詢問：CLI 可用 `--startup-catchup ask|auto|off` 明確指定，`status` 顯示待決狀態；TUI 只顯示狀態並指向工作台處理。
+
+### 81.2 控制與狀態
+
+- `GET /api/index-status` 的設定區必須回傳 `startupCatchupMode`；背景 `autoupdate.live` 必須回傳 `startupCatchup`，至少包含 `mode` 與 `state`（`none`、`pending`、`running`、`complete`、`skipped`）。
+- `ask` 的工作台提醒必須明確說明「補捉會重新檢查自背景更新停止後的離線期間」。若已登錄根目錄是整顆 Windows 磁碟（例如 `C:\`），提醒必須加上可能重新檢查大量檔案、耗用磁碟與 CPU、時間較長的警告；不得承諾固定完成時間。
+- 工作台設定提供三態選擇並以目前 API 回應為準。切換期間控制項 disabled 並顯示處理中；POST 失敗必須恢復送出前的選項與文字，不得留下 optimistic 值。
+- `ask` 提醒提供四個可鍵盤操作的動作：「立即補捉」、「稍後提醒」、「略過本次」及「關閉開機補捉」。立即補捉透過已驗證的本機控制通道開始；稍後不改佇列；略過本次只確認 downtime gap；關閉開機補捉先保存 `off` 再略過目前 gap。每個動作都必須有忙碌／失敗回饋，不能把控制通道失敗顯示成完成。
+- 補捉控制沿用工作台 token、同源 Origin 與 daemon 控制通道 token；不接受任意根目錄或任意路徑，不新增文件內容 API。控制通道無回應、daemon 已停止或前景 `watch` 執行中時回傳固定可理解錯誤。
+- 切換策略或補捉動作前已發出的慢速 `index-status` 回應不得覆寫較新的設定、待決狀態或動作結果；其他索引計數仍可由較晚回應更新。
+
+### 81.3 安全、相容與明確不做
+
+- downtime gap 的來源、世代、frontier、明確事件與排除規則沿用既有 `.work.sqlite`／校正實作；不新增索引 schema、資料遷移、第二套 queue、OCR、embedding、外部服務、LAN 暴露或文件內容外傳。
+- `auto`／`ask`／`off` 不改既有校正的 `removeMissing` 安全前提；只有完成列舉且安全確認的範圍才能移除索引列。停止、失敗、busy 或離線時保留既有索引。
+- 不把 TUI 或 CLI 做成背景 daemon 的互動問答，不在背景程序中等待 stdin，不以頁面載入自動代替使用者在 `ask` 模式的決策；不修改 LocalDocSearch 相容資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP 識別或 package 版本。
+
+### 81.4 驗收與測試
+
+- `test/m77.test.ts` 必須覆蓋三態 metadata/API round-trip、舊索引預設 `auto`、daemon 的 ask／auto／off 行為、四個動作、明確事件在 `off` 仍處理、C:\ 成本提醒、失敗恢復與 stale-response 保護；反向移除策略 guard、控制動作或恢復邏輯時，對應契約至少一項失敗。
+- `scripts/ui-smoke.mjs` 必須使用隔離合成資料與 CDP，在 1440×900 及 1180×800 驗證 ask 提醒的四動作、auto／off、補捉執行中狀態、設定保存失敗恢復、API 與畫面一致及瀏覽器無錯誤。測試不得讀取或接觸使用者真實資料目錄與備份。
+- 驗證必須執行 `npm run build`、M77／相關自動測試及完整 `npm test`；本機 Chrome／win32 證據不得宣稱為公司 Windows 人工驗收。
+### 81.5 工作台開啟時背景更新未執行
+
+- 索引 metadata 另持久化 `workbenchOpenMode`，只接受 `ask`、`auto`、`off`；新索引與既有舊索引都預設 `ask`。它與 `startupCatchupMode` 必須在設定頁並列但用白話區分：前者是「開啟工作台時，若背景更新沒在執行」；後者是「背景更新啟動時，如何處理停止期間的變更」。
+- 工作台載入後，只有在索引存在、至少一個根目錄已登錄、索引沒有進行中，且背景 autoupdate 沒有執行時才評估此模式。背景 daemon 執行中或前景 `watch` 執行中都視為更新正在執行；若 daemon 正在執行且有 startup catch-up pending，優先只顯示 §81 的補捉提醒，不顯示本節提醒。
+- `ask` 只在頁面頂端顯示不遮擋的提醒列，內容必須包含「背景更新目前沒有執行」、上次成功同步時間，以及關閉期間新增或修改的檔案可能尚未進入索引。不得因載入、status refresh 或 `ask` 自動啟動任何程序。
+- 提醒列提供四個可鍵盤操作的動作：「開啟背景更新並補上遺漏」（推薦，呼叫既有開啟流程並以明確參數讓該次 daemon 使用 `startupCatchupMode=auto`，不可因保存的 `ask` 再次詢問）、「只做一次完整校正」（呼叫既有 `POST /api/index`，不得啟動 daemon）、「稍後再說」（只隱藏本次工作階段，下次開啟仍提醒）及「不再提醒」（保存 `workbenchOpenMode=off`，並說明可在設定恢復）。
+- `auto` 只有在使用者已保存此值時，才可在工作台載入時呼叫既有開啟流程並帶明確 `startup-catchup auto` 參數；啟動後顯示通知。`off` 不顯示提醒、不啟動程序、不執行隱藏校正。未明確選擇 `auto` 時，工作台載入不得自動啟動任何程序。
+- 若任一已登錄根目錄是整顆 Windows 磁碟（例如 `C:\`），本節提醒沿用 §81 的成本文案，說明可能重新檢查大量檔案、耗用磁碟與 CPU、需要較長時間，不承諾固定完成時間。
+- 四個動作與三態選擇必須沿用既有 stale-response 保護、處理中 disabled／可見狀態、失敗回復及 aria／live notification 契約。工作台開啟提醒與 daemon startup catch-up 提醒不得同時重複打擾。
+- `test/m77.test.ts` 必須覆蓋 metadata round-trip、新舊索引預設 `ask`、三態行為、auto 啟動且不二次詢問，以及明確反向驗證 ask／off 不得啟動 daemon。`scripts/ui-smoke.mjs` 必須在 1440×900 與 1180×800 覆蓋 daemon 未執行時的 ask 四動作、auto 通知、off 無提醒、daemon 已執行時無本節提醒、「不再提醒」保存 off 且可在設定恢復，以及瀏覽器錯誤／截圖檢查。
+
 ## 80. 全部詞模式的當頁多段落結果
 
 依 D112。本節只擴充搜尋結果在**實際物化頁面**的顯示資料；文件集合、排序、rank、代表位置、舊 `snippet`、總數及 `totalRelation` 沿用第 14、46、48、50、52、62、76、77 節，不因多段落資料改變。

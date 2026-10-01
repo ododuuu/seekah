@@ -1,4 +1,33 @@
 # 設計決策紀錄
+## D113：背景自動更新開機補捉採三態策略與工作台四動作
+
+- 日期：2026-10-01。依 SPEC §81；本分支處理 startup catch-up 策略、daemon 控制通道、工作台提醒／設定、`test/m77.test.ts` 與 UI smoke；不修改 package 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。
+- 事實：
+  - `LiveWorkQueue` 已有 `downtime-gap` 工作項；`LiveUpdateEngine` 在 `.work.sqlite` 重開時會標記 gap 並進入背景校正，但基線沒有讓使用者選擇的策略，且手動／登入啟動共用相同的自動行為。
+  - `autoupdate` 控制通道目前只有 `ping`、`status`、`stop`；工作台 `GET /api/index-status` 已回傳 daemon 狀態，設定 metadata 已有背景更新參數，可沿用同一個本機 token／Origin 邊界。
+  - 使用者可能把整顆 `C:\` 登錄為根目錄；開機補捉不是固定小工作，可能重新檢查大量系統與使用者檔案，提醒必須說明磁碟、CPU 與時間成本，不讀取或量測使用者真實資料作驗收。
+- 決定：
+  - 新增索引 metadata `startup_catchup_mode`，有效值為 `ask`、`auto`、`off`；舊索引預設 `auto`，以免升級後默默改變既有啟動校正行為。登入啟動捷徑保存並傳遞該值；沒有旗標的舊捷徑仍按 `auto`。
+  - `auto` 保留既有啟動校正；`ask` 先掛監看並保留 downtime gap，工作台四動作分別為立即補捉、稍後提醒、略過本次、關閉開機補捉；`off` 只略過 downtime gap，仍處理已落盤的明確路徑待辦。
+  - 手動 `autoupdate start` 以 `auto` 作相容預設，可用 `--startup-catchup ask|auto|off` 明確指定；不在 CLI／TUI 等待互動輸入。TUI／CLI 只顯示狀態，`ask` 的決策由工作台或已驗證控制通道完成。
+  - daemon `LiveStatus` 新增 `startupCatchup` 的 mode／state；新增受 token 保護的 startup-catchup 控制方法，workbench 以 `POST /api/autoupdate/catchup` 代理 `start`／`skip`。`later` 僅保留 pending，不寫入 queue；`disable` 先保存 `off` 再 skip。
+  - 工作台設定直接套用 POST response；策略切換期間 disabled，失敗恢復舊值。status refresh 以設定 revision 保護較新的 mode、live catch-up state 與動作結果；其他狀態欄位仍可更新。
+  - downtime gap 只用既有 queue／reconcile 安全流程清除；不刪來源、不刪既有索引、不改 schema，不把 root path 或文件內容交給外部服務。
+- 理由：
+  - 保留 `auto` 預設可相容既有登入啟動；`ask` 讓 `C:\` 等大根目錄在高成本校正前有明確決策，`off` 提供不做離線補捉但不丟失已落盤事件的選項。
+  - 四個 UI 動作把「現在做」「稍後決定」「只跳過這次」「永久關閉此策略」分開，避免用一個模糊的取消按鈕同時改動 queue 與設定。
+  - 控制沿用 daemon 的私有 IPC／token 與工作台現有 token／Origin，避免新增任意路徑 API 或第二套 writer。
+- 風險與取捨：
+  - `ask` 若使用者不處理，downtime gap 會保持 pending；這是可見的 at-least-once 取捨，不以逾時偷偷補捉。已落盤的明確檔案事件仍可先處理。
+  - 「稍後提醒」只存在目前工作台頁面狀態；重新整理或重新開啟會再次提醒，避免把未決策狀態誤當成永久略過。
+  - 本機合成 smoke 只能證明控制與 UI 契約，不代表公司 Windows 大型 `C:\` 完成時間或人工驗收。
+- 驗證：
+  - `test/m77.test.ts` 覆蓋 metadata round-trip、舊索引 default、ask／auto／off、四動作、明確事件、C:\ 警告文案、POST 失敗恢復與 stale-response；反向移除 guard／action／restore 時測試失敗。
+  - `scripts/ui-smoke.mjs` 以隔離索引在 1440×900、1180×800 進行 ask／四動作／auto／off／執行中／設定恢復與瀏覽器錯誤檢查。
+- 補充：另新增索引 metadata `workbench_open_mode`，有效值為 `ask`、`auto`、`off`；新索引與舊索引都預設 `ask`。它只決定工作台開啟時發現背景更新未執行的處理，不取代 `startup_catchup_mode` 對 daemon 啟動後 downtime gap 的策略。
+- 工作台 `ask` 只顯示不遮擋提醒列，不自行啟動程序；`auto` 才能透過既有開啟流程啟動 daemon，且該次明確傳入 `--startup-catchup auto`，避免保存的 `startupCatchupMode=ask` 再次詢問；`off` 不提醒也不啟動。
+- 工作台載入必須同時確認索引存在、至少一個已登錄根目錄、索引不在進行中，且背景 daemon／前景 `watch` 都未執行；daemon 已執行時只顯示原有 startup catch-up pending 提醒，不重複顯示工作台開啟提醒。
+- 工作台開啟提醒的四動作分離為「開啟背景更新並補上遺漏」（啟動並補捉）、「只做一次完整校正」（既有 `/api/index`、不啟動 daemon）、「稍後再說」（只隱藏本次工作階段）及「不再提醒」（保存 `off`，說明可在設定恢復）。處理中、失敗恢復、stale response 與 aria 契約沿用既有設定／startup catch-up。
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

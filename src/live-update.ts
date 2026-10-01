@@ -17,6 +17,7 @@ import type { LiveMode, LivePhase, LiveRootStatus, LiveStatus, RootWatchState } 
 import { DEFAULT_QUEUE_LIMIT, LiveWorkQueue, QueuePersistError, type LiveWorkQueueOptions } from "./live-queue.js";
 import { RootExclusion } from "./root-exclusion.js";
 import { runBackgroundReconcileBatch, DEFAULT_RECONCILE_BATCH_ENTRIES, DEFAULT_RECONCILE_BATCH_MS } from "./reconcile.js";
+import { resolveStartupCatchupMode, type StartupCatchupAction, type StartupCatchupMode, type StartupCatchupState } from "./startup-catchup.js";
 
 export const DEFAULT_DEBOUNCE_MS = 1500;
 export const DEFAULT_WATCH_RESCAN_MS = 300_000;
@@ -56,6 +57,7 @@ export interface LiveUpdateOptions {
   reconcileMs?: number;
   verbose?: boolean;
   syncNow?: boolean;
+  startupCatchupMode?: StartupCatchupMode;
   watch?: typeof fs.watch;
   /** watcher callback 的同步 lstat 注入點；正式路徑使用 fs.lstatSync，測試可計數。 */
   lstatSync?: typeof fs.lstatSync;
@@ -242,6 +244,9 @@ export class LiveUpdateEngine {
   private rootScanCount = 0;
   private subtreeScanCount = 0;
   private queueDegraded = false;
+  private readonly startupCatchupMode: StartupCatchupMode;
+  private startupCatchupState: StartupCatchupState = "none";
+  private readonly startupCatchupRoots = new Set<string>();
   private readonly queue: LiveWorkQueue;
   private readonly ownsQueue: boolean;
   private readonly recentErrors: string[] = [];
@@ -256,6 +261,7 @@ export class LiveUpdateEngine {
     private readonly options: LiveUpdateOptions,
     private readonly io: LiveIO,
   ) {
+    this.startupCatchupMode = resolveStartupCatchupMode(options.startupCatchupMode);
     this.lastHeartbeatAt = new Date(this.now()).toISOString();
     this.abort = new AbortController();
     this.failed = new Promise<void>(resolve => { this.allFailed = resolve; });
@@ -367,7 +373,8 @@ export class LiveUpdateEngine {
       startedAt: this.options.startedAt ?? this.lastHeartbeatAt,
       lastHeartbeatAt: this.lastHeartbeatAt,
       phase: this.phase,
-      settings: { debounceMs: this.debounceMs, reconcileMs: this.reconcileMs },
+      settings: { debounceMs: this.debounceMs, reconcileMs: this.reconcileMs, startupCatchupMode: this.startupCatchupMode },
+      startupCatchup: { mode: this.startupCatchupMode, state: this.startupCatchupState, roots: [...this.startupCatchupRoots] },
       ready: this.phase !== "starting",
       roots,
       pendingCount: roots.reduce((sum, item) => sum + item.pending, 0),
@@ -405,6 +412,43 @@ export class LiveUpdateEngine {
     this.abort.abort();
     this.allFailed();
   }
+
+  startupCatchupAction(action: StartupCatchupAction): { mode: StartupCatchupMode; state: StartupCatchupState; roots: string[] } {
+    if (this.options.mode !== "background") {
+      throw new WatchError("AUTOUPDATE_FOREGROUND_ACTIVE", "前景監看請在原終端按 Ctrl+C 結束，不能從另一個程序補捉。");
+    }
+    if (action === "skip") {
+      for (const root of this.startupCatchupRoots) this.queue.skipDowntimeGap(root);
+      this.startupCatchupState = "skipped";
+      return { mode: this.startupCatchupMode, state: this.startupCatchupState, roots: [...this.startupCatchupRoots] };
+    }
+    if (this.startupCatchupMode === "off") {
+      throw new WatchError("AUTOUPDATE_CATCHUP_DISABLED", "開機補捉目前已關閉。");
+    }
+    if (this.startupCatchupState !== "pending") {
+      return { mode: this.startupCatchupMode, state: this.startupCatchupState, roots: [...this.startupCatchupRoots] };
+    }
+    this.startupCatchupState = "running";
+    for (const state of this.states.values()) {
+      if (!this.startupCatchupRoots.has(state.root)) continue;
+      if (!this.queue.hasDowntimeGap(state.root) && !this.queue.hasScope(state.root)) continue;
+      state.reconcile = true;
+      state.dirty = true;
+      this.enqueueReady(state.root);
+    }
+    this.refreshStartupCatchupState();
+    return { mode: this.startupCatchupMode, state: this.startupCatchupState, roots: [...this.startupCatchupRoots] };
+  }
+
+  private refreshStartupCatchupState(): void {
+    if (this.startupCatchupState !== "running") return;
+    const complete = [...this.startupCatchupRoots].every(root => {
+      const state = this.states.get(root);
+      return !this.queue.hasDowntimeGap(root) && (!state || !state.reconcile);
+    });
+    if (complete) this.startupCatchupState = "complete";
+  }
+
 
   private enqueueReady(root: string): void {
     if (this.stopping) return;
@@ -638,6 +682,7 @@ export class LiveUpdateEngine {
     } finally {
       release?.();
       state.running = false;
+      this.refreshStartupCatchupState();
       this.refreshRoots();
       if (writerBusy) this.scheduleBusy(state);
       else {
@@ -1428,11 +1473,28 @@ export class LiveUpdateEngine {
 
   private hydrateFromQueue(): void {
     for (const state of this.states.values()) {
+      const hadScope = this.queue.hasScope(state.root);
       if (this.queue.reopened) {
-        try { this.queue.markDowntimeGap(state.root); }
-        catch (error) { this.onQueueFailure(state, error); continue; }
-        state.reconcile = true;
-      } else if (this.queue.hasScope(state.root)) state.reconcile = true;
+        try {
+          if (!hadScope) this.queue.markDowntimeGap(state.root);
+        } catch (error) {
+          this.onQueueFailure(state, error);
+          continue;
+        }
+        this.startupCatchupRoots.add(state.root);
+        if (this.startupCatchupMode === "auto") {
+          this.startupCatchupState = "running";
+          state.reconcile = true;
+        } else if (this.startupCatchupMode === "off") {
+          try { this.queue.skipDowntimeGap(state.root); }
+          catch (error) { this.onQueueFailure(state, error); continue; }
+          this.startupCatchupState = "skipped";
+          state.reconcile = hadScope;
+        } else {
+          this.startupCatchupState = "pending";
+          state.reconcile = false;
+        }
+      } else if (hadScope) state.reconcile = true;
       for (const item of this.queue.listPaths(state.root)) {
         absorb(state.pending, path.resolve(state.root, item.relPath));
       }
@@ -1492,7 +1554,9 @@ export class LiveUpdateEngine {
       this.armHeartbeat();
       this.armRootRefresh();
       this.hydrateFromQueue();
-      if (this.options.syncNow !== false) {
+      const runInitialSync = this.options.syncNow !== false
+        && (this.options.mode !== "background" || this.startupCatchupMode === "auto");
+      if (runInitialSync) {
         for (const state of this.states.values()) {
           if (this.stopping) break;
           if (state.failed && !this.reconcileMs) continue;

@@ -82,7 +82,7 @@ function quoteWindowsArgument(value: string): string {
 function shortcutArguments(cliPath: string, dataDir: string, settings?: AutoupdateSettings): string {
   return [
     quoteWindowsArgument(cliPath), "autoupdate", "start", "--data-dir", quoteWindowsArgument(dataDir),
-    ...(settings ? ["--debounce", String(settings.debounceMs), "--reconcile", String(settings.reconcileMs)] : []),
+    ...(settings ? ["--debounce", String(settings.debounceMs), "--reconcile", String(settings.reconcileMs), "--startup-catchup", settings.startupCatchupMode ?? "auto"] : []),
   ].join(" ");
 }
 

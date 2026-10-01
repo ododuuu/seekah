@@ -28,10 +28,12 @@ import { productVersion } from "./version.js";
 import { OperationCancelledError, type ProgressUpdate } from "./progress.js";
 import { isSqliteBusy, IndexBusyError } from "./write-lock.js";
 import { INDEX_BUSY_CLIENT_MESSAGE, INDEX_RECOVERY_REQUIRED_MESSAGE, isRecoveryRequired } from "./index-errors.js";
-import { AutoupdateError, autoupdateStart, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
+import { AutoupdateError, autoupdateCatchup, autoupdateStart, autoupdateStartForWorkbench, autoupdateStatus, autoupdateStop, resolveAutoupdateReconcile } from "./autoupdate.js";
 import { resolveWatchDebounce } from "./live-update.js";
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus, type StartupCommandOptions } from "./autoupdate-startup.js";
 import type { AutoupdateSettings } from "./autoupdate-control.js";
+import { isStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
+import { isWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
 import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
 
 const HOST = "127.0.0.1";
@@ -211,7 +213,7 @@ async function readWorkbenchIndexStatus(
   const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
   if (!existsSync(databasePath)) return {
     state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true,
-    totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings,
+    totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
   };
   try {
     return await openStore(databasePath, store => {
@@ -223,7 +225,7 @@ async function readWorkbenchIndexStatus(
         trash: store.trashRoots(),
         deleteConfirmation: store.deleteConfirmationEnabled(),
         totalMode: store.searchTotalMode(),
-        autoupdateSettings: store.autoupdateSettings(),
+        autoupdateSettings: store.autoupdateSettings(), startupCatchupMode: store.startupCatchupMode(), workbenchOpenMode: store.workbenchOpenMode(),
       };
     }, createStore);
   } catch (error) {
@@ -232,14 +234,14 @@ async function readWorkbenchIndexStatus(
         state: "unavailable" as const, readAt, errorCode: "INDEX_RECOVERY_REQUIRED",
         message: INDEX_RECOVERY_REQUIRED_MESSAGE,
         trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
-        autoupdateSettings: defaultAutoupdateSettings,
+        autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
       };
     }
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
     return {
       state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。",
       trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
-      autoupdateSettings: defaultAutoupdateSettings,
+      autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
     };
   }
 }
@@ -287,6 +289,20 @@ function resolveWorkbenchAutoupdateSettings(body: Record<string, unknown>, curre
     reconcileMs = resolveAutoupdateReconcile(body.autoupdateReconcileMs);
   }
   return { debounceMs, reconcileMs };
+}
+
+function resolveWorkbenchStartupCatchupMode(body: Record<string, unknown>, current: StartupCatchupMode): StartupCatchupMode {
+  const value = body.startupCatchupMode;
+  if (value === undefined) return current;
+  if (!isStartupCatchupMode(value)) throw new Error("開機補捉策略無效。");
+  return value;
+}
+
+function resolveWorkbenchOpenMode(body: Record<string, unknown>, current: WorkbenchOpenMode): WorkbenchOpenMode {
+  const value = body.workbenchOpenMode;
+  if (value === undefined) return current;
+  if (!isWorkbenchOpenMode(value)) throw new Error("工作台開啟提醒策略無效。");
+  return value;
 }
 
 async function readAutoupdateStatus(databasePath: string) {
@@ -793,21 +809,66 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         json(response, 200, { removed: await withIndexStore(options.databasePath, { ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => store.purgeTrashRoots(roots)) });
         return;
       }
+      if (request.method === "POST" && url.pathname === "/api/autoupdate/catchup") {
+        const body = await readJson(request);
+        if (body.action !== "start" && body.action !== "skip") throw new Error("開機補捉動作無效。");
+        const result = await autoupdateCatchup(body.action, options.databasePath);
+        const startupCatchupMode = result.live.startupCatchup?.mode ?? "auto";
+        json(response, 200, {
+          startupCatchupMode,
+          autoupdate: { enabled: true, available: true, message: result.text, live: result.live },
+        });
+        return;
+      }
+      if (request.method === "POST" && url.pathname === "/api/autoupdate/workbench-open") {
+        const body = await readJson(request);
+        if (body.automatic === true) {
+          const mode = await openStore(options.databasePath, store => store.workbenchOpenMode(), options.createIndexStore);
+          if (mode !== "auto") throw new Error("只有明確保存為「開啟時自動補捉」時，工作台才能自動啟動背景更新。");
+        }
+        if (indexingBusy || indexing.state === "running" || indexing.state === "stopping") {
+          throw Object.assign(new Error("索引進行中，請完成後再開啟背景更新。"), { statusCode: 409 });
+        }
+        const result = await autoupdateStartForWorkbench(options.databasePath, {
+          cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)),
+        });
+        const startupCatchupMode = await openStore(options.databasePath, store => store.startupCatchupMode(), options.createIndexStore);
+        json(response, 200, {
+          message: result.text,
+          startupCatchupMode,
+          autoupdate: await readAutoupdateStatus(options.databasePath),
+        });
+        return;
+      }
       if (request.method === "POST" && url.pathname === "/api/settings") {
         const body = await readJson(request);
         if (body.deleteConfirmation !== undefined && typeof body.deleteConfirmation !== "boolean") throw new Error("刪除提醒設定無效。");
         if (body.autoupdateEnabled !== undefined && typeof body.autoupdateEnabled !== "boolean") throw new Error("背景自動更新設定無效。");
         if (body.autoupdateStartup !== undefined && typeof body.autoupdateStartup !== "boolean") throw new Error("登入啟動設定無效。");
+        if (body.workbenchOpenMode !== undefined && !isWorkbenchOpenMode(body.workbenchOpenMode)) throw new Error("工作台開啟提醒策略無效。");
         if (body.totalMode !== undefined && body.totalMode !== "fast" && body.totalMode !== "exact") throw new Error("總筆數設定無效。");
-        const hasAutoupdateParameterUpdate = body.autoupdateDebounceMs !== undefined || body.autoupdateReconcileMs !== undefined;
+        const hasAutoupdateParameterUpdate = body.autoupdateDebounceMs !== undefined
+          || body.autoupdateReconcileMs !== undefined || body.startupCatchupMode !== undefined;
+        const hasWorkbenchOpenModeUpdate = body.workbenchOpenMode !== undefined;
         const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
         let currentAutoupdateSettings = defaultAutoupdateSettings;
+        let currentStartupCatchupMode: StartupCatchupMode = "auto";
+        let currentWorkbenchOpenMode: WorkbenchOpenMode = "ask";
         if (existsSync(options.databasePath)) {
-          currentAutoupdateSettings = await withIndexStore(options.databasePath, { readOnly: true, ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => store.autoupdateSettings());
+          const current = await withIndexStore(options.databasePath, { readOnly: true, ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => ({
+            settings: store.autoupdateSettings(),
+            startupCatchupMode: store.startupCatchupMode(),
+            workbenchOpenMode: store.workbenchOpenMode(),
+          }));
+          currentAutoupdateSettings = current.settings;
+          currentStartupCatchupMode = current.startupCatchupMode;
+          currentWorkbenchOpenMode = current.workbenchOpenMode;
         }
         const autoupdateSettings = resolveWorkbenchAutoupdateSettings(body, currentAutoupdateSettings);
-        if (hasAutoupdateParameterUpdate && !existsSync(options.databasePath)) {
-          throw new Error("索引尚未建立；無法保存背景自動更新參數。");
+        const startupCatchupMode = resolveWorkbenchStartupCatchupMode(body, currentStartupCatchupMode);
+        const workbenchOpenMode = resolveWorkbenchOpenMode(body, currentWorkbenchOpenMode);
+        if ((hasAutoupdateParameterUpdate || hasWorkbenchOpenModeUpdate) && !existsSync(options.databasePath)) {
+          throw new Error("索引尚未建立；無法保存工作台開啟提醒／背景自動更新設定。");
         }
         const liveBefore = hasAutoupdateParameterUpdate
           ? (await readAutoupdateStatus(options.databasePath)).live
@@ -817,31 +878,37 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           : undefined;
         const autoupdateParametersChanged = Boolean(liveBefore && hasAutoupdateParameterUpdate
           && (liveBefore.settings.debounceMs !== autoupdateSettings.debounceMs
-            || liveBefore.settings.reconcileMs !== autoupdateSettings.reconcileMs));
+            || liveBefore.settings.reconcileMs !== autoupdateSettings.reconcileMs
+            || (liveBefore.settings.startupCatchupMode ?? "auto") !== startupCatchupMode));
         if (autoupdateParametersChanged && liveBefore?.mode === "foreground") {
           throw new AutoupdateError("AUTOUPDATE_FOREGROUND_ACTIVE", "前景監看請在原終端按 Ctrl+C 結束，不能從另一個程序遠端停止。");
         }
         let deleteConfirmation = true;
         let totalMode: "fast" | "exact" = "fast";
-        if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || existsSync(options.databasePath)) {
+        if (body.deleteConfirmation !== undefined || body.totalMode !== undefined || hasAutoupdateParameterUpdate || hasWorkbenchOpenModeUpdate || existsSync(options.databasePath)) {
           const saved = await withIndexStore(options.databasePath, { ...(options.createIndexStore ? { createStore: options.createIndexStore } : {}) }, store => {
             if (typeof body.deleteConfirmation === "boolean") store.setDeleteConfirmationEnabled(body.deleteConfirmation);
             if (body.totalMode === "fast" || body.totalMode === "exact") store.setSearchTotalMode(body.totalMode);
-            if (hasAutoupdateParameterUpdate) store.setAutoupdateSettings(autoupdateSettings);
+            if (hasAutoupdateParameterUpdate) {
+              store.setAutoupdateSettings(autoupdateSettings);
+              store.setStartupCatchupMode(startupCatchupMode);
+            }
+            if (hasWorkbenchOpenModeUpdate) store.setWorkbenchOpenMode(workbenchOpenMode);
             return { deleteConfirmation: store.deleteConfirmationEnabled(), totalMode: store.searchTotalMode() };
           });
           deleteConfirmation = saved.deleteConfirmation;
           totalMode = saved.totalMode;
         }
+        const daemonSettings: AutoupdateSettings = { ...autoupdateSettings, startupCatchupMode };
         let settingsMessage = "";
         if (body.autoupdateEnabled === true) {
           if (autoupdateParametersChanged) {
             await autoupdateStop(options.databasePath);
-            await autoupdateStart(autoupdateSettings, options.databasePath,
+            await autoupdateStart(daemonSettings, options.databasePath,
               { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
             settingsMessage = "背景自動更新已依新設定重新啟動。";
           } else {
-            await autoupdateStart(autoupdateSettings, options.databasePath,
+            await autoupdateStart(daemonSettings, options.databasePath,
               { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
           }
         } else if (body.autoupdateEnabled === false) {
@@ -851,26 +918,28 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           }
         } else if (autoupdateParametersChanged) {
           await autoupdateStop(options.databasePath);
-          await autoupdateStart(autoupdateSettings, options.databasePath,
+          await autoupdateStart(daemonSettings, options.databasePath,
             { cliPath: fileURLToPath(new URL("./cli.js", import.meta.url)) });
           settingsMessage = "背景自動更新已依新設定重新啟動。";
         }
         if (body.autoupdateStartup !== undefined) {
           const startupOptions = workbenchStartupOptions(options.databasePath, options);
           if (body.autoupdateStartup === true) {
-            await autoupdateStartupEnable({ ...startupOptions, autoupdateSettings });
+            await autoupdateStartupEnable({ ...startupOptions, autoupdateSettings: daemonSettings });
           } else {
             autoupdateStartupDisable(startupOptions);
           }
         } else if (startupBefore?.enabled) {
           // Owned startup entries follow the saved GUI parameters without changing
           // the CLI's legacy no-flag shortcut output.
-          await autoupdateStartupEnable({ ...workbenchStartupOptions(options.databasePath, options), autoupdateSettings });
+          await autoupdateStartupEnable({ ...workbenchStartupOptions(options.databasePath, options), autoupdateSettings: daemonSettings });
         }
         json(response, 200, {
           deleteConfirmation,
           totalMode,
           autoupdateSettings,
+          startupCatchupMode,
+          workbenchOpenMode,
           autoupdate: await readAutoupdateStatus(options.databasePath),
           autoupdateStartup: readAutoupdateStartupStatus(options.databasePath, options),
           ...(settingsMessage ? { message: settingsMessage } : {}),
