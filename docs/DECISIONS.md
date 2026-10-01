@@ -1,4 +1,33 @@
 # 設計決策紀錄
+## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
+
+- 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。
+- 事實：
+  - §80／D112 已讓 `/api/search` 的 `all-terms` 當頁結果帶有 `passages` 與 `omittedTerms`。每個 passage 已有正規化命中詞、既有位置標籤、既有截斷片段與 `snippetTruncated`；搜尋集合、rank、代表 `snippet` 與翻頁資料不需要前端重新推算。
+  - 基線工作台列表只顯示一個代表片段，表格只顯示標題與既有欄位；既有高亮以 `createTextNode`／`mark` 建立，複製按鈕與檔名選取 guard 已由 §78 提供。
+  - 使用者要搜尋 `private node` 時，若兩個詞位於第一行與最後一行，必須在同一個結果標題下看到兩個位置不同的片段；框選片段時不應把位置或詞標籤複製進文件文字。
+- 決定：
+  - 只有 `passages.length > 1` 時，列表以結果列內的 `ul`／`li` 顯示多段 passage；表格在標題／既有複製控制項下方使用相同的多段落 helper。每段採兩欄 grid，左欄放不可選取的 location／terms 標籤，右欄用可選取的段落 `snippet`。
+  - `passages` 不存在、為空或只有一段時，列表沿用原有 filename-only、代表 `snippet` 與無片段提示；表格沿用原有六欄。`omittedTerms > 0` 是明確例外，仍追加「還有 N 個詞未列出」提示但不虛構 passage。
+  - passage 高亮接受 passage 自己的 `terms`，仍只用 `createTextNode`、`textContent`、`mark` 與既有 DOM helper，不使用 `innerHTML`／`outerHTML`。snippet 的文字節點維持 API 原文；標籤套用 `user-select: none`，並為每段提供 `aria-label`／`ul`／`li` 語意。
+  - 不把多段落資料放入 context drawer、複製值、open／reveal action 或結果排序流程；模式切換、分頁、選取與既有按鈕只重用現有 state／handler。
+- 理由：
+  - 多段落是既有結果資料的前端投影；以一個共用 helper 同時供列表與表格可避免兩個 DOM 契約漂移，也不會增加 API 或全文讀取。
+  - 僅在超過一段時替換列表的代表片段，能避免重複內容；單段與 phrase 仍保留原外觀，降低既有選取、開啟與複製行為的回歸面。
+  - 標籤與 snippet 分離選取範圍，配合標籤 `user-select: none`，可讓使用者直接框選／複製 API 原始 snippet；原生清單與 aria label 不依賴色彩，對輔助技術較穩定。
+- 否決：
+  - 不用 `innerHTML`、不把 `<mark>` 字串直接插入 DOM、不在片段前後加入括號或「第 N 行」文字，因此 Selection API 不會產生額外字元。
+  - 不把單一 passage 強制改成新的兩欄元件、不把 filename-only 結果偽造成正文、不改搜尋 query、rank、total、totalRelation、分頁或上下文資料契約。
+  - 不把 passage label 納入複製按鈕、不刪除既有路徑／檔名複製控制、不讀取真實使用者資料目錄或啟動使用者 daemon。
+- 驗證：
+  - `test/m78.test.ts` 靜態檢查列表／表格列建立、多段落邊界、omitted 提示、DOM 安全、清單／aria、選取 CSS 與既有複製控制；以反向字串變體確認移除關鍵條件時會失敗。`test/m74.test.ts` 同步保留既有選取／複製／selection guard 回歸，並明確允許 passage label 的 `user-select: none` 例外；定向共 4 tests，4 pass、0 fail。
+  - `scripts/ui-smoke.mjs` 在 1180×800 與 1440×900 使用隔離 `LOCALDOCSEARCH_DATA_DIR`、合成 first-line／last-line 文件與 Chrome CDP，驗證 all-terms 多段落、single／phrase、list／table、snippet 原文選取、複製、mode switch、pagination、context drawer、無瀏覽器錯誤與截圖；兩個 viewport 合計 46 項通過、0 項失敗。截圖：`C:\Users\mains\AppData\Local\Temp\seekah-ui-smoke-output-t2Xjcy\ui-smoke-1440x900.png`、`C:\Users\mains\AppData\Local\Temp\seekah-ui-smoke-output-t2Xjcy\ui-smoke-1180x800.png`，已檢視畫面。
+  - `npm test`：TypeScript build 成功；460 tests，457 pass、3 skip、0 fail。證據只代表本機合成資料，不宣稱公司 Windows 驗收。
+- 相容與風險：
+  - 保留 `LocalDocSearch` 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、既有 IPC／MCP／`docsearch` 識別、搜尋 API 與結果 action；只新增前端結果節點與 CSS。
+  - passage snippet 使用 API 已截斷文字，若未來 API 改變 `terms` 或 snippet shape，UI 仍以安全文字節點顯示，但 m78／smoke 會先揭露契約漂移。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D113：背景自動更新開機補捉採三態策略與工作台四動作
 
 - 日期：2026-10-01。依 SPEC §81；本分支處理 startup catch-up 策略、daemon 控制通道、工作台提醒／設定、`test/m77.test.ts` 與 UI smoke；不修改 package 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。
@@ -28,34 +57,6 @@
 - 工作台 `ask` 只顯示不遮擋提醒列，不自行啟動程序；`auto` 才能透過既有開啟流程啟動 daemon，且該次明確傳入 `--startup-catchup auto`，避免保存的 `startupCatchupMode=ask` 再次詢問；`off` 不提醒也不啟動。
 - 工作台載入必須同時確認索引存在、至少一個已登錄根目錄、索引不在進行中，且背景 daemon／前景 `watch` 都未執行；daemon 已執行時只顯示原有 startup catch-up pending 提醒，不重複顯示工作台開啟提醒。
 - 工作台開啟提醒的四動作分離為「開啟背景更新並補上遺漏」（啟動並補捉）、「只做一次完整校正」（既有 `/api/index`、不啟動 daemon）、「稍後再說」（只隱藏本次工作階段）及「不再提醒」（保存 `off`，說明可在設定恢復）。處理中、失敗恢復、stale response 與 aria 契約沿用既有設定／startup catch-up。
-## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
-
-- 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。
-- 事實：
-  - §80／D112 已讓 `/api/search` 的 `all-terms` 當頁結果帶有 `passages` 與 `omittedTerms`。每個 passage 已有正規化命中詞、既有位置標籤、既有截斷片段與 `snippetTruncated`；搜尋集合、rank、代表 `snippet` 與翻頁資料不需要前端重新推算。
-  - 基線工作台列表只顯示一個代表片段，表格只顯示標題與既有欄位；既有高亮以 `createTextNode`／`mark` 建立，複製按鈕與檔名選取 guard 已由 §78 提供。
-  - 使用者要搜尋 `private node` 時，若兩個詞位於第一行與最後一行，必須在同一個結果標題下看到兩個位置不同的片段；框選片段時不應把位置或詞標籤複製進文件文字。
-- 決定：
-  - 只有 `passages.length > 1` 時，列表以結果列內的 `ul`／`li` 顯示多段 passage；表格在標題／既有複製控制項下方使用相同的多段落 helper。每段採兩欄 grid，左欄放不可選取的 location／terms 標籤，右欄用可選取的段落 `snippet`。
-  - `passages` 不存在、為空或只有一段時，列表沿用原有 filename-only、代表 `snippet` 與無片段提示；表格沿用原有六欄。`omittedTerms > 0` 是明確例外，仍追加「還有 N 個詞未列出」提示但不虛構 passage。
-  - passage 高亮接受 passage 自己的 `terms`，仍只用 `createTextNode`、`textContent`、`mark` 與既有 DOM helper，不使用 `innerHTML`／`outerHTML`。snippet 的文字節點維持 API 原文；標籤套用 `user-select: none`，並為每段提供 `aria-label`／`ul`／`li` 語意。
-  - 不把多段落資料放入 context drawer、複製值、open／reveal action 或結果排序流程；模式切換、分頁、選取與既有按鈕只重用現有 state／handler。
-- 理由：
-  - 多段落是既有結果資料的前端投影；以一個共用 helper 同時供列表與表格可避免兩個 DOM 契約漂移，也不會增加 API 或全文讀取。
-  - 僅在超過一段時替換列表的代表片段，能避免重複內容；單段與 phrase 仍保留原外觀，降低既有選取、開啟與複製行為的回歸面。
-  - 標籤與 snippet 分離選取範圍，配合標籤 `user-select: none`，可讓使用者直接框選／複製 API 原始 snippet；原生清單與 aria label 不依賴色彩，對輔助技術較穩定。
-- 否決：
-  - 不用 `innerHTML`、不把 `<mark>` 字串直接插入 DOM、不在片段前後加入括號或「第 N 行」文字，因此 Selection API 不會產生額外字元。
-  - 不把單一 passage 強制改成新的兩欄元件、不把 filename-only 結果偽造成正文、不改搜尋 query、rank、total、totalRelation、分頁或上下文資料契約。
-  - 不把 passage label 納入複製按鈕、不刪除既有路徑／檔名複製控制、不讀取真實使用者資料目錄或啟動使用者 daemon。
-- 驗證：
-  - `test/m78.test.ts` 靜態檢查列表／表格列建立、多段落邊界、omitted 提示、DOM 安全、清單／aria、選取 CSS 與既有複製控制；以反向字串變體確認移除關鍵條件時會失敗。`test/m74.test.ts` 同步保留既有選取／複製／selection guard 回歸，並明確允許 passage label 的 `user-select: none` 例外；定向共 4 tests，4 pass、0 fail。
-  - `scripts/ui-smoke.mjs` 在 1180×800 與 1440×900 使用隔離 `LOCALDOCSEARCH_DATA_DIR`、合成 first-line／last-line 文件與 Chrome CDP，驗證 all-terms 多段落、single／phrase、list／table、snippet 原文選取、複製、mode switch、pagination、context drawer、無瀏覽器錯誤與截圖；兩個 viewport 合計 46 項通過、0 項失敗。截圖：`C:\Users\mains\AppData\Local\Temp\seekah-ui-smoke-output-t2Xjcy\ui-smoke-1440x900.png`、`C:\Users\mains\AppData\Local\Temp\seekah-ui-smoke-output-t2Xjcy\ui-smoke-1180x800.png`，已檢視畫面。
-  - `npm test`：TypeScript build 成功；460 tests，457 pass、3 skip、0 fail。證據只代表本機合成資料，不宣稱公司 Windows 驗收。
-- 相容與風險：
-  - 保留 `LocalDocSearch` 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、既有 IPC／MCP／`docsearch` 識別、搜尋 API 與結果 action；只新增前端結果節點與 CSS。
-  - passage snippet 使用 API 已截斷文字，若未來 API 改變 `terms` 或 snippet shape，UI 仍以安全文字節點顯示，但 m78／smoke 會先揭露契約漂移。
-- 版本：待合併時決定；本分支不修改 `package.json` 版本。
 
 ## D112：全部詞模式只在當頁物化多段落
 

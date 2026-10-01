@@ -2612,6 +2612,35 @@ docsearch doctor
 - `scripts/ui-smoke.mjs` 必須在隔離合成資料及本機 Chrome CDP 實際操作背景更新開關「開、關、再開」，檢查狀態文字、`aria-checked`、POST 回應與 `GET /api/index-status` 一致；另覆蓋登入啟動分離、CLI daemon、前景 watch 拒絕、索引進行中、慢速 status 與失敗回復。
 - 不修改 `src/workbench.ts` 的既有 settings API 行為、autoupdate IPC／MCP／CLI 識別、資料目錄、索引 schema、搜尋結果列、文件選取 checkbox 或 package 版本。
 
+## 80. 全部詞模式的當頁多段落結果
+
+依 D112。本節只擴充搜尋結果在**實際物化頁面**的顯示資料；文件集合、排序、rank、代表位置、舊 `snippet`、總數及 `totalRelation` 沿用第 14、46、48、50、52、62、76、77 節，不因多段落資料改變。
+
+### 80.1 回應欄位
+
+- `mode=all-terms` 的每筆當頁結果追加 `passages` 陣列與 `omittedTerms` 整數。`passages` 元素包含：
+  - `terms`：此段落實際命中的唯一正規化搜尋詞，依搜尋詞在文件中的首次出現順序排列；
+  - `heading`：該段落的既有標題，沒有則為 `null`；
+  - `location`：沿用索引的既有位置標籤，例如行號、段落或頁碼，沒有則為 `null`；
+  - `snippet`、`snippetTruncated`：沿用既有片段產生器、正規化對回原文、約 160 code point 上限及截斷語意。
+- `omittedTerms` 是搜尋詞去重後超過前四詞的數量。多段落資料最多處理前四個搜尋詞；搜尋本身仍以完整詞集合判定，不能因顯示上限改變命中結果。
+- 每個詞取文件正文（標題或文字區塊）第一次出現的 block／行。相同 block，或首次命中 block 的 ordinal 相鄰，合併為一個 passage；`terms` 不重複，段落依文件 ordinal 順序排列。合併段落的 `location` 取第一個 block 的既有位置標籤，片段來源以合併後的原文區塊交給既有片段邏輯。
+- 詞只命中檔名、結果是 `filenameOnly`，或文件沒有可讀文字區塊時，`passages` 為空；既有 `filenameOnly`、`snippet`、`location` 與命中原因仍保留。
+- `mode=phrase` 維持既有搜尋語意；回應可省略 `passages`，或只帶既有代表片段的一段。`omittedTerms` 不適用時為 `0`。
+
+### 80.2 物化邊界與索引相容
+
+- 多段落只在 `materialize` 當頁結果時計算，最多處理當頁的 20 筆文件；建立搜尋 stream、翻頁前的候選／rank、`total`、`totalRelation` 與排序不得讀取或建立多段落資料。
+- `field=content`、`field=all`、`field=filename` 沿用既有欄位範圍。檔名與正文分散命中時，只為實際正文命中詞建立段落；檔名-only 詞沒有虛構的正文段落。
+- current chunk store、完成或未完成 block-index 的舊索引，以及 `createLegacyStore` 形狀都必須經既有 block／payload 讀取邊界取得文字；不得假設另一種形狀的表格存在，也不得因顯示段落觸發索引升級。
+- 舊結果欄位是追加相容；`snippet` 仍是代表片段，不改為第一段或多段拼接。Workbench `/api/search`、MCP `search_documents` 及 CLI `search` 只在既有輸出上追加可讀的段落資料。
+
+### 80.3 驗收
+
+- `test/m76.test.ts` 覆蓋 current、block-index、legacy 三種形狀；不同／同一／相鄰行、重複詞、四詞以上、中文與全形、大小寫、filename-only，以及 `field=content|all|filename`。
+- 差分必須逐筆證明加入多段落前後的文件集合、順序、rank、`total` 與 `totalRelation` 相同；phrase、空正文及不存在段落也要反向驗證。
+- 測試涵蓋 Workbench `/api/search`、MCP `search_documents` 與 CLI 追加欄位，並確認非當頁與總數路徑不物化 passages。執行完整 `npm test`；本機證據不得宣稱公司 Windows 驗收。
+
 ## 81. 背景自動更新的開機補捉策略
 
 依 D113。背景自動更新在程序停止期間無法接收 `fs.watch` 事件；程序下次啟動時，既有 `.work.sqlite` 會留下 downtime gap。工作台需要讓使用者選擇是否在登入啟動或其他背景 daemon 啟動時補捉這段離線期間，而不是把大型根目錄的成本藏起來。本節只處理補捉決策、狀態呈現與本機控制，不改索引內容格式或同步安全邊界。
@@ -2654,35 +2683,6 @@ docsearch doctor
 - 若任一已登錄根目錄是整顆 Windows 磁碟（例如 `C:\`），本節提醒沿用 §81 的成本文案，說明可能重新檢查大量檔案、耗用磁碟與 CPU、需要較長時間，不承諾固定完成時間。
 - 四個動作與三態選擇必須沿用既有 stale-response 保護、處理中 disabled／可見狀態、失敗回復及 aria／live notification 契約。工作台開啟提醒與 daemon startup catch-up 提醒不得同時重複打擾。
 - `test/m77.test.ts` 必須覆蓋 metadata round-trip、新舊索引預設 `ask`、三態行為、auto 啟動且不二次詢問，以及明確反向驗證 ask／off 不得啟動 daemon。`scripts/ui-smoke.mjs` 必須在 1440×900 與 1180×800 覆蓋 daemon 未執行時的 ask 四動作、auto 通知、off 無提醒、daemon 已執行時無本節提醒、「不再提醒」保存 off 且可在設定恢復，以及瀏覽器錯誤／截圖檢查。
-
-## 80. 全部詞模式的當頁多段落結果
-
-依 D112。本節只擴充搜尋結果在**實際物化頁面**的顯示資料；文件集合、排序、rank、代表位置、舊 `snippet`、總數及 `totalRelation` 沿用第 14、46、48、50、52、62、76、77 節，不因多段落資料改變。
-
-### 80.1 回應欄位
-
-- `mode=all-terms` 的每筆當頁結果追加 `passages` 陣列與 `omittedTerms` 整數。`passages` 元素包含：
-  - `terms`：此段落實際命中的唯一正規化搜尋詞，依搜尋詞在文件中的首次出現順序排列；
-  - `heading`：該段落的既有標題，沒有則為 `null`；
-  - `location`：沿用索引的既有位置標籤，例如行號、段落或頁碼，沒有則為 `null`；
-  - `snippet`、`snippetTruncated`：沿用既有片段產生器、正規化對回原文、約 160 code point 上限及截斷語意。
-- `omittedTerms` 是搜尋詞去重後超過前四詞的數量。多段落資料最多處理前四個搜尋詞；搜尋本身仍以完整詞集合判定，不能因顯示上限改變命中結果。
-- 每個詞取文件正文（標題或文字區塊）第一次出現的 block／行。相同 block，或首次命中 block 的 ordinal 相鄰，合併為一個 passage；`terms` 不重複，段落依文件 ordinal 順序排列。合併段落的 `location` 取第一個 block 的既有位置標籤，片段來源以合併後的原文區塊交給既有片段邏輯。
-- 詞只命中檔名、結果是 `filenameOnly`，或文件沒有可讀文字區塊時，`passages` 為空；既有 `filenameOnly`、`snippet`、`location` 與命中原因仍保留。
-- `mode=phrase` 維持既有搜尋語意；回應可省略 `passages`，或只帶既有代表片段的一段。`omittedTerms` 不適用時為 `0`。
-
-### 80.2 物化邊界與索引相容
-
-- 多段落只在 `materialize` 當頁結果時計算，最多處理當頁的 20 筆文件；建立搜尋 stream、翻頁前的候選／rank、`total`、`totalRelation` 與排序不得讀取或建立多段落資料。
-- `field=content`、`field=all`、`field=filename` 沿用既有欄位範圍。檔名與正文分散命中時，只為實際正文命中詞建立段落；檔名-only 詞沒有虛構的正文段落。
-- current chunk store、完成或未完成 block-index 的舊索引，以及 `createLegacyStore` 形狀都必須經既有 block／payload 讀取邊界取得文字；不得假設另一種形狀的表格存在，也不得因顯示段落觸發索引升級。
-- 舊結果欄位是追加相容；`snippet` 仍是代表片段，不改為第一段或多段拼接。Workbench `/api/search`、MCP `search_documents` 及 CLI `search` 只在既有輸出上追加可讀的段落資料。
-
-### 80.3 驗收
-
-- `test/m76.test.ts` 覆蓋 current、block-index、legacy 三種形狀；不同／同一／相鄰行、重複詞、四詞以上、中文與全形、大小寫、filename-only，以及 `field=content|all|filename`。
-- 差分必須逐筆證明加入多段落前後的文件集合、順序、rank、`total` 與 `totalRelation` 相同；phrase、空正文及不存在段落也要反向驗證。
-- 測試涵蓋 Workbench `/api/search`、MCP `search_documents` 與 CLI 追加欄位，並確認非當頁與總數路徑不物化 passages。執行完整 `npm test`；本機證據不得宣稱公司 Windows 驗收。
 
 ## 82. 工作台搜尋結果的多段落呈現與選取
 
