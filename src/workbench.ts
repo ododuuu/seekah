@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { IndexStore, dataDirectory, type TrashedRoot } from "./store.js";
-import { indexStatus, prepareContextTool, searchDocuments } from "./mcp-tools.js";
+import { indexStatus, prepareContextTool } from "./mcp-tools.js";
 import { explainPathSync, previewExclusionPolicy, readExclusionPolicies } from "./exclusion-visibility.js";
 import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 import { emptySearchTrace } from "./search-trace.js";
@@ -35,7 +35,7 @@ import type { AutoupdateSettings } from "./autoupdate-control.js";
 import { isStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
 import { isWorkbenchOpenMode, type WorkbenchOpenMode } from "./workbench-open.js";
 import { isPidAlive, readIndexingState, writeIndexingState, type PersistedIndexingReport, type PersistedIndexingState } from "./indexing-state.js";
-
+import { WorkbenchSearchManager, searchClientId, SEARCH_CANCELLED_CODE, SEARCH_CANCELLED_MESSAGE } from "./workbench-search.js";
 const HOST = "127.0.0.1";
 const JSON_LIMIT = 128 * 1024;
 
@@ -61,6 +61,9 @@ export interface WorkbenchOptions {
   selectFolder?: () => Promise<string | null>;
   startupOptions?: Omit<StartupCommandOptions, "databasePath">;
   createIndexStore?: (databasePath: string, options?: { readOnly?: boolean }) => IndexStore;
+  searchDelayMs?: number;
+  /** 測試用的 idle timer 縮短值；產品預設由搜尋 manager 固定為 120 秒。 */
+  searchWorkerIdleMs?: number;
 }
 
 export interface WorkbenchHandle {
@@ -415,6 +418,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   let lastPersistedAt = 0;
   let latestAnswerTrace: AnswerTrace | null = null;
   const traceLog = createTraceLog(dataDirectory(options.databasePath));
+  const searchManager = new WorkbenchSearchManager(options.databasePath, options.searchDelayMs, options.searchWorkerIdleMs);
 
   function persistIndexing(force = false): void {
     const now = Date.now();
@@ -957,8 +961,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         const page = Number(body.page);
         const pageSize = Number(body.pageSize);
         if (!Number.isSafeInteger(page) || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 20) throw new Error("工作台每頁最多 20 筆。");
-        const field = body.field === "filename" || body.field === "content" ? body.field : body.field === "all" || body.field === undefined ? "all" : undefined;
-        const sort = body.sort === "filename" || body.sort === "modified" ? body.sort : body.sort === "relevance" || body.sort === undefined ? "relevance" : undefined;
+        const field: "all" | "filename" | "content" | undefined = body.field === "filename" || body.field === "content" ? body.field : body.field === "all" || body.field === undefined ? "all" : undefined;
+        const sort: "relevance" | "filename" | "modified" | undefined = body.sort === "filename" || body.sort === "modified" ? body.sort : body.sort === "relevance" || body.sort === undefined ? "relevance" : undefined;
         if (!field || !sort) throw new Error("搜尋欄位或排序方式無效。");
         const statuses = body.statuses === undefined ? undefined : Array.isArray(body.statuses)
           && body.statuses.every(value => typeof value === "string" && documentStatuses.includes(value as DocumentStatus))
@@ -968,28 +972,39 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           ? body.types as string[] : null;
         if (types === null) throw new Error("格式篩選無效。");
         const query = typeof body.query === "string" ? body.query.normalize("NFKC").toLowerCase().trim() : "";
-        const searchInput: import("./mcp-tools.js").SearchDocumentsInput = {
+        const clientId = searchClientId(request);
+        const searchInput = {
           query: typeof body.query === "string" ? body.query : "", mode: body.mode === "all-terms" ? "all-terms" as const : "phrase" as const,
           page, pageSize, field, sort,
           ...(statuses ? { statuses } : {}), ...(types ? { types } : {}),
           ...(typeof body.root === "string" && body.root ? { root: body.root } : {}),
+          ...(counting ? { exactTotal: true } : {}),
         };
         if (query && existsSync(options.databasePath)) {
           const ready = await openStore(options.databasePath, store => !store.formatStatus().needsUpgrade);
           if (!ready) {
+            await searchManager.cancel(clientId);
             startIndex(undefined, true);
             json(response, 202, { pendingUpgrade: true, message: "搜尋索引升級尚未完成；背景升級完成後會自動搜尋。" });
             return;
           }
         }
         const hasIndex = existsSync(options.databasePath);
-        const result = hasIndex
-          ? await openStore(options.databasePath, store => ({
-            ...searchDocuments(store, counting ? { ...searchInput, exactTotal: true } : searchInput), totalMode: store.searchTotalMode() }))
-          : { query: searchInput.query.trim(), mode: searchInput.mode, total: 0, totalRelation: "eq" as const, accessibleTotal: 0,
+        let result;
+        if (hasIndex) {
+          const execution = await searchManager.run(clientId, searchInput, request, response);
+          if (execution.kind === "cancelled") {
+            if (!response.destroyed && !response.writableEnded) json(response, 499, { code: SEARCH_CANCELLED_CODE, error: SEARCH_CANCELLED_MESSAGE });
+            return;
+          }
+          result = execution.result;
+        } else {
+          await searchManager.cancel(clientId);
+          result = { query: searchInput.query.trim(), mode: searchInput.mode, total: 0, totalRelation: "eq" as const, accessibleTotal: 0,
             truncatedToFirst500: false, page, pageSize, pageCount: 1, results: [], totalMode: "fast" as const,
-            trace: emptySearchTrace(searchInput.query, searchInput.mode!, field, sort) };
-        if (!hasIndex) traceLog.write(result.trace);
+            trace: emptySearchTrace(searchInput.query, searchInput.mode, field, sort) };
+          traceLog.write(result.trace);
+        }
         if (counting) { json(response, 200, { total: result.total, totalRelation: result.totalRelation }); return; }
         const temporaryResults = page === 1 && field !== "content" && !body.root ? [...documents.values()]
           .filter(document => (!types?.length || types.includes(document.extension))
@@ -1111,6 +1126,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       json(response, 404, { error: "找不到本機 API。" });
     } catch (error) {
+      if (response.destroyed || response.writableEnded) return;
       if (isRecoveryRequired(error) || (error instanceof Error && error.message === INDEX_RECOVERY_REQUIRED_MESSAGE)) {
         json(response, 503, { error: INDEX_RECOVERY_REQUIRED_MESSAGE });
         return;
@@ -1139,6 +1155,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       server.listen(options.port ?? 0, HOST, () => { server.off("error", reject); resolve(); });
     });
   } catch (error) {
+    await searchManager.close();
     keys.destroy();
     await rm(tempRoot, { recursive: true, force: true });
     throw error;
@@ -1167,6 +1184,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         requestWorkerStop();
       }
       await indexingTask;
+      await searchManager.close();
       keys.destroy();
       documents.clear();
       consumedPreviews.clear();

@@ -1,4 +1,35 @@
 # 設計決策紀錄
+## D115：工作台搜尋採每 client 暖 worker，取消以終止 worker
+
+- 日期：2026-10-01。依 SPEC §83；本分支範圍是 `src/workbench.ts` 的 `/api/search`／`/api/search/count`、搜尋 worker、`src/workbench-app.ts` 搜尋區段、`test/m79.test.ts` 與 `scripts/ui-smoke.mjs`；不修改 package 版本。文件與測試只使用自己建立的合成資料，不讀取或接觸 `%LOCALAPPDATA%\\LocalDocSearch\\`、備份或使用者 daemon。
+- 事實：
+  - 現況工作台 HTTP handler 在主程序直接呼叫 `openStore`／`searchDocuments`；`SearchSession` 建構時同步建立 `HitStream` 並先填入 fast／exact total，`page()` 再同步填充與物化 snippet／passages。SQLite `DatabaseSync` 期間會阻塞同一個 Node event loop，慢搜尋因此連 `/api/index-status` 也無法即時處理。
+  - `SearchSession` 以 readonly store、固定查詢／模式／欄位／範圍／排序建立 lazily verified stream；`page()` 只把 stream 填到需要的頁面，已驗證結果留在 session。工作台目前每次 HTTP 重新建立 session，移入 worker 時若不保存它會失去翻頁不重算的語意。
+  - 合成 300 份文字文件的本機 win32 量測：readonly `IndexStore` 開啟再關閉中位數約 13.4 ms；每次新 worker 並開 readonly store、回報後終止的 round-trip 中位數約 90.2 ms。開庫成本小於 worker 建立／載入成本；搜尋期間重建 worker 會增加可見暖機延遲，閒置時保留暖 worker 比每頁重建更保守。
+  - 大型合成索引複製品為 324.3 MB `index.db`、約 50,000 份文件；三次子程序中位數端到端時間（主程序同步 cold／warm；worker cold／warm）為：19 位數字無結果 `124.5／60.1／197.6／5.9 ms`、一般詞內容 `1490.2／1386.9／1553.1／13.4 ms`、檔名 `98.3／35.2／177.7／6.1 ms`。worker cold 包含 HTTP、worker 建立與 readonly store 開啟；worker warm 先以不同無結果 query 暖機再量測目標 query。主程序 cold 每次 request 開 readonly store；主程序 warm 保留 readonly store。RSS 中位數（after）分別為：無結果 `56.0／117.4／131.9／132.1 MB`、內容 `75.2／153.3／158.2／162.8 MB`、檔名 `51.9／110.5／126.3／126.8 MB`。四個內容搜尋暖 worker 的同一程序 RSS 由 `42.4 MB` 增至 `480.3 MB`，增加 `437.9 MB`，stats 確認 `workerCount: 4`。
+- 決定：
+  - 為每個帶有工作台搜尋 client header 的 client 建立最多一個暖搜尋 worker；worker 只開 readonly `IndexStore`，並保留一個以查詢／模式／欄位／範圍／排序／篩選簽名識別的 `SearchSession`。同簽名翻頁與 exact count 重用 stream；新簽名替換 session。沒有 header 的相容呼叫使用單一匿名 client，仍受同一取消契約保護。
+  - 搜尋 worker 的同步 `SearchSession` 執行不可依賴 message-based cooperative cancel；request close、同一 client 新搜尋／翻頁／模式或範圍切換時，主程序先結束 active job，再 `terminate()` 舊 worker，下一次需要時建立新 worker。正常完成的 worker 可留在 map 中供翻頁，工作台 close 時逐一 terminate。
+  - 取消請求若 response 尚可寫入，回 HTTP 499、JSON `code: "SEARCH_CANCELLED"` 與 `error: "搜尋已取消。"`；已中斷的 TCP／fetch 不強行回寫。worker error／exit 必須清除 map 與 active promise，避免殭屍 worker 或未關閉 connection。
+  - `createWorkbench` 新增明確的慢搜尋延遲注入選項，僅測試傳入並序列化到 worker；不使用環境變數後門。前端以每次搜尋新的 `AbortController` 加上既有 `searchSeq`，超過約一秒顯示真實等待秒數與「取消」，取消只改狀態訊息並保留最後成功結果／輸入／選取。
+  - 伺服器保留既有 `searchDocuments` 輸出轉換，不改候選、排序、rank、total、totalRelation、snippet、passages、MCP／CLI 或索引資料格式；worker 重建後重新建立 session，不假裝跨 worker 保存快取。
+  - 程序級同時最多 4 個搜尋 worker；新 client 超過上限時按 `lastUsedOrder` 終止最久未用 worker，active victim 以固定取消結果結束。正常完成 worker 閒置 120,000 ms 自動終止；終止中的 worker 仍計入上限。這個上限由大型合成索引四個暖內容 worker 的 RSS 增加 437.9 MB（42.4→480.3 MB）決定，避免無界 per-client 記憶體增長；pi2 後續若加入程序內解壓 chunk cache 仍受同一上限約束。
+  - `X-LocalDocSearch-Client` 只接受 1–64 個 ASCII 字元、英數字開頭且其後為英數字或 `.`／`_`／`:`／`-`；重複、陣列、超長與格式錯誤值歸入單一匿名 client。`searchWorkerIdleMs` 只作合成測試縮短 idle timer，產品預設固定 120 秒，不提供 client 可控的上限或 timer。
+- 理由：
+  - 暖 worker 只在每個 client 閒置時保留一個 store connection；同 client 翻頁避免約 90 ms 的 worker／開庫固定成本，也保留 `SearchSession` 已驗證結果。取消時終止整個 worker 是 SQLite 同步搜尋唯一可靠的硬切斷邊界，代價是取消後下一次搜尋需重新暖機。
+  - per-client 而非全域單一 worker 避免一個 client 的慢查詢阻塞其他本機瀏覽器 session；每 client 最多一個 active job，能明確實作「新操作取代舊操作」。
+  - UI 顯示經過秒數而非虛構百分比，因目前搜尋核心沒有可安全跨 worker 傳送的中途完成比例；server 主程序可即時服務其他 API 是本節真正的阻塞修正。
+  - 暖 worker 的四個實測 RSS 上限約增加 438 MB，故以程序級 4 個作為保守硬上限；LRU 與 120 秒 idle 回收同時限制重新整理、惡意 header 與 pi2 程序內解壓 cache 的累積成本。上限回收會犧牲被選中的 session，但下一次重建仍驗證相同結果。
+- 否決：
+  - 不在主程序保留同步搜尋作 fallback，不以 timeout／忽略回應／searchSeq 單獨掩蓋 CPU 阻塞，不把同步 SQLite 改成偽協作式取消。
+  - 不把整個結果集合序列化到前端、不新增第二套 SearchSession、不為取消修改 search.ts 的結果語意，不讓 `/api/index-status` 或索引 worker 共用搜尋 store。
+  - 不用環境變數注入慢搜尋，不啟動或停止使用者真實 autoupdate，不讀取真實資料目錄，不加入 OCR、embedding、網路、LAN 或文件內容外傳。
+- 驗證：
+  - `test/m79.test.ts` 覆蓋主程序 API responsiveness、worker cancellation／resource cleanup、同 client replacement、不同 client 隔離、暖 session 分頁與固定取消回應；新增 4-worker 程序級上限、LRU 回收、2 分鐘 idle policy 的短 timer 測試、格式／長度錯誤 header、回收後翻頁結果與 session 重建。
+  - `scripts/ui-smoke.mjs` 在 1440×900 與 1180×800 以 CDP 慢搜尋注入驗證等待秒數、取消後保留結果、替代搜尋、既有模式／分頁／上下文／多段落；成功與失敗 finally 都停止合成 daemon、workbench、Chrome，並檢查暫存 DB 無殘留程序。
+  - `npm test`：TypeScript build 成功；473 tests，470 pass、3 skip、0 fail。`node scripts/ui-smoke.mjs`：1440×900／1180×800 共 52 pass、0 fail，輸出截圖位於 `C:\Users\mains\AppData\Local\Temp\seekah-ui-smoke-output-5dhA5a\`，並通過暫存資料庫殘留程序檢查。大型索引量測與四 worker RSS 量測亦完成；所有證據只代表本機合成資料，未宣稱公司 Windows 人工驗收。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

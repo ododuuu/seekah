@@ -2707,3 +2707,40 @@ docsearch doctor
 - `test/m78.test.ts` 必須靜態檢查列表／表格共用或等價的多段落 DOM、`passages.length > 1` 邊界、`omittedTerms` 提示、安全節點、高亮、清單語意、可選取／不可選取 CSS，以及既有複製控制未被移除；以反向變體證明移除關鍵邊界或標籤契約時測試會失敗。
 - `scripts/ui-smoke.mjs` 必須只用隔離合成資料，在 1180×800 與 1440×900 以 Chrome CDP 實際驗證 `all-terms` 的不同位置多段落、單一 passage、phrase、列表／表格、snippet Selection API 原文相等、複製按鈕、模式切換、分頁與上下文抽屜；並保存兩種視窗大小截圖供人工檢視。
 - 不讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份；不新增文件內容 endpoint、外部服務、OCR、embedding、LAN 暴露、格式支援、版本變更或 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`。
+
+## 83. 工作台搜尋移出主執行緒、取消與等待進度
+
+依 D115。本節只處理 desktop workbench 的 `/api/search`、`/api/search/count` 執行位置、搜尋工作階段生命週期、取消與前端等待呈現；不改搜尋核心的候選、排序、分頁、總數或片段語意。
+
+### 83.1 搜尋 worker 與跨頁快取
+
+- `/api/search` 與 `/api/search/count` 的索引搜尋、`SearchSession`／`SearchResultSet` 建立與頁面物化必須在獨立 worker thread 執行；HTTP 主程序不得在這兩個端點同步執行搜尋。worker 只以 readonly `IndexStore` 開啟既有索引，不得升級、寫入或建立第二套索引。
+- 搜尋 worker 的讀取工作不得阻塞工作台主程序處理 `/api/index-status`、`/api/state`、其他唯讀 API 或已存在的短請求。搜尋結果回傳前，主程序仍可接受新 HTTP 請求。
+- 每個工作台搜尋 client 最多保留一個可重用的暖 worker；worker 閒置時可保留 readonly store 與目前 `SearchSession`。同一查詢、模式、欄位、排序、根目錄、格式及解析狀態範圍的翻頁必須沿用同一 session stream，不重算已驗證的結果集合；新查詢、模式或範圍建立新的 session。
+- 每個工作台程序同時存活的搜尋 worker 上限為 4 個，這是所有 client 共用的程序級上限，不是每 client 各自的上限。建立新 worker 超過上限時，必須終止最久未使用的 worker；若候選仍有 active job，該請求依既有取消契約完成，下一次搜尋再建立 worker。被回收的 client 下次搜尋必須可重建 worker，不能提高上限或把 session 移到前端／主程序。
+- 暖 worker 閒置逾 2 分鐘必須自動終止並釋放 readonly store、`SearchSession` 與 client bookkeeping；閒置回收後的搜尋或翻頁必須建立新 session，結果與未回收時相同。worker cap 與 idle timer 必須同時計入正在終止但尚未完成清理的 worker，避免終止競態短暫超額。
+- `X-LocalDocSearch-Client` 若存在，只接受 1–64 個 ASCII 字元，第一字元為英數字，其後只能是英數字、`.`、`_`、`:`、`-`；重複 header、陣列值、超長或格式錯誤值必須歸入單一匿名 client。client header 是識別提示，不得讓任意大量值繞過 4-worker 上限或造成無界 map／worker 增長。
+- 同事 pi2 若在程序內加入已解壓 chunk cache，該 cache 不改變本節的 worker 上限；每增加一個 worker 都可能增加 readonly store、`SearchSession` 與程序內 cache 的記憶體，故不得以 per-client 上限取代程序級上限。
+- `/api/search/count` 必須沿用該 session 的候選與排序狀態，在需要精確總數時繼續驗證至完成；`total`、`totalRelation`、結果集合、排序、`rank`、代表位置、`snippet`、`passages` 與 `omittedTerms` 必須與未移入 worker 前逐筆相同。
+- worker 重新建立後不得假設舊 session 仍存在；第一次翻頁或搜尋必須建立新 session 並重新計算，且仍遵守原本的 fast／exact total 語意。索引 `dataVersion` 變更時沿用既有 `SEARCH_INDEX_CHANGED` 保護，不使用過期 session。
+- `createWorkbench` 提供測試專用的慢搜尋注入選項；注入只透過明確建構選項傳入 worker，不讀取環境變數、不改產品預設延遲，也不得把文件內容或測試 hook 傳出本機。
+
+### 83.2 取消、連線關閉與資源生命週期
+
+- 搜尋請求的 HTTP client 中斷連線時，伺服器必須取消該 client 的進行中搜尋；同一 client 發出新搜尋、翻頁、欄位／排序／模式／範圍切換時，舊的進行中搜尋必須先取消，再開始新的搜尋。
+- SQLite `DatabaseSync` 搜尋不可依賴協作式取消；取消必須終止正在執行的 worker，清除其 active job，並在下一次需要搜尋時建立新 worker。不得讓舊 worker、未關閉的 readonly database connection、未解析的請求 promise 或晚到結果留在程序內。
+- 被取消的請求若連線仍可回應，固定回 HTTP 499、JSON `code: "SEARCH_CANCELLED"` 與 `error: "搜尋已取消。"`；client 已關閉時不得為了回應而重新建立連線。取消不是一般錯誤，不得清除其他已完成結果或已選上下文。
+- 正常完成的暖 worker 可保留供同一 client 翻頁；工作台關閉、程序錯誤、worker 終止或索引生命週期要求清理時，必須關閉 worker 及其 store。worker 資源清理不得影響主索引寫入、背景更新或 LocalDocSearch 相容資料目錄。
+
+### 83.3 工作台等待與取消操作
+
+- 前端每次搜尋、翻頁、欄位／排序／模式切換都必須以新的 `AbortController` 發出請求並中止前一次搜尋；既有 `searchSeq` 仍是晚到回應的第二層保護。
+- 搜尋持續超過約 1 秒時，搜尋狀態必須顯示已等待秒數（以整秒向下或四捨五入皆可，但不得倒退）及「取消」按鈕；一秒內不強制顯示按鈕。等待顯示是實際經過時間，不得偽造完成百分比。
+- 使用者按「取消」或請求因新操作被中止時，畫面顯示「搜尋已取消」，保留上一次已完成的結果、查詢輸入、目前選取／上下文抽屜與複製選取能力；不可把上一次結果清成空白，也不可套用被取消的結果。
+- 等待、取消與錯誤狀態必須與既有翻頁、模式切換、已選上下文、多段落顯示、列表／表格切換及結果選取相容；搜尋中的控制項不得讓使用者誤觸發同一 active job。
+
+### 83.4 測試與明確不做
+
+- `test/m79.test.ts` 必須以 `createWorkbench` 慢搜尋選項建立合成索引，驗證搜尋期間 `/api/index-status` 與其他短 API 在 500 ms 內回應；驗證 request close／明確取消終止 worker 並釋放資源、同一 client 新搜尋取代舊搜尋、暖 worker 翻頁不重算、未取消結果逐筆等價，以及固定取消回應。另須以多個不同 client header 證明程序級最多 4 個 worker、最久未用者回收、超長／格式錯誤 header 不增加識別集合、2 分鐘 idle policy（測試可用明確短 idle 選項）會釋放 worker；回收後搜尋與翻頁必須重建 session 且結果不變。測試須反向移除 worker 隔離或取消 guard，至少一項契約失敗。
+- `scripts/ui-smoke.mjs` 必須以隔離合成資料及 CDP 注入慢搜尋，於 1440×900 與 1180×800 驗證等待秒數、取消按鈕、取消後「搜尋已取消」及保留上一頁結果／輸入、連續輸入只留下最後一次、翻頁／模式切換／上下文抽屜／多段落與瀏覽器無錯誤；須保存兩種視窗大小截圖。測試啟動的 autoupdate daemon、工作台、Chrome 及任何子程序在成功與失敗路徑都必須明確停止，結尾檢查沒有指向暫存資料庫的殘留程序。
+- 搜尋核心的同步 SQLite 演算法、索引 schema、文件格式、外部 API、LAN 暴露、OCR、embedding、文件內容 endpoint、LocalDocSearch 資料目錄／環境變數／`.localdocsearchignore`／IPC／MCP／`docsearch` 相容識別及 package 版本均不因本節改變。公司 Windows 人工驗收完成前，不得宣稱 Windows 驗證通過。

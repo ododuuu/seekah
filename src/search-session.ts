@@ -80,6 +80,12 @@ export class SearchSession {
     if (this.store.dataVersion() !== this.dataVersion) throw new SearchIndexChangedError();
   }
 
+  /** Finish the current layer so a later exact-total request reuses its verified stream. */
+  complete(): void {
+    this.ensureCurrent();
+    this.current.stream.fill(Number.POSITIVE_INFINITY);
+  }
+
   append(rawQuery: string): void {
     this.ensureCurrent();
     const query = rawQuery.trim();
