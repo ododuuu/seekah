@@ -1,4 +1,34 @@
 # 設計決策紀錄
+## D110：工作台搜尋結果可選取、可複製
+
+- 日期：2026-10-01。依 SPEC §78；本分支只處理工作台結果文字、臨時文件／已選上下文同型文字、複製回饋與 m74／UI smoke 驗證，不修改版本、STATUS、handoff 或 NEXT-TODO，也不碰設定頁背景更新開關。
+- 事實：
+  - `src/workbench-app.ts` 的搜尋結果檔名使用原生 `button`，點擊會直接呼叫 `documentAction(item, "open")`；路徑列與片段雖由節點 API 建立，未提供結果級複製控制項，使用者無法方便取得完整路徑。
+  - 片段高亮是以 `mark` 節點包住原文範圍；只要複製原始 `item.snippet` 或保持標記內外都是原文文字，就不應把高亮本身轉成額外字元。
+  - 工作台不得使用 `innerHTML`；臨時文件只有目前 UI 可見的檔名欄位，不能把 server 暫存路徑當成使用者原始來源路徑。
+- 決定：
+  - 結果檔名保留既有原生按鈕與 Enter／Space 操作，但明確套用可選取文字樣式。點擊 handler 先以 `window.getSelection()`、range 的共同祖先、anchor／focus 節點確認選取範圍屬於該檔名元素；有非空選取時只取消該次開啟，沒有選取時維持既有 `open`。
+  - 路徑列、片段、表格檔名、臨時文件名稱與上下文抽屜名稱都使用可選取文字節點；高亮繼續由 `createElement`／`textContent` 產生，不在 DOM 內加入高亮符號。
+  - 每筆結果加入「複製路徑」與「複製檔名」原生小按鈕。複製共用 helper，先呼叫 `navigator.clipboard.writeText`，失敗時建立隱藏 textarea 並呼叫 `document.execCommand("copy")`；成功在按鈕旁以 `aria-live="polite"` 顯示短暫「已複製」。
+  - indexed 結果的路徑複製值取 API 的完整 `item.path`，檔名取 `item.filename` 或路徑最後一段，完全不經 breadcrumb 截斷、不經 highlight DOM；臨時文件若沒有原始完整路徑，只能複製目前的 filename/path 欄位。
+  - 同一組複製控制與回饋接到列表、表格、臨時文件頁及已選上下文抽屜；所有 DOM 仍以節點 API 建立。設定頁區段不改。
+- 理由：
+  - 不把檔名改成自製 link／keypress 元件，保留既有鍵盤與開啟行為；顯式 `user-select:text` 加 selection guard 是最小改動，能同時保留框選與點擊開啟。
+  - 共用剪貼簿 helper 集中 Unicode 原樣複製與後備行為，避免列表、臨時文件與上下文抽屜各自漂移；`textContent`／原始資料值避開高亮標記造成的多餘文字。
+  - 不向 server 增加路徑或內容 endpoint，避免暴露暫存實體路徑，也不改搜尋／索引真相。
+- 否決：
+  - 不使用 `innerHTML` 或把不可信路徑插入 HTML；不以 `user-select:none` 禁止框選；不因複製失敗假報成功。
+  - 不把檔名點擊改成只複製、不開檔；不在有文字選取時仍送出 open；不改設定頁背景自動更新控制。
+  - 不修改搜尋 API、排序、分頁、版本、STATUS、handoff、NEXT-TODO、真實資料目錄或備份。
+- 驗證：
+  - `test/m74.test.ts` 靜態檢查可選取樣式、兩個按鈕、selection guard、clipboard fallback、無 `innerHTML`，並對移除 guard／按鈕／可選取契約的反向變體確認測試失敗。
+  - `scripts/ui-smoke.mjs` 在 1440×900 與 1180×800 以 CDP Selection API 選取合成結果檔名，確認檔名原樣且沒有 open request；清除選取後確認 open 仍可送出；攔截 `clipboard.writeText` 確認完整含 Unicode 路徑的複製值；另檢查高亮片段的選取文字。
+  - 完整 `npm test`；本機 worktree／合成資料證據不代表公司 Windows 人工驗收。
+- 相容與風險：
+  - 複製按鈕只讀取目前 response／暫存 state 的字串，不取得來源文件正文。瀏覽器權限或舊環境沒有 Clipboard API 時，textarea fallback 可能因 `execCommand` 被拒絕而回報失敗。
+  - 原生 button 的文字選取依瀏覽器 CSS 行為仍需實際 Chrome smoke；若實機不允許 drag selection，需改為可鍵盤操作的非 button 文字／link 結構，但不得退回禁止選取。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D109：狀態 API 截斷上次同步錯誤與通知清單
 
 - 日期：2026-10-01。依 SPEC §77；本分支只處理 `indexStatus` 讀取出口與相關顯示，不修改版本、STATUS、handoff 或 NEXT-TODO。
