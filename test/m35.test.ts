@@ -113,7 +113,7 @@ test("0.40.0 search results are a search-engine style list without a detail page
   const html = workbenchHtml("fixed-nonce");
   // SPEC §57：沒有明細頁與預覽紙；標題直接開啟原檔，次要連結為顯示位置與上下文。
   assert.doesNotMatch(html, /dataset\.page = "detail"|detail-preview|preview-paper|openDetail/u);
-  assert.ok(html.includes(`button(name, "document-title", () => void documentAction(item, "open"))`));
+  assert.ok(html.includes(`button(name, "document-title", event => openDocumentTitle(item, event))`));
   assert.ok(html.includes(`button("顯示所在位置", "link-action", () => void documentAction(item, "reveal"))`));
   assert.ok(html.includes(`"加入上下文", "link-action"`));
   assert.ok(html.includes("檔名符合"));

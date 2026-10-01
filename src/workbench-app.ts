@@ -495,6 +495,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 }
 .snippet.is-muted { color: var(--muted); }
 .snippet mark { padding: 0 1px; background: #f3d889; color: inherit; }
+.document-title, .document-title.btn, .table-title, .table-title.btn,
+.document-path, .document-crumbs, .snippet, .file-name, .context-item-name, .context-item-meta {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.copy-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 5px; }
+.copy-action { display: inline-flex; align-items: center; gap: 4px; }
+.copy-feedback { min-width: 3.4em; color: var(--brand-2); font-size: 11px; white-space: nowrap; }
+.clipboard-fallback { position: fixed; top: 0; left: -10000px; width: 1px; height: 1px; opacity: 0; }
+.copy-control.btn { min-height: 24px; padding: 3px 7px; }
 .document-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; }
 .link-action.btn { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; }
 .link-action.btn:hover:not(:disabled) { background: transparent; color: var(--brand); text-decoration: underline; }
@@ -520,6 +530,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   text-align: left;
 }
 .documents-table td { padding: 10px; border-bottom: 1px solid #e7ebe9; overflow: hidden; text-align: left; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
+.documents-table td:nth-child(2) { white-space: normal; }
 .documents-table tr:last-child td { border-bottom: 0; }
 .documents-table tbody tr:hover, .documents-table tbody tr.is-selected { background: #e8f2ee; }
 .documents-table td:first-child, .documents-table th:first-child { width: 42px; text-align: center; }
@@ -588,6 +599,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .file-status { max-width: 300px; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
 .file-status.indexed { color: var(--brand-2); }
 .file-status.error, .file-status.encrypted { color: var(--danger); }
+.file-row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; }
+.file-row-actions .copy-actions { margin-top: 0; }
 .file-status.warn { color: var(--warning); }
 
 /* roots and trash */
@@ -687,7 +700,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .context-item:last-child { border-bottom: 0; }
 .context-item-name { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
 .context-item-meta { margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-.context-item-actions { display: flex; gap: 5px; }
+.context-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .context-drawer-footer { padding: 14px 16px 18px; border-top: 1px solid var(--line); }
 .context-drawer-footer .btn { width: 100%; }
 .preview-dialog { width: min(920px, calc(100vw - 52px)); }
@@ -839,6 +852,77 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     node.type = "button";
     if (action) node.addEventListener("click", action);
     return node;
+  }
+  async function copyText(value) {
+    const text = escapeText(value);
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {}
+    }
+    const textarea = make("textarea", "clipboard-fallback", "");
+    textarea.value = text;
+    textarea.setAttribute("aria-hidden", "true");
+    textarea.tabIndex = -1;
+    document.body.append(textarea);
+    textarea.focus();
+    textarea.select();
+    let copied = false;
+    try { copied = document.execCommand("copy"); } catch {}
+    textarea.remove();
+    if (!copied) throw new Error("剪貼簿複製失敗，請改用滑鼠選取後按 Ctrl+C。");
+  }
+  function documentPathValue(item) {
+    const value = item && item.path !== undefined ? item.path : item && item.filename;
+    return escapeText(value);
+  }
+  function documentFilenameValue(item) {
+    const explicit = escapeText(item && item.filename);
+    if (explicit) return explicit;
+    const full = documentPathValue(item);
+    return full.split(/[\\\\/]/u).pop() || full;
+  }
+  function hasSelectionWithin(element) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !selection.toString()) return false;
+    const range = selection.getRangeAt(0);
+    const anchor = selection.anchorNode;
+    const focus = selection.focusNode;
+    return Boolean(anchor && focus
+      && element.contains(range.commonAncestorContainer)
+      && element.contains(anchor)
+      && element.contains(focus));
+  }
+  function openDocumentTitle(item, event) {
+    const element = event && event.currentTarget;
+    if (element instanceof Element && hasSelectionWithin(element)) return;
+    void documentAction(item, "open");
+  }
+  function copyControl(label, value) {
+    const feedback = make("span", "copy-feedback", "");
+    feedback.setAttribute("aria-live", "polite");
+    feedback.setAttribute("aria-atomic", "true");
+    let timer = 0;
+    const control = button(label, "small copy-control", async () => {
+      try {
+        await copyText(value);
+        feedback.textContent = "已複製";
+        clearTimeout(timer);
+        timer = setTimeout(() => { feedback.textContent = ""; }, 1800);
+      } catch (error) {
+        feedback.textContent = "複製失敗";
+        showToast(error.message || "複製失敗，請改用滑鼠選取後按 Ctrl+C。");
+      }
+    });
+    const wrapper = make("span", "copy-action", "");
+    wrapper.append(control, feedback);
+    return wrapper;
+  }
+  function resultCopyActions(item) {
+    const actions = make("div", "copy-actions", "");
+    actions.append(copyControl("複製路徑", documentPathValue(item)), copyControl("複製檔名", documentFilenameValue(item)));
+    return actions;
   }
   function navButton(action) {
     const node = make("button", "nav-button", "");
@@ -1103,6 +1187,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   function resultActions(item) {
     const actions = make("div", "document-actions");
+    actions.append(resultCopyActions(item));
     if (item.temporary) {
       const source = state.imported.get(item.id);
       const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "link-action",
@@ -1120,10 +1205,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const resultKey = item.temporary ? item.id : item.reference;
     const row = make("article", "document-row" + (selectedReference(resultKey) ? " is-selected" : ""));
     row.dataset.reference = resultKey;
-    const name = escapeText(item.path).split(/[\\\\/]/u).pop() || item.path;
+    const name = documentFilenameValue(item);
     // 點標題直接開啟原檔，像搜尋引擎點連結（SPEC §57.1）。
     const title = item.temporary ? make("strong", "document-title", name)
-      : button(name, "document-title", () => void documentAction(item, "open"));
+      : button(name, "document-title", event => openDocumentTitle(item, event));
     title.title = item.temporary ? escapeText(item.path) : "開啟 " + escapeText(item.path);
     const pathNode = make("div", "document-path", "");
     pathNode.title = item.path;
@@ -1149,10 +1234,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const checkCell = document.createElement("td");
     checkCell.append(makeResultCheckbox(item));
     const titleCell = document.createElement("td");
-    const title = item.temporary ? make("strong", "table-title", escapeText(item.path))
-      : button(escapeText(item.path).split(/[\\\\/]/u).pop() || item.path, "table-title", () => void documentAction(item, "open"));
+    const title = item.temporary ? make("strong", "table-title", documentFilenameValue(item))
+      : button(documentFilenameValue(item), "table-title", event => openDocumentTitle(item, event));
     title.title = item.path;
-    titleCell.append(title);
+    titleCell.append(title, resultCopyActions(item));
     const rootCell = document.createElement("td");
     rootCell.textContent = documentRootLabel(item) || "未提供";
     rootCell.title = item.root || rootCell.textContent;
@@ -1464,6 +1549,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         const body = make("div", "", "");
         body.append(make("div", "file-name", item.filename));
         body.append(make("div", "file-meta", (item.extension || "未知格式") + " · " + String(item.sizeBytes || 0) + " bytes"));
+        body.append(resultCopyActions(item));
         const statusText = item.pending ? "pending：本機解析中…" : item.status + (item.errorMessage ? "：" + item.errorMessage : "");
         const statusClass = item.pending ? "warn" : item.status === "indexed" ? "indexed" : item.status === "error" || item.status === "encrypted" ? "error" : "warn";
         const status = make("div", "file-status " + statusClass, statusText);
@@ -1615,6 +1701,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const body = make("div", "", "");
       body.append(make("div", "context-item-name", selected.item.path));
       body.append(make("div", "context-item-meta", (selected.item.extension || "") + " · " + (selected.item.location || "未提供位置")));
+      body.append(resultCopyActions(selected.item));
       const actions = make("div", "context-item-actions");
       actions.append(button("開啟", "small", () => void documentAction(selected.item, "open")));
       actions.append(button("移除", "small", () => { state.selected.delete(selected.reference); invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
@@ -1628,6 +1715,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const body = make("div", "", "");
       body.append(make("div", "context-item-name", item.filename));
       body.append(make("div", "context-item-meta", (item.extension || "") + " · " + item.status));
+      body.append(resultCopyActions(item));
       row.append(body, button("移除", "small", () => { item.selected = false; invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
       temporary.append(row);
     }

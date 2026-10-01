@@ -97,13 +97,13 @@ function runIndex(root, dataDir) {
 
 async function fixtureFor(viewport) {
   const temp = await mkdtemp(path.join(outputDir, `fixture-${viewport.width}x${viewport.height}-`));
-  const root = path.join(temp, "synthetic-root");
+  const root = path.join(temp, "synthetic-root 中文😀");
   const dataDir = path.join(temp, "data");
   const refreshFolder = path.join(root, "refresh-area");
   await mkdir(path.join(root, "excluded"), { recursive: true });
   await mkdir(path.join(refreshFolder, "ignored"), { recursive: true });
   await writeFile(path.join(root, ".localdocsearchignore"), "excluded/\nrefresh-area/ignored/\n");
-  await writeFile(path.join(root, "included.txt"), "UI_SMOKE_INCLUDED_NEEDLE\n一般合成文件。\n");
+  await writeFile(path.join(root, "included 中文😀.txt"), "UI_SMOKE_INCLUDED_NEEDLE\n一般合成文件。\n");
   await writeFile(path.join(root, "ordinary.md"), "普通文件，不含測試查詢。\n");
   await writeFile(path.join(root, "excluded", "secret.txt"), "UI_SMOKE_EXCLUDED_SECRET\n");
   await writeFile(path.join(refreshFolder, "refresh-existing.txt"), "UI_SMOKE_REFRESH_BEFORE\n");
@@ -115,7 +115,7 @@ async function fixtureFor(viewport) {
     root,
     dataDir,
     refreshFolder,
-    indexedPath: path.join(root, "included.txt"),
+    indexedPath: path.join(root, "included 中文😀.txt"),
     excludedPath: path.join(root, "excluded", "secret.txt"),
     outsidePath: path.join(temp, "outside-root.txt"),
   };
@@ -292,7 +292,15 @@ async function click(cdp, selector) {
 async function installPickerPatch(cdp) {
   await cdp.evaluate(`(() => {
     const originalFetch = window.fetch.bind(window);
-    window.__uiSmoke = { selectRoot: null, requests: [] };
+    const smokeClipboard = {
+      writeText: async value => { window.__uiSmoke.clipboardText = String(value); },
+    };
+    window.__uiSmoke = { selectRoot: null, requests: [], documentActions: [], clipboardText: null };
+    try {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: smokeClipboard });
+    } catch {
+      try { Object.defineProperty(Navigator.prototype, "clipboard", { configurable: true, get: () => smokeClipboard }); } catch {}
+    }
     window.fetch = async (input, init) => {
       const requestUrl = input instanceof Request ? input.url : String(input);
       const requestPath = new URL(requestUrl, location.href).pathname;
@@ -301,6 +309,12 @@ async function installPickerPatch(cdp) {
       if (requestPath === "/api/select-folder") {
         return new Response(JSON.stringify({ root: window.__uiSmoke.selectRoot }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (requestPath === "/api/document-action") {
+        let body = null;
+        try { body = JSON.parse(String(init?.body || "")); } catch {}
+        window.__uiSmoke.documentActions.push(body);
+        return new Response(JSON.stringify({ changed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       return originalFetch(input, init);
     };
     return true;
@@ -308,7 +322,13 @@ async function installPickerPatch(cdp) {
 }
 
 async function setPickerRoot(cdp, root) {
-  await cdp.evaluate(`(() => { window.__uiSmoke.selectRoot = ${JSON.stringify(root)}; window.__uiSmoke.requests = []; return true; })()`);
+  await cdp.evaluate(`(() => {
+    window.__uiSmoke.selectRoot = ${JSON.stringify(root)};
+    window.__uiSmoke.requests = [];
+    window.__uiSmoke.documentActions = [];
+    window.__uiSmoke.clipboardText = null;
+    return true;
+  })()`);
 }
 
 
@@ -452,6 +472,7 @@ async function runViewport(viewport, chromePath) {
       await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
     });
 
+    await installPickerPatch(cdp);
     await check(`${label} 搜尋有結果`, async () => {
       const start = browserEvents.length;
       await click(cdp, "#nav-documents");
@@ -461,6 +482,85 @@ async function runViewport(viewport, chromePath) {
       const result = await cdp.evaluate("document.querySelectorAll('#document-list .document-row').length");
       expect(result > 0, "搜尋結果列為空。");
       await noBrowserErrorsSince(cdp, start, "有結果搜尋");
+    });
+    await check(`${label} 搜尋結果可選取、複製且選取時不開啟`, async () => {
+      const start = browserEvents.length;
+      await inputAndSearch(cdp, "UI_SMOKE_INCLUDED_NEEDLE");
+      await waitFor(() => cdp.evaluate("document.querySelectorAll('#document-list .document-row').length > 0 && !document.getElementById('search-status')?.textContent?.includes('搜尋中')"));
+      const selection = await cdp.evaluate(`(() => {
+        const title = document.querySelector("#document-list .document-title");
+        if (!(title instanceof HTMLElement)) return null;
+        const active = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(title);
+        active?.removeAllRanges();
+        active?.addRange(range);
+        const selectedTitle = active?.toString() || "";
+        const before = window.__uiSmoke.documentActions.length;
+        title.click();
+        const guarded = window.__uiSmoke.documentActions.length === before;
+        active?.removeAllRanges();
+        return { selectedTitle, filename: title.textContent || "", guarded };
+      })()`);
+      expect(selection?.selectedTitle === selection?.filename, "檔名 Selection API 文字不等於可見檔名。");
+      expect(selection?.guarded, "選取檔名後點擊仍送出 open。");
+      await cdp.evaluate(`(() => {
+        const title = document.querySelector("#document-list .document-title");
+        title?.click();
+        return true;
+      })()`);
+      await waitFor(() => cdp.evaluate("window.__uiSmoke.documentActions.some(item => item?.action === 'open')"));
+
+      const pathButtonClicked = await cdp.evaluate(`(() => {
+        window.__uiSmoke.clipboardText = null;
+        const button = Array.from(document.querySelectorAll("#document-list .copy-action button")).find(node => node.textContent === "複製路徑");
+        if (!(button instanceof HTMLElement)) return false;
+        button.click();
+        return true;
+      })()`);
+      expect(pathButtonClicked, "找不到複製路徑按鈕。");
+      await waitFor(() => cdp.evaluate("window.__uiSmoke.clipboardText !== null"));
+      const pathCopy = await cdp.evaluate(`(() => {
+        const row = document.querySelector("#document-list .document-row");
+        return {
+          path: row?.querySelector(".document-path")?.title || "",
+          filename: row?.querySelector(".document-title")?.textContent || "",
+          copied: window.__uiSmoke.clipboardText,
+        };
+      })()`);
+      expect(pathCopy.copied === pathCopy.path, `複製路徑不等於完整路徑：${pathCopy.copied}`);
+      expect(/[\\u4e00-\\u9fff]/u.test(pathCopy.copied) && pathCopy.copied.includes(" ") && pathCopy.copied.includes("😀"), "合成複製路徑未涵蓋中文、空白與 emoji。");
+
+      const filenameButtonClicked = await cdp.evaluate(`(() => {
+        window.__uiSmoke.clipboardText = null;
+        const button = Array.from(document.querySelectorAll("#document-list .copy-action button")).find(node => node.textContent === "複製檔名");
+        if (!(button instanceof HTMLElement)) return false;
+        button.click();
+        return true;
+      })()`);
+      expect(filenameButtonClicked, "找不到複製檔名按鈕。");
+      await waitFor(() => cdp.evaluate("window.__uiSmoke.clipboardText !== null"));
+      const filenameCopy = await cdp.evaluate(`(() => ({
+        filename: document.querySelector("#document-list .document-title")?.textContent || "",
+        copied: window.__uiSmoke.clipboardText,
+      }))()`);
+      expect(filenameCopy.copied === filenameCopy.filename, "複製檔名不等於原始檔名。");
+      expect(/[\\u4e00-\\u9fff]/u.test(filenameCopy.copied) && filenameCopy.copied.includes("😀"), "合成複製檔名未涵蓋中文與 emoji。");
+
+      const snippetSelection = await cdp.evaluate(`(() => {
+        const snippet = document.querySelector("#document-list .snippet");
+        if (!(snippet instanceof HTMLElement)) return null;
+        const active = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(snippet);
+        active?.removeAllRanges();
+        active?.addRange(range);
+        const selected = active?.toString() || "";
+        active?.removeAllRanges();
+        return { selected, text: snippet.textContent || "" };
+      })()`);
+      expect(snippetSelection?.selected === snippetSelection?.text, "高亮片段選取文字被 mark 或控制項改寫。");
+      await noBrowserErrorsSince(cdp, start, "結果選取與複製");
     });
 
     await check(`${label} 搜尋零結果顯示排除提示與檢查輸入欄`, async () => {
@@ -494,7 +594,6 @@ async function runViewport(viewport, chromePath) {
       });
     }
 
-    await installPickerPatch(cdp);
     await check(`${label} 加入合成資料夾只顯示預覽、確認按鈕狀態正確且未開始索引`, async () => {
       const start = browserEvents.length;
       await click(cdp, "#nav-roots");
