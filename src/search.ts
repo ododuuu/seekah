@@ -313,7 +313,7 @@ function allTermsPassages(store: IndexStore, filePath: string, terms: readonly s
   const passageTerms = terms.slice(0, MAX_PASSAGE_TERMS);
   const omittedTerms = Math.max(0, terms.length - passageTerms.length);
   if (!passageTerms.length) return { passages: [], omittedTerms };
-  const candidate = store.candidateByPath(filePath, trace);
+  const candidate = store.candidateByPath(filePath, trace, passageTerms);
   if (!candidate) return { passages: [], omittedTerms };
 
   const firstBlocks: PassageBlock[] = [];

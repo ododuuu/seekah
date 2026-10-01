@@ -1,4 +1,45 @@
 # 設計決策紀錄
+
+## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
+
+- 日期：2026-10-02。依 SPEC §92。本分支範圍是 `src/store.ts` 的 current chunk store 讀取、`src/search.ts` 傳遞當頁前四個詞、`test/m88.test.ts`、`docs/0.47-SEARCH-SLOW-NOTES.md`；不修改 UI、多段落挑選／片段函式、package 版本、STATUS、NEXT-TODO 或 handoff。
+- 事實：
+  - D112 的 `allTermsPassages()` 為了找每個詞的第一個 block，會經 `candidateByPath()` 對當頁每份 current chunk store 文件讀完所有 chunks／blocks；長文件一頁因此重複做完整 payload 解壓與 block 組裝。
+  - 合成 20 份、每份 768 blocks 的長文件，查詢詞只在開頭 heading／結尾 content 時，修正前 5 次取樣 p50／p95 為 93.1／93.2 ms；當頁結果為 20 份、首筆兩段。
+  - 既有 chunk／heading FTS 是保守候選，不是 exact truth；exact matching 仍由搜尋層逐 block 以正規化 `includes` 判斷。
+- 決定：
+  - `allTermsPassages()` 只把當頁前最多四個 normalized terms 傳給 `candidateByPath()`；`IndexStore` 在 current chunk store 以每個 term 的 chunk／heading posting 找候選 chunk 與 heading ordinal，批次讀取候選 chunks，並補讀選定 block metadata。
+  - 儲存層回傳的候選 blocks 仍依 ordinal 排序；搜尋層原本的 `matchingPassageBlock()`、首次命中、terms 去重、相鄰合併、snippet 與 omittedTerms 邏輯完全不改。heading-only／空內容 metadata 有保留；FTS 表不完整時回到完整讀取。
+  - block-index 與 pre-chunk legacy store 不套用此候選路徑，維持既有 `documentBlocks()`／`blocksFor()` fallback；不新增 schema、migration、全文 cache 或結果 API 欄位。
+- 理由：
+  - 候選查詢與 ranking 已使用同一組 current chunk／heading FTS；只把保守 superset 用於減少 storage read，exact verification 仍在既有搜尋邏輯，能保留結果正確性。
+  - 在測量詞分布下修正後 p50／p95 為 58.0／65.3 ms，約為基線 0.62x／0.70x；收益來自較少解壓／驗證 chunks，不依賴改變片段選擇。
+- 否決：
+  - 不把 FTS posting 當 exact 命中、不刪除 per-block exact matching、不把多段落資料移入候選／rank／total、不改代表 snippet 或 UI。
+  - 不為舊索引新增第二套索引、不以固定 block 上限或 timeout 丟棄候選；查詢詞分散於幾乎所有 chunks 時可自然退化為接近完整讀取。
+- 驗證：
+  - `test/m88.test.ts` 以完整讀取 subclass 與候選讀取逐欄比較結果，並要求候選路徑的 `indexVerifiedChunks`／`indexVerifiedBytes` 較少；移除 terms 傳遞或回到完整讀取時，該斷言失敗。
+  - `test/m76.test.ts` 與新增 `test/m87.test.ts` 聚焦合計 6 pass；`scripts/search-diff.mjs` 小型 650/650、大型 30/30 均為 0 mismatch、0 error；完整 `npm test` 為 490 項，487 pass、0 fail、3 skip。
+
+## D123：背景寫入搜尋慢先保留現況並記錄未重現
+
+- 日期：2026-10-02。依 SPEC §91。本分支不修改 C 的 WAL／autocheckpoint／readonly connection 設定；新增 `test/m87.test.ts` 保護隔離背景提交期間的讀取正確性，量測與限制記於 `docs/0.47-SEARCH-SLOW-NOTES.md`。
+- 調查事實：
+  - 使用 160 份、每份 8 blocks 的合成索引，4 個獨立 reader 與 1 個 writer 並行；writer 48 批、每批 8 次 upsert，每批後執行產品既有 `checkpointWal()`。無 writer p50／p95 為 21.4／27.9 ms；產品現況為 22.9／29.2 ms，約 1.07x／1.05x，160 份結果均完整。
+  - 將 readonly `mmap_size` 設為 0 後為 24.7／34.0 ms，較慢；將 writer `wal_autocheckpoint` 設為 0 且保留顯式 checkpoint 後為 22.9／30.3 ms；同時停用兩者為 22.9／29.7 ms；writer 不做顯式 checkpoint 為 23.1／29.0 ms。writer commit p50／p95 各約 4.8／7.5 ms。
+  - 這組負載未重現 NEXT-TODO 的 1.3～1.6 倍，候選設定也沒有穩定改善；因此沒有足夠證據把原因歸因於 WAL-index 讀取或 autocheckpoint。
+- 決定：
+  - 維持第 66 節的 readonly mmap、page cache、WAL autocheckpoint、journal limit、busy timeout 與產品既有 checkpoint 邊界，不為未重現的比例引入新設定或環境變數。
+  - `m87` 驗證 writable store 持續提交時，已開啟的 readonly store 仍能看到 data version、回傳完整結果與最新 revision；不設定脆弱的毫秒通過門檻。
+  - 若使用者環境仍重現，下一案先加入 event、transaction、checkpoint、候選驗證及 page materialization 的分段計時；不得把本次未重現誤報為已解決。
+- 理由：
+  - mmap／autocheckpoint 的隔離對照沒有改善且 mmap=0 退步；改變穩定性與 WAL 成本邊界的風險高於目前沒有證據的收益。
+  - 先保留測量資料與正確性回歸，避免以合成資料的低倍率推翻公司環境觀察，也避免把效能噪音固定成產品契約。
+- 否決：
+  - 不停用 WAL、不把 mmap 固定關閉、不把 autocheckpoint 無條件改成 0、不移除顯式 checkpoint、不放寬 exact search 或偷刪結果。
+- 驗證：
+  - C 的隔離量測與所有資料均在暫存目錄及合成文件；`test/m87.test.ts` 1 項通過。此決策沒有 C 程式碼行為修正，因此不宣稱已解決 1.3～1.6 倍問題。
+
 ## D118：監看不確定訊號採區域降級與有界補掃
 
 - 日期：2026-10-01。依 SPEC §86；本分支處理 `src/live-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts`、必要的 `src/live-queue.ts`／`src/workbench.ts` 狀態映射與 `test/m82.test.ts`。不修改 package 版本；所有實驗使用隔離 `LOCALDOCSEARCH_DATA_DIR` 與合成資料。

@@ -687,6 +687,7 @@ export class IndexStore {
   private shortTermsReady = false;
   private blockIndexReadyCache = false;
   private chunkStoreReadyCache = false;
+  private chunkPassageIndexReadyCache = false;
   private readonly scopeCounts = new Map<string, number>();
   private latestSearchTrace: SearchTrace | null = null;
   private traceLog: TraceLog | undefined;
@@ -2595,7 +2596,124 @@ export class IndexStore {
     });
   }
 
-  candidateByPath(filePath: string, trace?: SearchTraceRecorder): SearchCandidate | undefined {
+  /**
+   * Read only chunks that can contain the requested passage terms. The caller
+   * still performs the exact per-block matching and first-occurrence selection;
+   * this method only narrows the storage read using the conservative FTS
+   * candidate indexes.
+   */
+  private documentBlocksForTerms(documentId: number, terms: readonly string[], trace?: SearchTraceRecorder): StoredBlockRow[] {
+    if (!this.chunkPassageIndexReady()) return this.documentBlocks(documentId, trace);
+    const chunkIds = new Set<number>();
+    const headingByOrdinal = new Map<number, string>();
+    for (const term of new Set(terms)) {
+      for (const id of this.chunkCandidatesForDocument(term, documentId, trace)) chunkIds.add(id);
+      for (const heading of this.chunkHeadingCandidatesForDocument(term, documentId, trace)) {
+        if (!headingByOrdinal.has(heading.ordinal)) headingByOrdinal.set(heading.ordinal, heading.heading);
+      }
+    }
+    const headingOrdinals = [...headingByOrdinal.keys()];
+    for (const id of this.chunkIdsForOrdinals(documentId, headingOrdinals, trace)) chunkIds.add(id);
+    if (!chunkIds.size && !headingOrdinals.length) return [];
+
+    const decoded = this.readChunkBlocks(documentId, [...chunkIds], trace);
+    const ordinals = [...new Set([...decoded.map(block => block.ordinal), ...headingOrdinals])];
+    const meta = this.readBlockMetadataForOrdinals(documentId, ordinals, trace);
+    const blocks = new Map<number, StoredBlockRow>();
+    for (const block of decoded) {
+      const row = meta.get(block.ordinal);
+      blocks.set(block.ordinal, {
+        ordinal: block.ordinal,
+        heading: row?.heading ?? headingByOrdinal.get(block.ordinal) ?? null,
+        content: block.content,
+        location_kind: row?.location_kind ?? "line",
+        location_value: row?.location_value ?? derivedLocation(block.ordinal),
+      });
+    }
+    for (const ordinal of headingOrdinals) {
+      if (blocks.has(ordinal)) continue;
+      const row = meta.get(ordinal);
+      if (!row) continue;
+      blocks.set(ordinal, {
+        ordinal,
+        heading: row.heading ?? headingByOrdinal.get(ordinal) ?? null,
+        content: "",
+        location_kind: row.location_kind,
+        location_value: row.location_value,
+      });
+    }
+    return [...blocks.values()].sort((left, right) => left.ordinal - right.ordinal);
+  }
+
+  private chunkPassageIndexReady(): boolean {
+    if (!this.chunkPassageIndexReadyCache) {
+      this.chunkPassageIndexReadyCache = this.hasTable(CHUNK_TABLES.tri) && this.hasTable(CHUNK_TABLES.uni)
+        && this.hasTable(CHUNK_TABLES.bi) && this.hasTable(HEADING_TABLES.tri)
+        && this.hasTable(HEADING_TABLES.uni) && this.hasTable(HEADING_TABLES.bi)
+        && this.hasTable("search_headings");
+    }
+    return this.chunkPassageIndexReadyCache;
+  }
+
+  private chunkIdsForOrdinals(documentId: number, ordinals: readonly number[], trace?: SearchTraceRecorder): number[] {
+    if (!ordinals.length) return [];
+    const started = performance.now();
+    const query = this.db.prepare(`SELECT (
+      SELECT c.id
+      FROM document_chunks AS c
+      WHERE c.document_id = ? AND c.ordinal <= CAST(requested.value AS INTEGER)
+      ORDER BY c.ordinal DESC
+      LIMIT 1
+    ) AS id FROM json_each(?) AS requested`);
+    const rows = query.all(documentId, JSON.stringify([...new Set(ordinals)])) as { id: number | null }[];
+    trace?.addPhase("payloadLookup", performance.now() - started);
+    return [...new Set(rows.flatMap(row => row.id === null ? [] : [Number(row.id)]))];
+  }
+
+  private readBlockMetadataForOrdinals(documentId: number, ordinals: readonly number[],
+    trace?: SearchTraceRecorder): Map<number, { heading: string | null; location_kind: TextBlock["locationKind"]; location_value: string }> {
+    if (!ordinals.length) return new Map();
+    const started = performance.now();
+    const query = this.db.prepare(`SELECT ordinal, heading, location_kind, location_value
+      FROM block_meta
+      WHERE document_id = ? AND ordinal IN (SELECT CAST(value AS INTEGER) FROM json_each(?))`);
+    trace?.recordPayloadSql("blocksMetadata", "prepare", performance.now() - started);
+    const executeStarted = performance.now();
+    const rows = query.all(documentId, JSON.stringify([...new Set(ordinals)])) as {
+      ordinal: number; heading: string | null; location_kind: TextBlock["locationKind"]; location_value: string;
+    }[];
+    trace?.recordPayloadSql("blocksMetadata", "execute", performance.now() - executeStarted);
+    trace?.increment("blocksMetadataRows", rows.length);
+    return new Map(rows.map(row => [Number(row.ordinal), row]));
+  }
+
+  private readChunkBlocks(documentId: number, chunkIds: readonly number[], trace?: SearchTraceRecorder): ChunkBlock[] {
+    if (!chunkIds.length) return [];
+    const started = performance.now();
+    const query = this.db.prepare(`SELECT id, text, layout
+      FROM document_chunks
+      WHERE document_id = ? AND id IN (SELECT CAST(value AS INTEGER) FROM json_each(?))
+      ORDER BY ordinal`);
+    trace?.recordPayloadSql("payloadBlob", "prepare", performance.now() - started);
+    const executeStarted = performance.now();
+    const rows = query.all(documentId, JSON.stringify([...new Set(chunkIds)])) as {
+      id: number; text: Uint8Array; layout: Uint8Array;
+    }[];
+    trace?.recordPayloadSql("payloadBlob", "execute", performance.now() - executeStarted);
+    const blocks: ChunkBlock[] = [];
+    for (const row of rows) {
+      const chunkId = Number(row.id);
+      const decompressed = this.decompressedChunk(chunkId, row.text);
+      blocks.push(...decodeChunkBuffer(decompressed, row.layout));
+      trace?.increment("indexVerifiedChunks");
+      trace?.increment("indexVerifiedBytes", row.text.length);
+      trace?.recordPayloadDecompression(documentId, chunkId, decompressed.byteLength);
+    }
+    trace?.addPhase("payloadLookup", performance.now() - started);
+    return blocks;
+  }
+
+  candidateByPath(filePath: string, trace?: SearchTraceRecorder, passageTerms?: readonly string[]): SearchCandidate | undefined {
     const started = performance.now();
     const document = this.db.prepare("SELECT id, path, filename, extension, size_bytes, modified_at_ms, status FROM documents WHERE path = ?")
       .get(filePath) as StoredDocumentRow | undefined;
@@ -2603,7 +2721,9 @@ export class IndexStore {
     if (!document) return undefined;
     trace?.increment("documentsConsidered");
     trace?.increment("documentsAfterPruning");
-    const blocks = this.chunkStoreReady() ? this.documentBlocks(document.id, trace) : this.blocksFor(document.id, trace);
+    const blocks = this.chunkStoreReady()
+      ? passageTerms === undefined ? this.documentBlocks(document.id, trace) : this.documentBlocksForTerms(document.id, passageTerms, trace)
+      : this.blocksFor(document.id, trace);
     return { document, blocks };
   }
 
