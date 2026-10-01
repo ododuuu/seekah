@@ -8,7 +8,7 @@ import {
   documentStatuses, TEXT_PARSE_VERSION, emptyStatusCounts, textParseExtensions,
   type Diagnostic, type SyncSummary, type DocumentRecord, type DocumentStatus, type TextBlock,
 } from "./model.js";
-import { blocksContainingBuffer, firstBlockContainingBuffer, decompressChunk, buildChunks, decodeChunkBuffer, derivedLocation, type BuiltChunk, type ChunkBlock } from "./chunk-store.js";
+import { blocksContainingBuffer, decompressChunk, buildChunks, decodeChunkBuffer, derivedLocation, type BuiltChunk, type ChunkBlock } from "./chunk-store.js";
 import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
@@ -2525,7 +2525,7 @@ export class IndexStore {
 
   /** Exact long-phrase hits grouped by document from one FTS-filtered payload cursor. */
   chunkPhraseDocumentHits(term: string, types?: readonly string[], root?: string, subtree?: string,
-    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number> | undefined {
+    statuses?: readonly DocumentStatus[], trace?: SearchTraceRecorder): Map<number, number[]> | undefined {
     const { table, match } = indexMatch(term, false);
     const name = CHUNK_TABLES[table];
     const scope = this.searchDocumentWhere(types, root, subtree, statuses);
@@ -2539,24 +2539,23 @@ export class IndexStore {
         WHERE ${name} MATCH ?${where} ORDER BY c.document_id, c.ordinal`);
       this.chunkPhraseHitsSql.set(key, statement);
     }
-    const hits: [number, number][] = [];
+    const hits = new Map<number, number[]>();
     let rowsRead = 0;
     let verifiedBytes = 0;
-    const termNeedle = Buffer.from(term, "utf8");
     const started = performance.now();
     try {
       for (const row of statement.iterate(match, ...scope.values) as Iterable<{ chunk_id: number; document_id: number; text: Uint8Array; layout: Uint8Array }>) {
         rowsRead++;
         if (rowsRead > this.phraseCandidatePostingLimit) return undefined;
         verifiedBytes += row.text.length;
-        const ordinal = firstBlockContainingBuffer(this.decompressedChunk(Number(row.chunk_id), row.text), row.layout, term, termNeedle);
-        if (ordinal !== undefined) hits.push([Number(row.document_id), ordinal]);
+        const ordinals = blocksContainingBuffer(this.decompressedChunk(Number(row.chunk_id), row.text), row.layout, [term], false).get(term) ?? [];
+        if (ordinals.length) {
+          const documentOrdinals = hits.get(Number(row.document_id)) ?? [];
+          documentOrdinals.push(...ordinals);
+          hits.set(Number(row.document_id), documentOrdinals);
+        }
       }
-      const hitsByDocument = new Map<number, number>();
-      for (const [documentId, ordinal] of hits) {
-        if (!hitsByDocument.has(documentId)) hitsByDocument.set(documentId, ordinal);
-      }
-      return hitsByDocument;
+      return hits;
     } finally {
       trace?.increment("indexCandidateChunks", rowsRead);
       trace?.increment("indexVerifiedChunks", rowsRead);

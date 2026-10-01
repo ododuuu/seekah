@@ -159,8 +159,8 @@ test("M76 all-terms passages work across current, block-index and legacy stores"
     assert.equal(adjacent.passages?.[0]?.location, "第 1 行");
 
     const repeated = byName(found.page.results, "repeat.txt");
-    assert.deepEqual(repeated.passages?.map(passage => passage.location), ["第 1 行", "第 4 行"]);
-    assert.deepEqual(repeated.passages?.map(passage => passage.terms), [["private"], ["node"]]);
+    assert.deepEqual(repeated.passages?.map(passage => passage.location), ["第 3 行"]);
+    assert.deepEqual(repeated.passages?.map(passage => passage.terms), [["private", "node"]]);
 
     const mixed = byName(found.page.results, "mixed-private.txt");
     assert.deepEqual(mixed.passages?.flatMap(passage => passage.terms), ["node"]);
