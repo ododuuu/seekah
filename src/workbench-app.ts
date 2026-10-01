@@ -9,7 +9,7 @@ export function workbenchHtml(nonce: string): string {
 <style nonce="${nonce}">
 /* tokens/base */
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --brand: #145c4f;
   --brand-2: #0f493f;
   --brand-soft: #dcebe6;
@@ -26,6 +26,23 @@ export function workbenchHtml(nonce: string): string {
   --shadow: 0 2px 9px rgba(25, 41, 35, 0.09);
   --sidebar-width: 246px;
   --focus: #e1a42a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brand: #58b69e;
+    --brand-2: #8fe0cb;
+    --brand-soft: #173d35;
+    --canvas: #151b19;
+    --paper: #202825;
+    --sidebar: #1b2420;
+    --ink: #eff7f2;
+    --muted: #a5b7af;
+    --muted-strong: #c8d5ce;
+    --line: #3a4842;
+    --line-strong: #5a6b63;
+    --danger: #ff9c91;
+    --warning: #f0bd69;
+  }
 }
 /* tokens/base */
 * { box-sizing: border-box; }
@@ -722,9 +739,44 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 .dialog-body { padding: 20px; }
 .dialog-body > p:first-child { margin-top: 0; color: var(--muted); }
 .dialog-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 7px; padding: 13px 19px; border-top: 1px solid var(--line); background: #f6f8f7; }
-.dialog-actions .setting-check { margin-right: auto; }
-.setting-check { display: inline-flex; align-items: flex-start; gap: 8px; color: var(--ink); font-size: 13px; }
-.setting-check input { width: 17px; height: 17px; margin: 0; accent-color: var(--brand); }
+.setting-toggle-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; color: var(--ink); font-size: 13px; }
+.dialog-actions .setting-toggle-row { margin-right: auto; }
+.setting-toggle-copy { min-width: 0; display: grid; gap: 3px; }
+.setting-toggle-copy strong { font-weight: 650; }
+.setting-toggle-state { color: var(--muted); font-size: 11px; }
+.setting-switch {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--muted);
+  color: transparent;
+  transition: background .16s ease, border-color .16s ease;
+}
+.setting-switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  content: "";
+  transition: transform .16s ease;
+}
+.setting-switch[aria-checked="true"] { border-color: var(--brand-2); background: var(--brand); }
+.setting-switch[aria-checked="true"]::after { transform: translateX(20px); }
+.setting-switch[aria-busy="true"] { background: var(--line-strong); }
+.setting-switch[aria-busy="true"]::after { opacity: .7; }
+.setting-switch:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+@media (prefers-color-scheme: dark) {
+  .autoupdate-settings { background: var(--sidebar); }
+  .dialog-actions { background: var(--sidebar); }
+}
 .preview-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
 .preview-meta strong { color: var(--ink); }
 .preview-text {
@@ -820,17 +872,22 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     indexNotice: "",
     indexNoticeKind: "",
     statusRefreshBusy: false,
+    statusRevision: 0,
     supportedExtensions: [],
     addRootDraft: "",
     selectedRoots: new Set(),
     selectedTrash: new Set(),
     folderPickerBusy: false,
     deleteConfirmation: true,
+    deleteConfirmationSaving: false,
     totalMode: "fast",
+    totalModeSaving: false,
     counting: false,
     autoupdateEnabled: false,
+    autoupdateSaving: false,
     autoupdateStartupSupported: false,
     autoupdateStartupEnabled: false,
+    autoupdateStartupSaving: false,
     autoupdateDebounceMs: 1500,
     autoupdateReconcileMs: 21600000,
     preview: null,
@@ -942,6 +999,76 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (!node) return;
     node.textContent = text || "";
     node.className = "status" + (kind ? " " + kind : "");
+  }
+  function syncSettingSwitch(id, enabled, options = {}) {
+    const node = $(id);
+    if (!node) return;
+    const busy = options.busy === true;
+    node.setAttribute("aria-checked", String(Boolean(enabled)));
+    node.setAttribute("aria-busy", String(busy));
+    node.disabled = busy || options.disabled === true;
+    const stateText = $(id + "-state");
+    if (stateText) stateText.textContent = busy ? "處理中…" : enabled ? "已開啟" : "已關閉";
+  }
+  function settingSwitch(id, labelId, labelText, save) {
+    const row = make("div", "setting-toggle-row", "");
+    const copy = make("div", "setting-toggle-copy", "");
+    const label = make("strong", "", labelText);
+    label.id = labelId;
+    const stateText = make("span", "setting-toggle-state", "已關閉");
+    stateText.id = id + "-state";
+    stateText.setAttribute("role", "status");
+    stateText.setAttribute("aria-live", "polite");
+    copy.append(label, stateText);
+    const node = make("button", "setting-switch", "");
+    node.id = id;
+    node.type = "button";
+    node.setAttribute("role", "switch");
+    node.setAttribute("aria-checked", "false");
+    node.setAttribute("aria-busy", "false");
+    node.setAttribute("aria-labelledby", labelId);
+    node.setAttribute("aria-describedby", stateText.id);
+    node.addEventListener("click", () => { if (!node.disabled) void save(node.getAttribute("aria-checked") !== "true"); });
+    node.addEventListener("keydown", event => {
+      if (event.key !== " " && event.key !== "Enter") return;
+      event.preventDefault();
+      if (!node.disabled) node.click();
+    });
+    row.append(copy, node);
+    return row;
+  }
+  function preserveSettingResponses(indexStatus, revision) {
+    if (revision === state.statusRevision) return indexStatus;
+    const current = state.indexStatus || {};
+    return {
+      ...indexStatus,
+      ...(current.deleteConfirmation !== undefined ? { deleteConfirmation: current.deleteConfirmation } : {}),
+      ...(current.totalMode !== undefined ? { totalMode: current.totalMode } : {}),
+      ...(current.autoupdate ? { autoupdate: current.autoupdate } : {}),
+      ...(current.autoupdateStartup ? { autoupdateStartup: current.autoupdateStartup } : {}),
+    };
+  }
+  function applyAutoupdateResponse(data) {
+    if (!data || !data.autoupdate || typeof data.autoupdate.enabled !== "boolean") return false;
+    state.autoupdateEnabled = data.autoupdate.enabled;
+    state.indexStatus = {
+      ...(state.indexStatus || {}),
+      autoupdate: data.autoupdate,
+      ...(data.autoupdateSettings ? { autoupdateSettings: data.autoupdateSettings } : {}),
+    };
+    syncSettingSwitch("settings-autoupdate", state.autoupdateEnabled, { busy: state.autoupdateSaving });
+    renderAutoupdateSummary();
+    return true;
+  }
+  function applyAutoupdateStartupResponse(data) {
+    if (!data || !data.autoupdateStartup || typeof data.autoupdateStartup.enabled !== "boolean") return false;
+    state.autoupdateStartupEnabled = data.autoupdateStartup.enabled;
+    state.indexStatus = { ...(state.indexStatus || {}), autoupdateStartup: data.autoupdateStartup };
+    syncSettingSwitch("settings-autoupdate-startup", state.autoupdateStartupEnabled, {
+      busy: state.autoupdateStartupSaving,
+      disabled: !state.autoupdateStartupSupported,
+    });
+    return true;
   }
   function setNotice(text, kind) {
     state.indexNotice = text || "";
@@ -1998,19 +2125,19 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const indexStatus = state.indexStatus || {};
     const startup = indexStatus.autoupdateStartup || {};
     state.autoupdateStartupSupported = startup.supported === true;
-    state.autoupdateStartupEnabled = startup.enabled === true;
+    if (!state.autoupdateStartupSaving) state.autoupdateStartupEnabled = startup.enabled === true;
     const liveSettings = indexStatus.autoupdate && indexStatus.autoupdate.live && indexStatus.autoupdate.live.settings;
     const savedSettings = liveSettings || indexStatus.autoupdateSettings || {};
     if (Number.isSafeInteger(savedSettings.debounceMs)) state.autoupdateDebounceMs = savedSettings.debounceMs;
     if (Number.isSafeInteger(savedSettings.reconcileMs)) state.autoupdateReconcileMs = savedSettings.reconcileMs;
-    state.autoupdateEnabled = Boolean(indexStatus.autoupdate && indexStatus.autoupdate.enabled);
-    const autoupdateCheck = $("settings-autoupdate");
-    if (autoupdateCheck) autoupdateCheck.checked = state.autoupdateEnabled;
-    const startupCheck = $("settings-autoupdate-startup");
-    if (startupCheck) {
-      startupCheck.checked = state.autoupdateStartupEnabled;
-      startupCheck.disabled = !state.autoupdateStartupSupported;
-    }
+    if (!state.autoupdateSaving) state.autoupdateEnabled = Boolean(indexStatus.autoupdate && indexStatus.autoupdate.enabled);
+    syncSettingSwitch("settings-autoupdate", state.autoupdateEnabled, { busy: state.autoupdateSaving });
+    syncSettingSwitch("settings-autoupdate-startup", state.autoupdateStartupEnabled, {
+      busy: state.autoupdateStartupSaving,
+      disabled: !state.autoupdateStartupSupported,
+    });
+    syncSettingSwitch("settings-delete-confirmation", state.deleteConfirmation, { busy: state.deleteConfirmationSaving });
+    syncSettingSwitch("settings-total-exact", state.totalMode === "exact", { busy: state.totalModeSaving });
     const startupHelp = $("settings-autoupdate-startup-help");
     if (startupHelp) startupHelp.textContent = state.autoupdateStartupSupported ? "" : "僅 Windows 支援";
     const debounce = $("settings-autoupdate-debounce");
@@ -2024,17 +2151,16 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   async function refreshStatus() {
     if (state.statusRefreshBusy) return;
     state.statusRefreshBusy = true;
+    const revision = state.statusRevision;
     const previous = state.indexStatus;
     try {
       const [indexStatus, exclusions] = await Promise.all([api("/api/index-status"), api("/api/exclusions")]);
-      state.indexStatus = indexStatus;
+      state.indexStatus = preserveSettingResponses(indexStatus, revision);
       state.exclusions = exclusions;
       state.deleteConfirmation = state.indexStatus.deleteConfirmation !== false;
-      const settingsCheck = $("settings-delete-confirmation");
-      if (settingsCheck) settingsCheck.checked = state.deleteConfirmation;
+      syncSettingSwitch("settings-delete-confirmation", state.deleteConfirmation, { busy: state.deleteConfirmationSaving });
       state.totalMode = state.indexStatus.totalMode === "exact" ? "exact" : "fast";
-      const totalCheck = $("settings-total-exact");
-      if (totalCheck) totalCheck.checked = state.totalMode === "exact";
+      syncSettingSwitch("settings-total-exact", state.totalMode === "exact", { busy: state.totalModeSaving });
       syncAutoupdateControls();
       renderSidebar();
       renderScopeSummaries();
@@ -2046,6 +2172,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       if (!state.indexNotice && state.indexStatus.indexing && state.indexStatus.indexing.state === "failed") setNotice(state.indexStatus.indexing.message, "error");
       else if (!state.indexNotice) setStatus("index-status-message", "", "");
     } catch (error) {
+      if (revision !== state.statusRevision) return;
       state.indexStatus = previous || { state: "unavailable", roots: [], trash: [], indexing: { state: "idle", message: "索引狀態暫時無法讀取。" } };
       if (!previous || !isIndexing()) setNotice(error.message || "索引狀態暫時無法讀取；請稍後重試。", "warn");
       renderSidebar();
@@ -2196,58 +2323,88 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     } finally { renderRoots(); renderTrash(); }
   }
   async function saveDeleteConfirmation(enabled) {
+    const previous = state.deleteConfirmation;
+    state.deleteConfirmationSaving = true;
+    state.statusRevision += 1;
+    syncSettingSwitch("settings-delete-confirmation", previous, { busy: true });
     try {
       const data = await api("/api/settings", { method: "POST", body: { deleteConfirmation: enabled } });
       state.deleteConfirmation = data.deleteConfirmation !== false;
-      $("settings-delete-confirmation").checked = state.deleteConfirmation;
+      state.indexStatus = { ...(state.indexStatus || {}), deleteConfirmation: state.deleteConfirmation };
       setStatus("settings-status", state.deleteConfirmation ? "已開啟刪除確認提醒。" : "已關閉刪除確認提醒。", "ok");
       return true;
     } catch (error) {
+      state.deleteConfirmation = previous;
       setStatus("settings-status", error.message || "設定保存失敗。", "error");
       return false;
+    } finally {
+      state.deleteConfirmationSaving = false;
+      syncAutoupdateControls();
     }
   }
   async function saveTotalMode(exact) {
+    const previous = state.totalMode;
+    state.totalModeSaving = true;
+    state.statusRevision += 1;
+    syncSettingSwitch("settings-total-exact", previous === "exact", { busy: true });
     try {
       const data = await api("/api/settings", { method: "POST", body: { totalMode: exact ? "exact" : "fast" } });
       state.totalMode = data.totalMode === "exact" ? "exact" : "fast";
-      $("settings-total-exact").checked = state.totalMode === "exact";
+      state.indexStatus = { ...(state.indexStatus || {}), totalMode: state.totalMode };
       setStatus("settings-status", state.totalMode === "exact" ? "總筆數改為精確計算；常見詞會在結果顯示後補上總數。" : "總筆數改為快速；超過 500 筆時顯示「500 筆以上」。", "ok");
       return true;
     } catch (error) {
+      state.totalMode = previous;
       setStatus("settings-status", error.message || "設定保存失敗。", "error");
       return false;
+    } finally {
+      state.totalModeSaving = false;
+      syncAutoupdateControls();
     }
   }
   async function saveAutoupdate(enabled) {
-    const check = $("settings-autoupdate");
-    if (check) check.disabled = true;
+    const previous = state.autoupdateEnabled;
+    state.autoupdateSaving = true;
+    state.statusRevision += 1;
+    syncSettingSwitch("settings-autoupdate", previous, { busy: true });
     try {
       const data = await api("/api/settings", { method: "POST", body: { autoupdateEnabled: enabled } });
-      await refreshStatus();
+      if (!applyAutoupdateResponse(data)) throw new Error("設定回應缺少背景自動更新狀態。");
       setStatus("settings-status", data.message || (state.autoupdateEnabled
         ? "背景自動更新已開啟；檔案變更會增量更新。"
         : "背景自動更新已關閉。"), "ok");
+      return true;
     } catch (error) {
-      await refreshStatus();
+      state.autoupdateEnabled = previous;
       setStatus("settings-status", error.message || "背景自動更新設定失敗。", "error");
-    } finally { if (check) check.disabled = false; }
+      return false;
+    } finally {
+      state.autoupdateSaving = false;
+      syncAutoupdateControls();
+    }
   }
   async function saveAutoupdateStartup(enabled) {
-    const check = $("settings-autoupdate-startup");
     const supported = state.autoupdateStartupSupported;
-    if (!supported) return;
-    if (check) check.disabled = true;
+    if (!supported) return false;
+    const previous = state.autoupdateStartupEnabled;
+    state.autoupdateStartupSaving = true;
+    state.statusRevision += 1;
+    syncSettingSwitch("settings-autoupdate-startup", previous, { busy: true });
     try {
       const data = await api("/api/settings", { method: "POST", body: { autoupdateStartup: enabled } });
-      await refreshStatus();
-      setStatus("settings-status", data.autoupdateStartup && data.autoupdateStartup.enabled
+      if (!applyAutoupdateStartupResponse(data)) throw new Error("設定回應缺少登入啟動狀態。");
+      setStatus("settings-status", state.autoupdateStartupEnabled
         ? "已設定登入 Windows 時自動啟動背景自動更新。"
         : "已取消登入 Windows 時自動啟動背景自動更新。", "ok");
+      return true;
     } catch (error) {
-      await refreshStatus();
+      state.autoupdateStartupEnabled = previous;
       setStatus("settings-status", error.message || "登入啟動設定失敗。", "error");
-    } finally { syncAutoupdateControls(); }
+      return false;
+    } finally {
+      state.autoupdateStartupSaving = false;
+      syncAutoupdateControls();
+    }
   }
   async function saveAutoupdateParameters() {
     const debounce = $("settings-autoupdate-debounce");
@@ -2260,6 +2417,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       return false;
     }
     const fields = [debounce, reconcile].filter(Boolean);
+    state.statusRevision += 1;
     for (const field of fields) field.disabled = true;
     try {
       const data = await api("/api/settings", { method: "POST", body: {
@@ -2279,14 +2437,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
   }
   function openSettings(trigger) {
-    const check = $("settings-delete-confirmation");
-    if (check) check.checked = state.deleteConfirmation;
-    const autoupdate = $("settings-autoupdate");
-    if (autoupdate) autoupdate.checked = state.autoupdateEnabled;
-    const totalExact = $("settings-total-exact");
-    if (totalExact) totalExact.checked = state.totalMode === "exact";
+    const firstSwitch = $("settings-delete-confirmation");
     syncAutoupdateControls();
-    showDialog($("settings-dialog"), trigger || document.activeElement, check || $("settings-dialog"));
+    showDialog($("settings-dialog"), trigger || document.activeElement, firstSwitch || $("settings-dialog"));
     void refreshStatus();
   }
   function makePageHeader(title, description) {
@@ -2387,11 +2540,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const settingsDialog = document.createElement("dialog"); settingsDialog.id = "settings-dialog"; settingsDialog.className = "settings-dialog"; settingsDialog.setAttribute("aria-labelledby", "settings-title");
     const settingsHead = make("div", "dialog-head", ""); const settingsHeading = make("div", "", ""); settingsHeading.append(make("h2", "", "設定")); settingsHeading.firstChild.id = "settings-title"; const settingsClose = iconButton("×", "關閉設定", () => settingsDialog.close()); settingsHead.append(settingsHeading, settingsClose);
     const settingsBody = make("div", "dialog-body", ""); settingsBody.append(make("p", "", "管理工作台與索引更新。"));
-    const settingLabel = make("label", "setting-check", ""); const settingCheck = document.createElement("input"); settingCheck.type = "checkbox"; settingCheck.id = "settings-delete-confirmation"; settingCheck.addEventListener("change", () => void saveDeleteConfirmation(settingCheck.checked)); settingLabel.append(settingCheck, make("span", "", "刪除索引目錄前顯示確認"));
+    const settingLabel = settingSwitch("settings-delete-confirmation", "settings-delete-confirmation-label", "刪除索引目錄前顯示確認", enabled => saveDeleteConfirmation(enabled));
     const autoupdateSection = make("section", "settings-section", "");
-    const autoupdateLabel = make("label", "setting-check", ""); const autoupdateCheck = document.createElement("input"); autoupdateCheck.type = "checkbox"; autoupdateCheck.id = "settings-autoupdate"; autoupdateCheck.addEventListener("change", () => void saveAutoupdate(autoupdateCheck.checked));
-    const autoupdateLabelText = make("span", "", ""); autoupdateLabelText.id = "settings-autoupdate-label"; autoupdateLabel.append(autoupdateCheck, autoupdateLabelText);
-    const startupLabel = make("label", "setting-check", ""); const startupCheck = document.createElement("input"); startupCheck.type = "checkbox"; startupCheck.id = "settings-autoupdate-startup"; startupCheck.disabled = true; startupCheck.addEventListener("change", () => void saveAutoupdateStartup(startupCheck.checked)); startupLabel.append(startupCheck, make("span", "", "登入 Windows 時自動啟動背景自動更新"));
+    const autoupdateLabel = settingSwitch("settings-autoupdate", "settings-autoupdate-label", "背景自動更新", enabled => saveAutoupdate(enabled));
+    const startupLabel = settingSwitch("settings-autoupdate-startup", "settings-autoupdate-startup-label", "登入 Windows 時自動啟動背景自動更新", enabled => saveAutoupdateStartup(enabled));
     const startupHelp = make("p", "settings-help", "僅 Windows 支援"); startupHelp.id = "settings-autoupdate-startup-help";
     const autoupdateSettings = make("div", "autoupdate-settings", "");
     const autoupdateSettingsHead = make("div", "autoupdate-settings-head", ""); autoupdateSettingsHead.append(make("strong", "", "背景自動更新狀態")); const autoupdateRefresh = button("重新整理", "", () => void refreshStatus()); autoupdateRefresh.id = "settings-autoupdate-refresh"; autoupdateSettingsHead.append(autoupdateRefresh); autoupdateSettings.append(autoupdateSettingsHead);
@@ -2400,7 +2552,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const debounceRow = make("div", "settings-number-row", ""); const debounceLabel = make("label", "", ""); debounceLabel.htmlFor = "settings-autoupdate-debounce"; debounceLabel.append(make("strong", "", "變更等待"), make("small", "", "秒（0.2～60）")); const debounceField = document.createElement("input"); debounceField.type = "number"; debounceField.id = "settings-autoupdate-debounce"; debounceField.min = "0.2"; debounceField.max = "60"; debounceField.step = "0.1"; debounceField.addEventListener("change", () => void saveAutoupdateParameters()); debounceRow.append(debounceLabel, debounceField); autoupdateSettings.append(debounceRow);
     const reconcileRow = make("div", "settings-number-row", ""); const reconcileLabel = make("label", "", ""); reconcileLabel.htmlFor = "settings-autoupdate-reconcile"; reconcileLabel.append(make("strong", "", "完整校正間隔"), make("small", "", "小時（0.25～24）")); const reconcileField = document.createElement("input"); reconcileField.type = "number"; reconcileField.id = "settings-autoupdate-reconcile"; reconcileField.min = "0.25"; reconcileField.max = "24"; reconcileField.step = "0.25"; reconcileField.addEventListener("change", () => void saveAutoupdateParameters()); reconcileRow.append(reconcileLabel, reconcileField); autoupdateSettings.append(reconcileRow);
     autoupdateSection.append(autoupdateLabel, startupLabel, startupHelp, autoupdateSettings);
-    const totalLabelEl = make("label", "setting-check", ""); const totalCheck = document.createElement("input"); totalCheck.type = "checkbox"; totalCheck.id = "settings-total-exact"; totalCheck.addEventListener("change", () => void saveTotalMode(totalCheck.checked)); totalLabelEl.append(totalCheck, make("span", "", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）"));
+    const totalLabelEl = settingSwitch("settings-total-exact", "settings-total-exact-label", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）", enabled => saveTotalMode(enabled));
     const exclusionPolicySection = make("section", "settings-section", "");
     exclusionPolicySection.id = "settings-exclusion-policy";
     exclusionPolicySection.append(make("h2", "", "哪些位置預設不索引"), make("p", "settings-help", "Seekah 會依目前根目錄與平台規則略過系統資料、內部資料與使用者排除規則；規則、逐規則略過計數與清理進度只讀顯示。"));

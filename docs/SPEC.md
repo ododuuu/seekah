@@ -2584,3 +2584,30 @@ docsearch doctor
 - `scripts/ui-smoke.mjs` 必須以合成搜尋結果透過 CDP Selection API 選取檔名，確認選取值等於檔名且未送出 `open`；清除選取後仍能送出開啟。另點擊「複製路徑」並攔截或讀取剪貼簿，確認值等於完整路徑；兩種工作台視窗大小都必須執行。
 - 驗收必須涵蓋含中文、空白與 emoji 的合成路徑／檔名，以及含高亮 `mark` 的片段選取；不得讀取、複製或開啟使用者真實資料目錄與備份。
 - 不改設定頁、背景自動更新開關、版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`；不新增外部服務、網路傳輸、文件內容 API、OCR 或格式支援。
+
+## 79. 工作台設定頁 Toggle Switch 與背景自動更新狀態一致性
+
+依 D111。設定頁的布林設定必須以可操作、可讀取且不會被慢速狀態查詢覆寫的 Toggle Switch 呈現。本節只改工作台前端的控制呈現與狀態同步；`POST /api/settings` 的既有資料契約與背景更新 daemon 行為不變。
+
+### 79.1 控制元件與可及性
+
+- `settings-autoupdate`（背景自動更新）與 `settings-autoupdate-startup`（登入 Windows 時自動啟動）必須是 `button type="button"`，`role="switch"`，以 `aria-checked="true|false"` 表示目前實際狀態；不得再以 `input[type="checkbox"]` 實作。
+- 設定頁其他同樣代表布林設定的「刪除確認提醒」與「精確計算總筆數」也使用相同 Toggle Switch 元件；結果選取、臨時文件選取、根目錄／垃圾桶選取仍是選取用途 checkbox，不屬於本節。
+- 每個開關旁必須有清楚的可見狀態文字：成功且可用時為「已開啟」或「已關閉」，送出設定期間為「處理中…」。開關在處理期間 disabled，且 `aria-checked` 保留送出前的實際值，避免使用者重複送出。
+- Toggle Switch 必須保留原生 button 的 Enter／Space 鍵盤操作、可見焦點樣式與可讀名稱；滑動軌道與圓鈕在淺色及深色偏好主題都必須有足夠對比。非 Windows 的登入啟動開關維持 disabled，並保留「僅 Windows 支援」說明。
+- `aria-checked`、狀態文字、disabled 與視覺狀態必須由同一份前端狀態更新，不得只改 CSS 或只改原生 DOM property。
+
+### 79.2 設定切換與狀態同步
+
+- 背景自動更新開關切換時送出既有 `POST /api/settings` `{ autoupdateEnabled: boolean }`；登入啟動開關切換時送出 `{ autoupdateStartup: boolean }`。刪除確認與總筆數沿用各自既有 API 欄位。
+- 成功回應中的 `autoupdate`／`autoupdateStartup` 是控制通道的權威結果；前端必須立即套用回應中的狀態、健康摘要與狀態文字，不得為了顯示開關結果等待一次可能約數秒的 `refreshStatus()`。
+- 設定頁開啟或手動重新整理仍可讀取 `GET /api/index-status`；若該讀取在切換前已開始，晚到的舊回應不得覆寫切換成功回應。其他索引狀態可更新，但 autoupdate／登入啟動欄位必須保留較新的設定結果。
+- 成功關閉背景自動更新時，UI 必須顯示「已關閉」且 API／控制通道狀態為 disabled；成功開啟時同理顯示「已開啟」與 enabled。登入啟動是下次登入的捷徑設定，必須與目前 daemon 開關分開顯示，不得以其中一個推測另一個。
+- API 失敗時，開關必須回復送出前的值、解除 disabled，並在設定狀態區顯示明確錯誤；不得留下與 API 實際狀態相反的 optimistic UI。前景 `watch` 回報 `AUTOUPDATE_FOREGROUND_ACTIVE` 時，背景更新開關維持開啟，並直接顯示「請在原終端按 Ctrl+C」的原因。
+- 索引進行中、控制通道啟動／停止中或狀態讀取緩慢時，設定開關的處理狀態必須可見；不得因索引頁或慢速 `index-status` 回應而把已成功的開關畫面回彈成舊值。
+
+### 79.3 驗收與明確不做
+
+- `test/m75.test.ts` 必須靜態確認兩個背景更新開關及其他設定布林控制使用 switch role／`aria-checked`、不存在設定 checkbox，並確認失敗回復與 response 套用程式路徑。
+- `scripts/ui-smoke.mjs` 必須在隔離合成資料及本機 Chrome CDP 實際操作背景更新開關「開、關、再開」，檢查狀態文字、`aria-checked`、POST 回應與 `GET /api/index-status` 一致；另覆蓋登入啟動分離、CLI daemon、前景 watch 拒絕、索引進行中、慢速 status 與失敗回復。
+- 不修改 `src/workbench.ts` 的既有 settings API 行為、autoupdate IPC／MCP／CLI 識別、資料目錄、索引 schema、搜尋結果列、文件選取 checkbox 或 package 版本。
