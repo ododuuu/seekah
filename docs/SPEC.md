@@ -2640,3 +2640,27 @@ docsearch doctor
 - `test/m76.test.ts` 覆蓋 current、block-index、legacy 三種形狀；不同／同一／相鄰行、重複詞、四詞以上、中文與全形、大小寫、filename-only，以及 `field=content|all|filename`。
 - 差分必須逐筆證明加入多段落前後的文件集合、順序、rank、`total` 與 `totalRelation` 相同；phrase、空正文及不存在段落也要反向驗證。
 - 測試涵蓋 Workbench `/api/search`、MCP `search_documents` 與 CLI 追加欄位，並確認非當頁與總數路徑不物化 passages。執行完整 `npm test`；本機證據不得宣稱公司 Windows 驗收。
+
+## 82. 工作台搜尋結果的多段落呈現與選取
+
+依 D114。本節只改工作台搜尋結果列的呈現；`/api/search` 已由第 80 節追加的 `passages` 與 `omittedTerms` 是本節唯一資料來源，不改搜尋集合、排序、排名、分頁或上下文驗證。
+
+### 82.1 列表與表格結果列
+
+- 當一筆結果的 `passages` 長度大於 1 時，列表與表格檢視都必須在檔名／路徑資訊下方依序顯示每個 passage。每段使用原生 `ul`／`li` 清單語意，左側顯示 `location`（例如「第 1 行」「第 8 行」）與該段 `terms`，右側顯示 `snippet`。
+- passage 的 `terms` 與 `snippet` 必須由安全 DOM 節點建立；命中詞沿用工作台既有 `mark` 高亮，但不得使用 `innerHTML`、`outerHTML` 或把不可信文字拼成 HTML。
+- 每段維持緊湊版面，片段最多約兩行並以既有截斷片段為準；1180 與 1440 CSS px 寬度不得因雙欄標籤造成結果列水平溢出或遮住既有操作。
+- `omittedTerms > 0` 時，結果列必須顯示「還有 N 個詞未列出」。這個提示即使只有零／一個可列 passage 也要顯示；零／一個 passage 本身仍維持既有單一 `snippet` 外觀與互動。
+- `passages` 不存在、為空或只有一個元素時，列表維持原有代表 `snippet`、檔名符合與無片段提示；表格維持原有欄位，不額外虛構 passage。`phrase` 模式不得因本節改成多詞分段語意。
+
+### 82.2 選取、複製與可及性
+
+- passage 的 `snippet` 文字必須可用瀏覽器選取；框選 passage snippet 的文字結果必須等於 API 回傳的原始 `snippet`，不得包含位置、terms、分隔符號或高亮額外字元。位置／terms 標籤必須 `user-select: none`，避免一般拖曳選取誤把標籤併入片段。
+- 既有「複製路徑」與「複製檔名」控制項、檔名開啟的選取 guard、列表／表格切換、分頁、結果選取與上下文抽屜行為不變。
+- 每段的清單項目必須有可讀的 `aria-label` 或等價語意，位置與命中詞不可只靠顏色或 `mark` 傳達；`mark` 只作視覺提示。
+
+### 82.3 驗收與明確不做
+
+- `test/m78.test.ts` 必須靜態檢查列表／表格共用或等價的多段落 DOM、`passages.length > 1` 邊界、`omittedTerms` 提示、安全節點、高亮、清單語意、可選取／不可選取 CSS，以及既有複製控制未被移除；以反向變體證明移除關鍵邊界或標籤契約時測試會失敗。
+- `scripts/ui-smoke.mjs` 必須只用隔離合成資料，在 1180×800 與 1440×900 以 Chrome CDP 實際驗證 `all-terms` 的不同位置多段落、單一 passage、phrase、列表／表格、snippet Selection API 原文相等、複製按鈕、模式切換、分頁與上下文抽屜；並保存兩種視窗大小截圖供人工檢視。
+- 不讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份；不新增文件內容 endpoint、外部服務、OCR、embedding、LAN 暴露、格式支援、版本變更或 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`。
