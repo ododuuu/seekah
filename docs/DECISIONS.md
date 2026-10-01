@@ -1,4 +1,34 @@
 # 設計決策紀錄
+## D112：全部詞模式只在當頁物化多段落
+
+- 日期：2026-10-01。依 SPEC §80；本分支只處理搜尋後端、Workbench／MCP／CLI 搜尋輸出與 `test/m76.test.ts`，不修改 `src/workbench-app.ts`、package 版本、STATUS、handoff 或 NEXT-TODO。
+- 事實：
+  - 目前 `all-terms` 的 rank stream 只保存一個代表 block 的 ordinal；`materializeHits()` 只用該代表 block 產生既有 `snippet`。
+  - 使用者要搜尋例如 `private node` 時，`private` 在第一行、`node` 在最後一行，結果標題下需要看到兩個正文段落；這是顯示資料，不是新的命中或排序語意。
+  - 搜尋同時支援 current chunk store、block-index 與 pre-chunk legacy path；顯示階段已有 `blockSource()`，完整文件讀取則由 `candidateByPath()` 依索引形狀選擇正確資料表。
+- 決定：
+  - `SearchResult` 追加 `passages` 與 `omittedTerms`；每個 passage 追加 `terms`、`heading`、`location`、`snippet`、`snippetTruncated`。`terms` 是實際比對所用的 NFKC／小寫唯一詞，供後續畫面以與既有命中高亮一致的資料標示。
+  - 只有 `all-terms` 在 `materializeHits()` 對當頁結果計算多段落；每個詞取正文第一個命中 block，依 ordinal 排序；同 block 或相鄰 ordinal 的首次命中 block 合併，terms 去重。最多計算前四個去重詞，其餘回報 `omittedTerms`，但 rank stream 仍使用完整詞集合。
+  - passage 的原文來源把命中標題／內容區塊以既有 block 邊界合併後交給 `makeSnippet()`；不另造高亮 HTML、不改截斷上限、不改代表 `snippet`。檔名-only 結果不讀正文且回傳空 passages。
+  - phrase 保留既有代表片段；本版在 materialize 追加最多一段相容 passage，filename-only 仍為空。Workbench 與 MCP 明確轉出新欄位；CLI 保留既有行，all-terms 時在其後列出各段。
+  - 不把 passages 放進候選查詢、rank、翻頁前的 `fill()` 或 total 計算；每頁最多 20 筆的工作台邊界仍由既有 API 驗證維持。
+- 理由：
+  - 顯示資料只服務使用者看見的當頁；若在候選或 total 階段建立全文段落，會把最多 500 筆／精確總數的成本放大，違反 §52、§62、§76 的延遲讀取邊界。
+  - 重用 `candidateByPath()` 與 `makeSnippet()` 可同時涵蓋三種既有索引形狀、Unicode 對回原文、160 code point 限制與截斷旗標，不建立第二套 docstore 讀取器。
+  - `passages` 是追加欄位，代表 `snippet` 與所有既有結果欄位保持穩定；段落命中不會被誤用成新的結果、排名或總數來源。
+- 否決：
+  - 不改 `rankDocument`、`indexedHits`、chunk candidate stream、block／legacy candidate 查詢或資料庫 schema；不把多個 block 串成新的搜尋 block。
+  - 不為每個搜尋詞建立持久化位置索引、不新增全文 cache、不改 `total`／`totalRelation`，也不以超過四詞為由淘汰結果。
+  - 不修改工作台前端、不輸出高亮 HTML、不把 filename-only 結果偽造成正文段落；phrase 不改成全部詞語意。
+- 驗證：
+  - `test/m76.test.ts` 以合成暫存資料覆蓋三種索引形狀、詞在不同／同一／相鄰 block、重複／Unicode／全形／大小寫、四詞以上、filename-only、三種 field，以及 API／CLI。
+  - 以舊版基準與 materialize 前後投影差分集合、順序、rank、total、totalRelation；反向移除當頁物化或欄位轉出時，新增回歸必須失敗。
+  - 執行 build、m76 聚焦測試與完整 `npm test`；只回報本機 win32 實際結果，不宣稱公司 Windows 驗證。
+- 相容與風險：
+  - `LocalDocSearch` 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／`docsearch` 識別、既有 snippet 與搜尋集合均不變；測試只使用自行建立的合成暫存資料。
+  - passage 讀取只在物化當頁發生，故翻頁會按該頁重新讀取；這是刻意取捨，避免跨頁 cache 改變生命週期或記憶體上限。
+- 版本：待合併時決定；本分支不修改 `package.json` 版本。
+
 ## D111：工作台設定開關改用 Toggle Switch 並以 settings response 保持一致
 
 - 日期：2026-10-01。依 SPEC §79；本分支只處理工作台設定頁布林開關、`test/m75.test.ts` 與 `scripts/ui-smoke.mjs`，不修改 package 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

@@ -79,6 +79,8 @@ export function searchDocuments(store: IndexStore, input: SearchDocumentsInput) 
     location: result.location,
     snippet: result.snippet,
     snippetTruncated: result.snippetTruncated,
+    passages: result.passages ?? [],
+    omittedTerms: result.omittedTerms ?? 0,
     modifiedAt: new Date(result.modifiedAtMs).toISOString(),
   }));
   return {
