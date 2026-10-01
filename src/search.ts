@@ -878,6 +878,7 @@ export function openHits(store: IndexStore, rawQuery: string, options: OpenHitsO
     return new ArrayHitStream(collectHits(store, rawQuery, options.types, options.root, mode, ids, options.subtree, field,
       options.statuses, sort, recorder));
   }
+  store.prepareSearchCache();
   try {
     const normalizationStarted = performance.now();
     const { query, terms } = queryTerms(rawQuery, mode);

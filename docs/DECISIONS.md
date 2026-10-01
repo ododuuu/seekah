@@ -24,6 +24,29 @@
   - `test/m81.test.ts` 必須證明冷讀取與 cache hit 深度等價、sync／reconcile／settings／root／ignore 失效、MCP 形狀與 `/api/index-progress` 欄位邊界；反向移除失效或誤把完整 status 放入 progress 時測試必須失敗。
   - 交付前以隔離合成索引量測暖 cache 端到端目標約 300 ms 內，並執行 `node scripts/ui-smoke.mjs` 與完整 `npm test`；本機 win32 證據不宣稱公司 Windows 人工驗收。
 
+## D116：以 Buffer 驗證與 96 MiB 有界解壓 chunk LRU 降低長數字 sustained p95
+
+- 日期：2026-10-01。依 SPEC §84；本分支只處理 `src/chunk-store.ts`、`src/store.ts`、`src/search.ts` 的搜尋核心效能、`test/m80.test.ts`、`scripts/search-diff.mjs`、`docs/SEARCH-DIFF.md` 與本次驗證報告。不修改工作台前端或 `/api/search` 的請求處理，不修改 package 版本。
+- 調查事實：
+  - 0.44.1／D108 已把長片語候選查詢合併成單一 payload cursor；大型合成索引仍需逐一解壓約 40,000 個候選 chunk，因為 FTS trigram 只能提供保守 superset，不能直接當成 exact hit。
+  - 本機大型合成索引（`document_chunks=40,000`，資料庫約 324 MiB）對 `4564654564651431321` 的基線 trace 為 `documentsConsidered=40,000`、`documentsExactVerified=40,000`、結果 0；首次約 1.55 秒，暖機後約 1.1～1.6 秒。這次機器未重現交接文件記載的 4.05 秒 sustained p95，但仍以 10 輪及強制 GC／trace-gc 量測尋找跨輪退化。
+  - 基線 `node --cpu-prof --trace-gc` profile 的主要 sample 落在 `chunkPhraseDocumentHits`（1,503）、`chunkCandidateDocuments`（1,528）、`processChunkSync`（1,177）、`Zstd`（796）與 garbage collector（1,409）；GC trace 反覆報告 `external memory pressure`。`firstBlockContaining` 每個 chunk 都把 zstd 輸出轉成 JavaScript 字串，並在 ASCII 判斷／大小寫路徑產生額外配置。
+- 決定：
+  - 將解壓核心分成「解壓後 Buffer」與既有字串 fallback。對 ASCII chunk 且查詢為 ASCII 的安全情況，直接用 Buffer／UTF-8 needle 找位置；查詢為大小寫中性時不建立整段 JS 字串。layout 仍以 UTF-16／block boundary 驗證；非 ASCII、大小寫轉換或 offset 無法一對一時沿用正規化字串路徑。
+  - 在 `IndexStore` 下加入程序內、database path＋chunk id 隔離的 LRU。96 MiB 是硬上限；未提供 `decompressedChunkCacheBytes` 時預設停用，明確 `0` 也停用，只有正值 opt-in，所有 eviction 依解壓 Buffer bytes 計算；讀取端在每次搜尋開始檢查 `PRAGMA data_version`，writer commit／外部更新後清除此 database path 的項目。
+  - 保留現有 FTS candidate superset、逐 block exact verification、排序／total／snippet 與三種舊索引路徑；cache miss、停用 cache、cache 超限和版本變更都走既有正確路徑。這使 cache 只是效能提示，不是資料真相。
+- 取捨與否決：
+  - 不實作可變輸出 buffer pool：Node 22 `zstdDecompressSync` 介面只回傳新 Buffer，沒有可安全傳入的 destination；共用可變 Buffer 也會讓 `chunkTermHits`／片段讀取的生命週期與並行請求互相覆寫。LRU 保留 immutable Buffer，代價是最多 96 MiB 常駐 native/external memory。
+  - 不實作 worker threads 平行解壓：搜尋目前由主程序同步執行，平行設計會與 pi 的工作台搜尋 worker 邊界重疊，還需傳遞 40,000 筆結果／Buffer、增加 RSS 與排程抖動；先用不改 API 的 Buffer／LRU 路徑驗證是否已達 p95，未達標再另案設計搜尋函式內部平行度。
+  - 不新增稀有 trigram／頻率表、固定候選上限、timeout 或猜測式剪枝：這些方案要 migration／失效策略或可能漏 exact hit。現有 FTS superset＋完整驗證保證結果等價。
+  - 不做整個搜尋結果 cache：query、scope、index version、排序與 snippet 變化使失效面比 chunk bytes 大；只 cache 可重用且可由 data_version 清除的解壓內容。
+- 驗證計畫與證據：
+  - `test/m80.test.ts` 以合成 store 覆蓋 byte fast path、Unicode／大小寫 fallback、跨 block 假命中、cache disabled／enabled、LRU 上限、不同 database path 與 upsert 後失效；移除 byte／boundary／invalidation guard 的反向變體必須失敗。
+  - `scripts/search-diff.mjs` 由 scratchpad 範本整理成基準／新版 worktree 參數，固定跑 650 組小索引與 30 組大型合成索引，逐筆比較所有搜尋結果欄位、排序、rank、total 與 `totalRelation`。
+  - 使用 `node --cpu-prof`、`node --trace-gc`、`--expose-gc` 及 process RSS 量測記錄修正前後 sustained p95、GC／Zstd sample 與峰值；不接觸 `%LOCALAPPDATA%\\LocalDocSearch\\` 或其備份。驗證文件明列本機 win32 證據，不宣稱公司 Windows 驗收。
+  - 公平矩陣追加決定：W1 同一 19 位數字無結果查詢 10 次、W2 十個 distinct 19 位數字無結果查詢重複 3 輪，並以內容 common20／rare20 及 mixed40 比較 main、Buffer-only（cache 0）、Buffer＋96 MiB cache。W2 p95 為 main 1,460.269 ms、cache 0 為 1,697.555 ms、cache 為 656.844 ms；但 mixed40 wall time 僅由 30,402.708 ms 降至 29,682.318 ms（2.4%），未達「W2 與混合負載都明確超過 20%」門檻，且 cache RSS 峰值 978.83 MiB，故產品預設採停用；選項、LRU、上限、失效與測試保留供明確 opt-in。
+- 相容性：保留 LocalDocSearch 資料目錄、`LOCALDOCSEARCH_DATA_DIR`、`.localdocsearchignore`、IPC／MCP／`docsearch` 識別；不新增 schema、migration、外部服務或文件內容傳輸。
+
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

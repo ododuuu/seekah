@@ -8,7 +8,7 @@ import {
   documentStatuses, TEXT_PARSE_VERSION, emptyStatusCounts, textParseExtensions,
   type Diagnostic, type SyncSummary, type DocumentRecord, type DocumentStatus, type TextBlock,
 } from "./model.js";
-import { blocksContaining, firstBlockContaining, buildChunks, decodeChunk, derivedLocation, type BuiltChunk, type ChunkBlock } from "./chunk-store.js";
+import { blocksContainingBuffer, firstBlockContainingBuffer, decompressChunk, buildChunks, decodeChunkBuffer, derivedLocation, type BuiltChunk, type ChunkBlock } from "./chunk-store.js";
 import { OperationCancelledError, throwIfAborted, yieldToEvents, type ProgressUpdate } from "./progress.js";
 import { coversPath, resolveUserRootPath, samePath } from "./root-plan.js";
 import { createTraceLog, type TraceLog } from "./trace-log.js";
@@ -203,6 +203,170 @@ export type ChunkPathOrder = "native" | "utf16";
 const PAGE_CACHE_KIB = -65_536;
 // Read-only connections map up to this much of the database file.
 const MMAP_BYTES = 1024 * 1024 * 1024;
+
+export const DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES = 96 * 1024 * 1024;
+
+type DecompressedChunkCacheEntry = {
+  databaseKey: string;
+  chunkId: number;
+  bytes: Buffer;
+  offset: number;
+  length: number;
+};
+
+type FreeChunkRange = { offset: number; length: number };
+
+/**
+ * Process-wide LRU shared by short-lived read-only IndexStore connections
+ * (Workbench opens one connection per request). Entries share one byte arena,
+ * so a bounded logical cache does not retain one native zstd slab per chunk.
+ */
+class DecompressedChunkCache {
+  private readonly entries = new Map<string, Map<number, DecompressedChunkCacheEntry>>();
+  private readonly lru = new Map<DecompressedChunkCacheEntry, true>();
+  private readonly databaseBytes = new Map<string, number>();
+  private readonly databaseLimits = new Map<string, number>();
+  private readonly databaseVersions = new Map<string, number>();
+  private readonly freeRanges: FreeChunkRange[] = [];
+  private arena: Buffer | undefined;
+  private nextOffset = 0;
+  private totalBytes = 0;
+  private globalLimit = DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES;
+
+  configure(databaseKey: string, limit: number): void {
+    const bounded = Math.max(0, Math.floor(limit));
+    const previous = this.databaseLimits.get(databaseKey);
+    this.databaseLimits.set(databaseKey, bounded);
+    this.globalLimit = Math.max(this.globalLimit, bounded);
+    if (previous !== undefined && previous !== bounded) this.clearDatabase(databaseKey);
+    if (bounded === 0) this.clearDatabase(databaseKey);
+    this.evictGlobalFor(0);
+  }
+
+  prepare(databaseKey: string, version: number): void {
+    const previous = this.databaseVersions.get(databaseKey);
+    if (previous !== undefined && previous !== version) this.clearDatabase(databaseKey);
+    this.databaseVersions.set(databaseKey, version);
+  }
+
+  get(databaseKey: string, chunkId: number): Buffer | undefined {
+    const entry = this.entries.get(databaseKey)?.get(chunkId);
+    if (!entry) return undefined;
+    this.lru.delete(entry);
+    this.lru.set(entry, true);
+    return entry.bytes;
+  }
+
+  set(databaseKey: string, chunkId: number, bytes: Buffer): void {
+    const length = bytes.byteLength;
+    const limit = this.databaseLimits.get(databaseKey) ?? DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES;
+    if (limit === 0 || length === 0 || length > limit) return;
+    const databaseEntries = this.entries.get(databaseKey) ?? new Map<number, DecompressedChunkCacheEntry>();
+    const previous = databaseEntries.get(chunkId);
+    if (previous) this.remove(previous);
+    this.evictDatabaseFor(databaseKey, length);
+    this.evictGlobalFor(length);
+    this.ensureArena(Math.max(length, Math.min(this.globalLimit, this.nextOffset + length)));
+    let offset = this.allocate(length);
+    while (offset === undefined) {
+      const oldest = this.oldest();
+      if (!oldest) return;
+      this.remove(oldest);
+      offset = this.allocate(length);
+    }
+    const stored = this.arena!.subarray(offset, offset + length);
+    bytes.copy(stored);
+    const entry = { databaseKey, chunkId, bytes: stored, offset, length };
+    databaseEntries.set(chunkId, entry);
+    this.entries.set(databaseKey, databaseEntries);
+    this.lru.set(entry, true);
+    this.totalBytes += length;
+    this.databaseBytes.set(databaseKey, (this.databaseBytes.get(databaseKey) ?? 0) + length);
+  }
+
+  clearDatabase(databaseKey: string): void {
+    const databaseEntries = this.entries.get(databaseKey);
+    if (databaseEntries) for (const entry of [...databaseEntries.values()]) this.remove(entry);
+    this.entries.delete(databaseKey);
+    this.databaseBytes.delete(databaseKey);
+  }
+
+  stats(databaseKey: string, limit: number): { bytes: number; entries: number; limitBytes: number } {
+    return { bytes: this.databaseBytes.get(databaseKey) ?? 0, entries: this.entries.get(databaseKey)?.size ?? 0, limitBytes: limit };
+  }
+
+  private remove(entry: DecompressedChunkCacheEntry): void {
+    const databaseEntries = this.entries.get(entry.databaseKey);
+    if (databaseEntries?.get(entry.chunkId) === entry) {
+      databaseEntries.delete(entry.chunkId);
+      if (!databaseEntries.size) this.entries.delete(entry.databaseKey);
+    }
+    this.lru.delete(entry);
+    this.freeRanges.push({ offset: entry.offset, length: entry.length });
+    this.totalBytes -= entry.length;
+    const remaining = (this.databaseBytes.get(entry.databaseKey) ?? 0) - entry.length;
+    if (remaining > 0) this.databaseBytes.set(entry.databaseKey, remaining);
+    else this.databaseBytes.delete(entry.databaseKey);
+  }
+
+  private oldest(databaseKey?: string): DecompressedChunkCacheEntry | undefined {
+    for (const entry of this.lru.keys()) {
+      if (databaseKey === undefined || entry.databaseKey === databaseKey) return entry;
+    }
+    return undefined;
+  }
+
+  private evictDatabaseFor(databaseKey: string, needed: number): void {
+    const limit = this.databaseLimits.get(databaseKey) ?? DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES;
+    while ((this.databaseBytes.get(databaseKey) ?? 0) + needed > limit) {
+      const oldest = this.oldest(databaseKey);
+      if (!oldest) break;
+      this.remove(oldest);
+    }
+  }
+
+  private evictGlobalFor(needed: number): void {
+    while (this.totalBytes + needed > this.globalLimit) {
+      const oldest = this.oldest();
+      if (!oldest) break;
+      this.remove(oldest);
+    }
+  }
+
+  private ensureArena(minimum: number): void {
+    const current = this.arena?.byteLength ?? 0;
+    if (current >= minimum) return;
+    const target = Math.min(this.globalLimit, Math.max(minimum, current > 0 ? current * 2 : minimum));
+    const next = Buffer.allocUnsafeSlow(target);
+    if (this.arena) {
+      for (const entry of this.lru.keys()) {
+        entry.bytes.copy(next, entry.offset);
+        entry.bytes = next.subarray(entry.offset, entry.offset + entry.length);
+      }
+    }
+    this.arena = next;
+  }
+
+  private allocate(length: number): number | undefined {
+    for (let index = 0; index < this.freeRanges.length; index++) {
+      const range = this.freeRanges[index]!;
+      if (range.length < length) continue;
+      const offset = range.offset;
+      if (range.length === length) this.freeRanges.splice(index, 1);
+      else {
+        range.offset += length;
+        range.length -= length;
+      }
+      return offset;
+    }
+    if (!this.arena || this.nextOffset + length > this.arena.byteLength) return undefined;
+    const offset = this.nextOffset;
+    this.nextOffset += length;
+    return offset;
+  }
+}
+
+const decompressedChunkCache = new DecompressedChunkCache();
 
 const ftsString = (value: string): string => `"${value.replaceAll('"', '""')}"`;
 
@@ -495,6 +659,8 @@ export interface IndexStoreOptions {
   walCheckpointThresholdBytes?: number;
   /** @internal 僅供測試驗證 phrase posting 超限時的保守逐文件回退。 */
   phraseCandidatePostingLimit?: number;
+  /** @internal 以 bytes 限制程序內解壓 chunk LRU；0 明確停用。 */
+  decompressedChunkCacheBytes?: number;
 }
 
 const DEFAULT_PHRASE_CANDIDATE_POSTING_LIMIT = 200_000;
@@ -510,6 +676,9 @@ export class IndexStore {
   private readonly walWarningKeys = new Set<string>();
   private walEnabled = false;
   readonly databasePath: string;
+  private readonly decompressedChunkCacheDatabaseKey: string;
+  private readonly decompressedChunkCacheBytes: number;
+  private decompressedChunkCachePreparedVersion: number | undefined;
   private pathOrder: ChunkPathOrder = "native";
   private documentByPathSql: ReturnType<DatabaseSync["prepare"]> | null = null;
   private documentByPathInsensitiveSql: ReturnType<DatabaseSync["prepare"]> | null = null;
@@ -537,6 +706,14 @@ export class IndexStore {
 
   constructor(databasePath = defaultDatabasePath(), options: IndexStoreOptions = {}) {
     this.databasePath = databasePath;
+    this.decompressedChunkCacheDatabaseKey = path.resolve(databasePath);
+    const cacheLimit = options.decompressedChunkCacheBytes;
+    this.decompressedChunkCacheBytes = cacheLimit === undefined
+      ? 0
+      : !Number.isFinite(cacheLimit)
+        ? DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES
+        : Math.min(DEFAULT_DECOMPRESSED_CHUNK_CACHE_BYTES, Math.max(0, Math.floor(cacheLimit)));
+    decompressedChunkCache.configure(this.decompressedChunkCacheDatabaseKey, this.decompressedChunkCacheBytes);
     this.readOnly = options.readOnly ?? false;
     this.onWarning = options.onWarning ?? (message => console.error(message));
     this.writeBusyTimeoutMs = options.writeBusyTimeoutMs ?? MAIN_WRITE_BUSY_TIMEOUT_MS;
@@ -656,7 +833,7 @@ export class IndexStore {
     try {
       const remove = this.db.prepare("DELETE FROM index_migration_documents WHERE version = ?");
       for (const marker of completed) remove.run(marker);
-      this.db.exec("COMMIT");
+      this.commitIndexWrite();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -903,7 +1080,7 @@ export class IndexStore {
         this.db.exec("BEGIN IMMEDIATE");
         try {
           body();
-          this.db.exec("COMMIT");
+          this.commitIndexWrite();
           return;
         } catch (e) {
           this.db.exec("ROLLBACK");
@@ -931,7 +1108,7 @@ export class IndexStore {
           this.db.prepare("INSERT OR IGNORE INTO document_roots SELECT id, ? FROM documents").run(oldRoot);
         }
         this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('multi_root_version', '1')").run();
-        this.db.exec("COMMIT");
+        this.commitIndexWrite();
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     }
   }
@@ -941,7 +1118,7 @@ export class IndexStore {
       this.db.exec("BEGIN IMMEDIATE");
       try {
         this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('root_merge_version', '1')").run();
-        this.db.exec("COMMIT");
+        this.commitIndexWrite();
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     }
   }
@@ -1050,8 +1227,7 @@ export class IndexStore {
           const next = this.roots()[0];
           if (next) this.setRoot(next);
         }
-        this.db.exec("COMMIT");
-        this.invalidateStatusCache();
+        this.commitIndexWrite();
       } catch (error) { this.db.exec("ROLLBACK"); throw error; }
       this.bestEffortPurgeRemovedWorkStateRoots(result.map(item => item.path));
       return result;
@@ -1183,8 +1359,7 @@ export class IndexStore {
         errors: [], notices: children.map(child => `已合併子根：${child}`), summary: null, diagnostics: [],
       } satisfies LastSyncReport), parent);
       options.beforeCommit?.();
-      this.db.exec("COMMIT");
-      this.invalidateStatusCache();
+      this.commitIndexWrite();
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
     this.bestEffortPurgeRemovedWorkStateRoots(children);
     return { transferred };
@@ -1216,13 +1391,51 @@ export class IndexStore {
         const next = this.roots()[0];
         if (next) this.setRoot(next);
       }
-      this.db.exec("COMMIT");
-      this.invalidateStatusCache();
+      this.commitIndexWrite();
       return Number(result.changes);
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
   close(): void { this.db.close(); }
+
+  prepareSearchCache(): void {
+    if (this.decompressedChunkCacheBytes === 0) return;
+    const version = this.dataVersion();
+    decompressedChunkCache.prepare(this.decompressedChunkCacheDatabaseKey, version);
+    this.decompressedChunkCachePreparedVersion = version;
+  }
+
+  decompressedChunkCacheStats(): { enabled: boolean; bytes: number; entries: number; limitBytes: number } {
+    const stats = decompressedChunkCache.stats(this.decompressedChunkCacheDatabaseKey, this.decompressedChunkCacheBytes);
+    return { enabled: this.decompressedChunkCacheBytes > 0, ...stats };
+  }
+
+  private ensureSearchCachePrepared(): void {
+    if (this.decompressedChunkCacheBytes > 0 && this.decompressedChunkCachePreparedVersion === undefined) {
+      this.prepareSearchCache();
+    }
+  }
+
+  private decompressedChunk(chunkId: number, compressed: Uint8Array): Buffer {
+    if (this.decompressedChunkCacheBytes === 0) return decompressChunk(compressed);
+    this.ensureSearchCachePrepared();
+    const cached = decompressedChunkCache.get(this.decompressedChunkCacheDatabaseKey, chunkId);
+    if (cached) return cached;
+    const value = decompressChunk(compressed);
+    decompressedChunkCache.set(this.decompressedChunkCacheDatabaseKey, chunkId, value);
+    return value;
+  }
+
+  private invalidateDecompressedChunkCache(): void {
+    decompressedChunkCache.clearDatabase(this.decompressedChunkCacheDatabaseKey);
+    this.decompressedChunkCachePreparedVersion = undefined;
+  }
+
+  private commitIndexWrite(): void {
+    this.db.exec("COMMIT");
+    this.invalidateDecompressedChunkCache();
+    this.invalidateStatusCache();
+  }
 
   getRoot(): string | null {
     const row = this.db.prepare("SELECT value FROM metadata WHERE key = 'root'").get() as { value: string } | undefined;
@@ -1516,7 +1729,7 @@ export class IndexStore {
         this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)")
           .run(PATH_ORDER_METADATA_KEY, "utf16");
       }
-      this.db.exec("COMMIT");
+      this.commitIndexWrite();
       if (upgradePathOrder) this.pathOrder = "utf16";
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -1576,7 +1789,7 @@ export class IndexStore {
           .run(PATH_ORDER_METADATA_KEY, "utf16");
       }
       const commitStarted = performance.now();
-      this.db.exec("COMMIT");
+      this.commitIndexWrite();
       if (timings) timings.commitMs += performance.now() - commitStarted;
       if (upgradePathOrder) this.pathOrder = "utf16";
     } catch (error) {
@@ -1639,7 +1852,7 @@ export class IndexStore {
       this.db.exec("BEGIN IMMEDIATE");
       try {
         this.removeDocumentBatch(batch);
-        this.db.exec("COMMIT");
+        this.commitIndexWrite();
       } catch (error) {
         this.db.exec("ROLLBACK");
         throw error;
@@ -1688,7 +1901,7 @@ export class IndexStore {
       const row = this.db.prepare("SELECT id FROM documents WHERE path = ?").get(filePath) as { id: number } | undefined;
       if (row) this.deleteSearchRows(row.id);
       const result = this.db.prepare("DELETE FROM documents WHERE path = ?").run(filePath);
-      this.db.exec("COMMIT");
+      this.commitIndexWrite();
       return Number(result.changes) > 0;
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -1706,7 +1919,7 @@ export class IndexStore {
       else this.clearAllSearchRows();
       if (root) this.db.prepare("DELETE FROM documents WHERE id IN (SELECT document_id FROM document_roots WHERE root_path = ?)").run(root);
       else this.db.exec("DELETE FROM documents");
-      this.db.exec("COMMIT");
+      this.commitIndexWrite();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -2290,7 +2503,7 @@ export class IndexStore {
     const row = (this.chunkByIdSql ??= this.db.prepare("SELECT text, layout FROM document_chunks WHERE id = ?"))
       .get(chunkId) as { text: Uint8Array; layout: Uint8Array } | undefined;
     if (!row) return [];
-    const blocks = decodeChunk(row.text, row.layout);
+    const blocks = decodeChunkBuffer(this.decompressedChunk(chunkId, row.text), row.layout);
     trace?.increment("indexVerifiedChunks");
     trace?.increment("indexVerifiedBytes", row.text.length);
     trace?.addPhase("payloadLookup", performance.now() - started);
@@ -2305,7 +2518,7 @@ export class IndexStore {
     if (!row) return new Map(terms.map(term => [term, []]));
     trace?.increment("indexVerifiedChunks");
     trace?.increment("indexVerifiedBytes", row.text.length);
-    const hits = blocksContaining(row.text, row.layout, terms, firstOnly);
+    const hits = blocksContainingBuffer(this.decompressedChunk(chunkId, row.text), row.layout, terms, firstOnly);
     trace?.increment("exactTextMs", performance.now() - started);
     return hits;
   }
@@ -2320,7 +2533,7 @@ export class IndexStore {
     const key = `${name}:${scope.sql}`;
     let statement = this.chunkPhraseHitsSql.get(key);
     if (!statement) {
-      statement = this.db.prepare(`SELECT c.document_id, c.text, c.layout FROM ${name}
+      statement = this.db.prepare(`SELECT c.id AS chunk_id, c.document_id, c.text, c.layout FROM ${name}
         JOIN document_chunks AS c ON c.id = ${name}.rowid
         JOIN documents AS d ON d.id = c.document_id
         WHERE ${name} MATCH ?${where} ORDER BY c.document_id, c.ordinal`);
@@ -2329,13 +2542,14 @@ export class IndexStore {
     const hits: [number, number][] = [];
     let rowsRead = 0;
     let verifiedBytes = 0;
+    const termNeedle = Buffer.from(term, "utf8");
     const started = performance.now();
     try {
-      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ document_id: number; text: Uint8Array; layout: Uint8Array }>) {
+      for (const row of statement.iterate(match, ...scope.values) as Iterable<{ chunk_id: number; document_id: number; text: Uint8Array; layout: Uint8Array }>) {
         rowsRead++;
         if (rowsRead > this.phraseCandidatePostingLimit) return undefined;
         verifiedBytes += row.text.length;
-        const ordinal = firstBlockContaining(row.text, row.layout, term);
+        const ordinal = firstBlockContainingBuffer(this.decompressedChunk(Number(row.chunk_id), row.text), row.layout, term, termNeedle);
         if (ordinal !== undefined) hits.push([Number(row.document_id), ordinal]);
       }
       const hitsByDocument = new Map<number, number>();
@@ -2857,8 +3071,7 @@ export class IndexStore {
       set.run("last_sync_diagnostics", JSON.stringify(diagnostics));
       if (rootChanged) this.db.prepare("DELETE FROM metadata WHERE key IN ('last_successful_sync', 'last_sync')").run();
       if (complete) set.run("last_successful_sync", attemptedAt);
-      this.db.exec("COMMIT");
-      this.invalidateStatusCache();
+      this.commitIndexWrite();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -2896,8 +3109,7 @@ export class IndexStore {
     try {
       this.db.prepare("UPDATE roots SET report = ? WHERE path = ?").run(JSON.stringify(report), root);
       set.run("last_sync_summary", JSON.stringify(summary));
-      this.db.exec("COMMIT");
-      this.invalidateStatusCache();
+      this.commitIndexWrite();
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

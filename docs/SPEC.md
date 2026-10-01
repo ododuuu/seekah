@@ -2708,6 +2708,37 @@ docsearch doctor
 - `scripts/ui-smoke.mjs` 必須只用隔離合成資料，在 1180×800 與 1440×900 以 Chrome CDP 實際驗證 `all-terms` 的不同位置多段落、單一 passage、phrase、列表／表格、snippet Selection API 原文相等、複製按鈕、模式切換、分頁與上下文抽屜；並保存兩種視窗大小截圖供人工檢視。
 - 不讀取、複製或開啟使用者真實 `LocalDocSearch` 資料目錄或備份；不新增文件內容 endpoint、外部服務、OCR、embedding、LAN 暴露、格式支援、版本變更或 `docs/STATUS.md`、`docs/handoff/`、`docs/NEXT-TODO.md`。
 
+## 84. 長數字無結果搜尋的 sustained p95 與有界解壓內容快取
+
+依 D116。本節只改搜尋核心 `src/search.ts`、`src/store.ts`、`src/chunk-store.ts` 與對應測試／差分工具；不修改工作台前端、`/api/search` 的請求處理、搜尋結果資料契約或索引 schema。
+
+### 84.1 結果語意不變
+
+- 查詢仍先做 NFKC 與不依系統語系的 `toLowerCase()`；片語仍是每個文字區塊內的正規化子字串，跨區塊／跨 chunk 的假命中必須排除。
+- 檔名、標題、內容、`phrase`／`all-terms`、`field`、scope、status、排序、分頁、`total`／`totalRelation`、代表 block、snippet 與舊索引 fallback 語意均維持第 14、46、50、52、62、76、80 節。
+- 任何以壓縮 chunk 為候選的快速路徑只能產生保守 superset；ASCII 快速驗證失敗或遇到非 ASCII／不可安全對應的資料時，必須回到既有正規化字串驗證，不得因效能最佳化漏掉結果或新增結果。
+
+### 84.2 解壓驗證與快取
+
+- 對正規化查詢為 ASCII、且解壓內容也為 ASCII 的 chunk，片語驗證可直接以 UTF-8 `Buffer.indexOf` 比對；數字、空白與標點等大小寫中性的查詢不得先建立整段 JavaScript 字串。命中位置仍依既有 layout／block 邊界確認，跨 block 命中必須繼續搜尋下一個位置。
+- 非 ASCII chunk、含大小寫語意的 ASCII 查詢、NFKC 可能改變長度的文字及其他無法證明 byte offset 等於 UTF-16 offset 的情況，必須使用既有正確的字串／區塊 fallback。
+- 搜尋程序可使用**程序內、依資料庫路徑與 chunk id 分隔**的已解壓 UTF-8 `Buffer` LRU。96 MiB 是硬上限；未提供 `IndexStoreOptions.decompressedChunkCacheBytes` 時預設為 0（停用），只有明確正值才啟用，且正值以 bytes 計算並不得超過上限。快取不是持久化資料，不得寫入 SQLite 或回應。
+- 快取項目必須在同一索引連線開始搜尋時檢查 SQLite `data_version`；觀察到其他連線提交更新，或本連線完成會改變 chunk／layout 的寫入後，必須清除該資料庫的快取。索引更新不得重用舊 chunk bytes。
+- 快取只減少重複解壓與字串配置，不能成為結果正確性的必要條件；停用、容量不足、索引更新或不同資料庫路徑都必須回到直接解壓路徑。
+
+### 84.3 效能、記憶體與明確不做
+
+- 在大型合成索引（約 40,000 個含正文 chunk、約 500,000 筆僅檔名文件）對 19 位數字無結果查詢連續 10 輪量測，暖機後 p95 目標小於 2 秒；記錄單輪延遲、GC／CPU profile、解壓／驗證計數與 RSS 峰值。
+- RSS 必須記錄峰值，且不得比 0.45.0 同形狀量測明顯增加；96 MiB 是硬性快取上限，不以無界全文快取換取 p95。實際硬體／Node 版本差異必須在驗證文件中明列，不得外推成公司 Windows 驗收。
+- 不使用猜測式候選上限、wall-time timeout、schema migration、額外 n-gram 統計或會改變 exact verification 的剪枝。新剪枝只有在沒有 migration 且可由完整差分證明結果完全等價時才可另案提出。
+- 本節不新增 worker thread 搜尋架構；與工作台搜尋 worker 的平行工作分開。不可證明能降低端到端 p95 且不增加記憶體／回應性風險的 worker 平行解壓不納入本版。
+
+### 84.4 驗收
+
+- `test/m80.test.ts` 必須覆蓋 ASCII／Unicode／大小寫／跨 block 正確性、停用快取與預設快取結果等價、LRU bytes 上限、不同 database path 隔離，以及索引更新後快取失效；至少一項反向驗證必須在移除 byte／boundary guard 或失效處理時失敗。
+- `scripts/search-diff.mjs` 必須參數化基準版與新版 worktree，對小索引 650 組與大型合成索引 30 組逐筆比較結果集合、順序、rank、`total`、`totalRelation` 及結果欄位，差異數必須為 0。
+- 驗收須執行 `npm run build`、m80 聚焦測試、反向驗證、CPU／GC／RSS 量測與完整 `npm test`。測試與量測只可使用自行建立或指定的合成資料，不得讀取使用者真實資料目錄、備份或啟動其 daemon。
+
 ## 85. 工作台索引狀態快取與輕量進度輪詢
 
 依 D117。本節只改善索引狀態讀取的重複成本與索引進行中的工作台輪詢；完整狀態欄位、MCP `index_status` 物件形狀、持久化同步報告與本機資料邊界不變。
