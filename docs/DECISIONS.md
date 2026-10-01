@@ -1,13 +1,13 @@
 # 設計決策紀錄
 ## D121：監看局部更新採分階段計時並重疊逐檔穩定等待
 
-- 日期：2026-10-02。依 SPEC §89；本工作只處理 `src/live-update.ts`、`src/local-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts` 與 `test/m85.test.ts`／`test/m86.test.ts`，不修改 package 版本、索引 schema、搜尋核心或背景寫入期間搜尋設定。
+- 日期：2026-10-02。依 SPEC §89；本工作只處理 `src/live-update.ts`、`src/local-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts`、`test/m44.test.ts`、`test/m52.test.ts`、`test/m65.test.ts`、`test/m85.test.ts`／`test/m86.test.ts` 與相關規格／指南／量測筆記，不修改 package 版本、索引 schema、搜尋核心或背景寫入期間搜尋設定。
 - 事實：
-  - 隔離合成根目錄的基線量測中，寫入至 `fs.watch` callback 約 2.53～2.60 ms；目前局部路徑的單次全批穩定等待為 1,500 ms，安靜案例從寫入至搜尋可見約 3,048.5～3,074.2 ms。
+  - 隔離合成根目錄的基線量測中，寫入至 `fs.watch` callback 約 2.53～2.60 ms；基線局部路徑的整批穩定等待為 1,500 ms，安靜案例從寫入至搜尋可見約 3,048.5～3,074.2 ms。
   - 400 次雜訊寫入的本機案例收到目標 callback 約 2.375 ms、收到 363 個事件，目標搜尋可見約 3,967.3 ms；這些案例沒有證明一般負載會固定遺漏或必然達到約 10 秒。
 - 決定：
   - 每個局部批次保留最近一次 `lastTiming`，分別記錄事件至局部處理、穩定等待、候選列舉、writer lock 等待與持鎖提交／checkpoint；欄位為可選相容診斷，不寫入索引。
-  - 穩定觀察維持每檔 metadata 第二次 identity 檢查；後續實作讓下一檔在前一檔解析／準備時開始自己的穩定等待，仍不在等待階段持有 writer lock。
+  - 穩定觀察維持每檔 metadata 第二次 identity 檢查；批次開始時啟動候選檔案的穩定等待，後續等待可與前一檔解析／準備重疊，仍不在等待階段持有 writer lock。
   - 既有批次上限、群組提交、延後不穩定檔案及 queue 語意不變；不以 mtime 排序，不因近期檔案改走第二套 local queue。
   - 背景寫入期間搜尋變慢不在本工作範圍；不因本次監看量測修改 WAL、autocheckpoint 或唯讀搜尋連線。
 - 理由：
@@ -17,6 +17,7 @@
   - 不把空檔名、callback 缺失或本機未重現直接命名為 OS buffer overflow；不加入 native／USN、外部服務、OCR、embedding、mtime 優先序或第二套 queue。
 - 驗證：
   - `npm run build` 成功；`node --test --test-concurrency=1 dist/test/m85.test.js` 為 2 pass、0 fail，涵蓋注入 watcher 與本機真實 `fs.watch` 的合成新增檔案，以及 `lastTiming`／status 格式化。
+- B 驗證：`node --test --test-concurrency=1 dist/test/m86.test.js` 為 1 pass、0 fail；移除預先啟動的穩定等待後，m86 反向驗證以 `sleepCalls=1` 失敗，恢復後通過。既有 `dist/test/m44.test.js` 為 2 pass、0 fail，`dist/test/m52.test.js` 為 8 pass、0 fail，`dist/test/m65.test.js` 為 3 pass、0 fail。
 
 ## D118：監看不確定訊號採區域降級與有界補掃
 

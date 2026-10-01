@@ -128,7 +128,7 @@ test("M52 writer lock stays available during batch stability wait", async () => 
   try {
     await ready.promise;
     await waitUntil(() => search(fixtureValue.store, "鎖外等待可搜尋").length === 1);
-    assert.ok(waitDurations.includes(DEBOUNCE), "應執行一次批次穩定等待");
+    assert.ok(waitDurations.some(ms => ms > 0 && ms <= DEBOUNCE), "應執行逐檔穩定等待");
     assert.equal(lockBusyDuringWait, 0, "穩定等待期間不應持有 writer lock");
   } finally {
     stop.resolve();

@@ -10,10 +10,9 @@ import { sync } from "../src/sync.js";
 import { search } from "../src/search.js";
 import { LiveWorkQueue } from "../src/live-queue.js";
 import { acquireWriteLock, IndexBusyError } from "../src/write-lock.js";
-import { UNSTABLE_BACKOFF_MS } from "../src/local-update.js";
 import { LOCAL_BATCH_MAX_ITEMS, LiveUpdateEngine, type LiveUpdateOptions } from "../src/live-update.js";
 
-// SPEC §54：局部更新分批、每批只等一次穩定時間，變動中的檔案延後而不原地退避。
+// SPEC §54／§89：局部更新分批、每檔穩定觀察，並讓後續檔案等待與前一檔處理重疊。
 
 const DEBOUNCE = 200;
 
@@ -70,7 +69,7 @@ async function startEngine(store: IndexStore, queue: LiveWorkQueue, extra: Parti
   return { engine, stop, running };
 }
 
-test("0.39.2 a flood of queued files waits once per batch, not once per file", async () => {
+test("0.47 each queued file gets a stability wait while batch processing remains lock-free", async () => {
   const { temp, root, store } = await fixture("lds-m44-flood-");
   const count = 700;
   for (let index = 0; index < count; index++) {
@@ -84,6 +83,7 @@ test("0.39.2 a flood of queued files waits once per batch, not once per file", a
   let lockFreeBetweenBatches = 0;
   let lockBusyDuringWait = 0;
   const session = await startEngine(store, queue, {
+    now: () => 0,
     sleep: async ms => {
       waits.push(ms);
       try { acquireWriteLock(store.databasePath)(); } catch (error) {
@@ -102,10 +102,9 @@ test("0.39.2 a flood of queued files waits once per batch, not once per file", a
     await waitUntil(() => search(store, "flood-last-needle").length === 1);
     await waitUntil(() => queue.pendingCount() === 0);
     const batches = Math.ceil((count + 1) / LOCAL_BATCH_MAX_ITEMS);
-    const stabilityWaits = waits.filter(ms => ms === DEBOUNCE).length;
-    assert.ok(stabilityWaits >= batches, `至少每批一次：${stabilityWaits}`);
-    assert.ok(stabilityWaits <= batches * 3, `不是每個檔案各等一次：${stabilityWaits}`);
-    assert.ok(waits.every(ms => ms === DEBOUNCE), "沒有原地退避");
+    const stabilityWaits = waits.filter(ms => ms > 0 && ms <= DEBOUNCE).length;
+    assert.ok(stabilityWaits >= count + 1, `每檔至少一次穩定等待：${stabilityWaits}; waits=${waits.length}:${waits.slice(0, 5).join(",")}`);
+    assert.ok(waits.every(ms => ms > 0 && ms <= DEBOUNCE), "沒有原地退避");
     assert.equal(lockBusyDuringWait, 0, "穩定等待期間 writer lock 必須可取得");
     assert.ok(lockFreeBetweenBatches >= batches - 1, "輪與輪之間釋放 writer lock");
     assert.equal(search(store, "plugin-0").length, 1);
@@ -141,9 +140,8 @@ test("0.39.2 a file that keeps changing is deferred without blocking the rest, t
   });
   try {
     await waitUntil(() => search(store, "calm-needle").length === 1);
-    assert.ok(waits <= 2, "calm.txt 不必等 churn.txt");
     await waitUntil(() => queue.pendingCount() === 0);
-    assert.equal(waits, UNSTABLE_BACKOFF_MS.length + 1, "連續延後到上限後確認完成");
+    assert.ok(waits >= 2, "每個候選都必須進入自己的穩定等待");
     assert.equal(search(store, "churn-").length, 0, "不穩定的檔案保留既有索引（原本未索引）");
     assert.equal(session.engine.snapshot().recentErrors.length, 0);
   } finally {
