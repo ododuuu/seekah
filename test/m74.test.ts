@@ -3,8 +3,8 @@ import test from "node:test";
 import { workbenchHtml } from "../src/workbench-app.js";
 
 function assertCopySelectionContract(html: string): void {
-  assert.match(html, /user-select\s*:\s*text/u, "結果文字必須明確允許選取。");
-  assert.doesNotMatch(html, /user-select\s*:\s*none/iu, "結果文字不可禁止選取。");
+  assert.match(html, /\.document-title, \.document-title\.btn, \.table-title, \.table-title\.btn,[\s\S]*?-webkit-user-select\s*:\s*text;[\s\S]*?user-select\s*:\s*text;/u, "結果文字必須明確允許選取。");
+  assert.match(html, /\.result-passage-label[\s\S]*?user-select\s*:\s*none;/u, "多段落位置／詞標籤可禁止選取，但結果文字不可被禁止。");
   assert.match(html, /function hasSelectionWithin\(element\)/u, "檔名開啟缺少 selection guard helper。");
   assert.match(html, /window\.getSelection\(\)/u, "檔名開啟缺少 Selection API 檢查。");
   assert.match(html, /range\.commonAncestorContainer/u, "selection guard 未檢查 range 共同祖先。");

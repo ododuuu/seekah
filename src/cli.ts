@@ -178,7 +178,8 @@ function printSummary(summary: SyncSummary): void {
   }
 }
 
-function printSearchResults(results: readonly SearchResult[], verbose: boolean, write: (text: string) => void = console.log): void {
+function printSearchResults(results: readonly SearchResult[], verbose: boolean, write: (text: string) => void = console.log,
+  allTerms = false): void {
   for (const result of results) {
     write(`${result.path} (${result.extension})`);
     write(`  文件代碼：${result.reference}；open ${result.reference}／reveal ${result.reference}`);
@@ -188,6 +189,12 @@ function printSearchResults(results: readonly SearchResult[], verbose: boolean, 
     if (result.heading) write(`  標題：${result.heading}`);
     if (result.location) write(`  位置：${result.location}`);
     write(`  片段：${result.snippet}${result.snippetTruncated ? "（命中文字已截短）" : ""}`);
+    if (allTerms) {
+      for (const passage of result.passages ?? []) {
+        write(`  詞段落（${passage.terms.join("、")}；${passage.location ?? "無位置"}）：${passage.snippet}${passage.snippetTruncated ? "（命中文字已截短）" : ""}`);
+      }
+      if (result.omittedTerms) write(`  省略詞段落：${result.omittedTerms} 個詞`);
+    }
     write(`  修改：${new Date(result.modifiedAtMs).toISOString()}`);
     if (verbose) write(`  排序：等級 ${result.rank}；同級按修改時間 ${result.modifiedAtMs} 由新到舊，再按完整路徑固定字串順序：${result.path}`);
   }
@@ -769,7 +776,7 @@ export async function main(args: readonly string[]): Promise<number> {
     } else if (limitSpecified) {
       const page = session.page(1, limit);
       console.log(`符合 ${formatTotal(page.total, session.currentTotalRelation)} 份文件；顯示前 ${page.results.length} 份（--limit 單次輸出）。`);
-      printSearchResults(page.results, verbose);
+      printSearchResults(page.results, verbose, console.log, allTerms);
       if (verbose) printSearchTrace(session.trace);
       return 0;
     }
@@ -777,7 +784,7 @@ export async function main(args: readonly string[]): Promise<number> {
       const page = session.page(searchPage, searchPageSize);
       console.log(`符合 ${formatTotal(page.total, session.currentTotalRelation)} 份文件；第 ${page.page}/${page.pageCount}${session.currentTotalRelation === "gte" ? "+" : ""} 頁，本頁 ${page.start}–${page.end}；回傳 ${page.results.length} 份。`);
       if (session.currentTotalRelation === "gte") console.log("提示：總數為下限；加上 --exact-total 可算出精確總數。");
-      printSearchResults(page.results, verbose);
+      printSearchResults(page.results, verbose, console.log, allTerms);
       if (verbose) printSearchTrace(session.trace);
       if (page.page < page.pageCount || session.currentTotalRelation === "gte") console.log(`提示：尚有結果；使用 --page ${page.page + 1} --page-size ${page.pageSize} 查看下一頁。`);
       return 0;
@@ -790,7 +797,7 @@ export async function main(args: readonly string[]): Promise<number> {
       return await runSearchSession(session, {
         pageSize: searchPageSize,
         renderResults: (results, write) => {
-          printSearchResults(results, verbose, write);
+          printSearchResults(results, verbose, write, allTerms);
           if (verbose) printSearchTrace(session.trace);
         },
       }, {

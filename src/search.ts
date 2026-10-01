@@ -199,6 +199,15 @@ export function makeSnippet(content: string, query: string): { text: string; tru
   return { text, truncated };
 }
 
+export interface SearchPassage {
+  /** Unique normalized query terms represented by this passage, in document order. */
+  terms: string[];
+  heading: string | null;
+  location: string | null;
+  snippet: string;
+  snippetTruncated: boolean;
+}
+
 export interface SearchResult {
   reference: string;
   path: string;
@@ -212,6 +221,8 @@ export interface SearchResult {
   filenameOnly: boolean;
   status: DocumentStatus;
   snippetTruncated: boolean;
+  passages?: SearchPassage[];
+  omittedTerms?: number;
   condition?: string;
 }
 
@@ -219,9 +230,10 @@ export type SearchMode = "phrase" | "all-terms";
 export type SearchField = "all" | "filename" | "content";
 export type SearchSort = "relevance" | "filename" | "modified";
 
+type RankedResult = Omit<SearchResult, "passages" | "omittedTerms">;
 
 interface RankedSearchResult {
-  result: SearchResult;
+  result: RankedResult;
   documentId: number;
   ordinal: number | null;
   sourceKind: "filename" | "heading" | "content";
@@ -269,6 +281,75 @@ function snippetTerm(source: string, terms: readonly string[]): string {
   const normalized = normalize(source);
   return terms.map(term => ({ term, position: normalized.indexOf(term) })).filter(hit => hit.position >= 0)
     .sort((a, b) => a.position - b.position)[0]!.term;
+}
+
+const MAX_PASSAGE_TERMS = 4;
+
+function termsInDocumentOrder(source: string, terms: readonly string[]): string[] {
+  const normalized = normalize(source);
+  return [...new Set(terms)]
+    .map((term, index) => ({ term, index, position: normalized.indexOf(term) }))
+    .filter(hit => hit.position >= 0)
+    .sort((left, right) => left.position - right.position || left.index - right.index)
+    .map(hit => hit.term);
+}
+
+type PassageBlock = { block: StoredBlockRow; terms: string[]; source: string };
+
+function matchingPassageBlock(block: StoredBlockRow, terms: readonly string[]): PassageBlock | undefined {
+  const heading = block.heading ? normalize(block.heading) : "";
+  const content = normalize(block.content);
+  const matched = terms.filter(term => heading.includes(term) || content.includes(term));
+  if (!matched.length) return undefined;
+  const sourceParts: string[] = [];
+  if (block.heading && matched.some(term => heading.includes(term))) sourceParts.push(block.heading);
+  if (matched.some(term => content.includes(term))) sourceParts.push(block.content);
+  const source = sourceParts.join("\n");
+  return { block, terms: termsInDocumentOrder(source, matched), source };
+}
+
+function allTermsPassages(store: IndexStore, filePath: string, terms: readonly string[],
+  trace?: SearchTraceRecorder): { passages: SearchPassage[]; omittedTerms: number } {
+  const passageTerms = terms.slice(0, MAX_PASSAGE_TERMS);
+  const omittedTerms = Math.max(0, terms.length - passageTerms.length);
+  if (!passageTerms.length) return { passages: [], omittedTerms };
+  const candidate = store.candidateByPath(filePath, trace);
+  if (!candidate) return { passages: [], omittedTerms };
+
+  const firstBlocks: PassageBlock[] = [];
+  const seenTerms = new Set<string>();
+  for (const block of candidate.blocks) {
+    const match = matchingPassageBlock(block, passageTerms);
+    if (!match) continue;
+    const firstTerms = match.terms.filter(term => !seenTerms.has(term));
+    if (!firstTerms.length) continue;
+    for (const term of firstTerms) seenTerms.add(term);
+    firstBlocks.push({ ...match, terms: firstTerms });
+  }
+
+  const passages: SearchPassage[] = [];
+  let group: PassageBlock[] = [];
+  const flush = () => {
+    if (!group.length) return;
+    const source = group.map(item => item.source).join("\n");
+    const groupTerms = termsInDocumentOrder(source, group.flatMap(item => item.terms));
+    const snippet = makeSnippet(source, snippetTerm(source, groupTerms));
+    passages.push({
+      terms: groupTerms,
+      heading: group[0]!.block.heading,
+      location: group[0]!.block.location_value,
+      snippet: snippet.text,
+      snippetTruncated: snippet.truncated,
+    });
+    group = [];
+  };
+  for (const item of firstBlocks) {
+    const previous = group.at(-1);
+    if (previous && item.block.ordinal !== previous.block.ordinal + 1) flush();
+    group.push(item);
+  }
+  flush();
+  return { passages, omittedTerms };
 }
 
 type SelectedBlock = { block: StoredBlockRow; source: string; coverage: number; headingHit: boolean };
@@ -913,9 +994,28 @@ function materializeHits(store: IndexStore, ranked: readonly RankedSearchResult[
       try {
         const snippetQuery = snippetTerm(source, terms);
         const snippet = makeSnippet(source, snippetQuery);
-        return condition === undefined
-          ? { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated }
-          : { ...result, snippet: snippet.text, snippetTruncated: snippet.truncated, condition };
+        const passageData = mode === "all-terms"
+          ? result.filenameOnly
+            ? { passages: [], omittedTerms: Math.max(0, terms.length - MAX_PASSAGE_TERMS) }
+            : allTermsPassages(store, result.path, terms, trace)
+          : {
+            passages: !result.filenameOnly ? [{
+              terms: [terms[0]!],
+              heading: result.heading,
+              location: result.location,
+              snippet: snippet.text,
+              snippetTruncated: snippet.truncated,
+            }] : [],
+            omittedTerms: 0,
+          };
+        const materialized = {
+          ...result,
+          snippet: snippet.text,
+          snippetTruncated: snippet.truncated,
+          passages: passageData.passages,
+          omittedTerms: passageData.omittedTerms,
+        };
+        return condition === undefined ? materialized : { ...materialized, condition };
       } finally {
         trace?.addPhase("snippet", performance.now() - snippetStarted);
       }

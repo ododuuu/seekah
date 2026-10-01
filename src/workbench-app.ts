@@ -512,6 +512,52 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 }
 .snippet.is-muted { color: var(--muted); }
 .snippet mark { padding: 0 1px; background: #f3d889; color: inherit; }
+
+.result-passages-group { min-width: 0; margin-top: 7px; }
+.result-passages {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.result-passage {
+  display: grid;
+  grid-template-columns: minmax(88px, 31%) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+}
+.result-passage-label {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.result-passage-location, .result-passage-terms { display: block; }
+.result-passage-terms { color: var(--muted-strong); }
+.result-passage-snippet {
+  display: -webkit-box;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #3d4843;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.result-passage-snippet mark { padding: 0 1px; background: #f3d889; color: inherit; }
+.result-passages-omitted { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.documents-table .result-passages { margin-top: 7px; }
+.documents-table .result-passage { grid-template-columns: minmax(72px, 36%) minmax(0, 1fr); gap: 6px; }
+.documents-table .result-passage-snippet { font-size: 12px; line-height: 1.4; }
+
 .document-title, .document-title.btn, .table-title, .table-title.btn,
 .document-path, .document-crumbs, .snippet, .file-name, .context-item-name, .context-item-meta {
   -webkit-user-select: text;
@@ -859,6 +905,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   .scope-bar { gap: 6px; }
   .document-query { flex: 1 1 300px; }
   .document-query select, .scope-summary select { max-width: 126px; }
+  .result-passage { grid-template-columns: minmax(76px, 35%) minmax(0, 1fr); gap: 6px; }
+  .result-passage-snippet { font-size: 12px; line-height: 1.4; }
 }
 /* reduced motion */
 @media (prefers-reduced-motion: reduce) {
@@ -1327,13 +1375,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (state.mode === "phrase") return [query];
     return query.trim().split(/\\s+/u).filter(Boolean);
   }
-  function appendHighlighted(parent, value) {
+  function appendHighlighted(parent, value, terms = termsForHighlight()) {
     const text = escapeText(value);
-    const terms = termsForHighlight().filter(term => term.length > 0);
-    if (!terms.length || !text) { parent.append(document.createTextNode(text)); return; }
+    const highlightTerms = Array.isArray(terms) ? terms : termsForHighlight();
+    const termsToHighlight = highlightTerms.filter(term => term.length > 0);
+    if (!termsToHighlight.length || !text) { parent.append(document.createTextNode(text)); return; }
     const lower = text.toLocaleLowerCase();
     const ranges = [];
-    for (const term of terms) {
+    for (const term of termsToHighlight) {
       const needle = term.toLocaleLowerCase();
       let from = 0;
       while (needle && from < lower.length) {
@@ -1353,6 +1402,40 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       cursor = range.end;
     }
     if (cursor < text.length) parent.append(document.createTextNode(text.slice(cursor)));
+  }
+  function makeResultPassages(item) {
+    const passages = Array.isArray(item && item.passages) ? item.passages : [];
+    const omittedTerms = Number.isSafeInteger(item && item.omittedTerms) && item.omittedTerms > 0 ? item.omittedTerms : 0;
+    if (passages.length <= 1 && omittedTerms === 0) return null;
+    const group = make("div", "result-passages-group", "");
+    if (passages.length > 1) {
+      const list = make("ul", "result-passages", "");
+      list.setAttribute("aria-label", "搜尋命中段落");
+      passages.forEach((passage, index) => {
+        const current = passage || {};
+        const location = escapeText(current.location) || "未提供位置";
+        const terms = Array.isArray(current.terms) ? current.terms.map(escapeText).filter(Boolean) : [];
+        const termText = terms.length ? "命中詞：" + terms.join("、") : "命中詞：未提供";
+        const entry = make("li", "result-passage", "");
+        entry.setAttribute("aria-label", "第 " + (index + 1) + " 段；" + location + "；" + termText);
+        const label = make("div", "result-passage-label", "");
+        label.setAttribute("aria-label", location + "；" + termText);
+        label.append(make("span", "result-passage-location", location), make("span", "result-passage-terms", termText));
+        const snippetText = escapeText(current.snippet);
+        const snippet = make("p", "result-passage-snippet", "");
+        if (snippetText) appendHighlighted(snippet, snippetText, terms);
+        else snippet.textContent = "沒有可顯示的片段";
+        entry.append(label, snippet);
+        list.append(entry);
+      });
+      group.append(list);
+    }
+    if (omittedTerms > 0) {
+      const note = make("p", "result-passages-omitted", "還有 " + omittedTerms + " 個詞未列出");
+      note.setAttribute("role", "note");
+      group.append(note);
+    }
+    return group;
   }
   function selectedReference(reference) {
     const temporary = state.imported.get(reference);
@@ -1400,6 +1483,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     pathNode.title = item.path;
     pathNode.append(make("span", "document-crumbs", item.temporary ? escapeText(item.path) : documentBreadcrumb(item)),
       make("span", "document-format", String(item.extension || "").replace(".", "").toUpperCase()));
+    const passages = Array.isArray(item && item.passages) ? item.passages : [];
+    const passageBlock = makeResultPassages(item);
     const snippet = make("p", "snippet");
     if (!item.temporary && item.filenameOnly) {
       snippet.classList.add("is-muted");
@@ -1409,7 +1494,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       snippet.classList.add("is-muted");
       snippet.textContent = "沒有可顯示的片段";
     }
-    row.append(title, pathNode, snippet, resultActions(item));
+    row.append(title, pathNode);
+    if (passages.length > 1) row.append(passageBlock);
+    else {
+      row.append(snippet);
+      if (passageBlock) row.append(passageBlock);
+    }
+    row.append(resultActions(item));
     return row;
   }
   function makeTableRow(item) {
@@ -1423,7 +1514,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const title = item.temporary ? make("strong", "table-title", documentFilenameValue(item))
       : button(documentFilenameValue(item), "table-title", event => openDocumentTitle(item, event));
     title.title = item.path;
+    const passageBlock = makeResultPassages(item);
     titleCell.append(title, resultCopyActions(item));
+    if (passageBlock) titleCell.append(passageBlock);
     const rootCell = document.createElement("td");
     rootCell.textContent = documentRootLabel(item) || "未提供";
     rootCell.title = item.root || rootCell.textContent;
