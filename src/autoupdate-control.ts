@@ -68,6 +68,13 @@ export interface LiveRootStatus {
   skippedByRule?: Record<string, number>;
   /** 既有排除索引清理進度；removed 不代表來源檔案刪除。 */
   exclusionCleanup?: { removed: number; pending: number };
+  /** 直接子目錄 watcher attach／runtime 失敗；空陣列代表目前沒有降級 child。 */
+  degradedSubdirectories?: Array<{ path: string; reason: string }>;
+  emptyFilenameEventCount?: number;
+  uncertainRescanCount?: number;
+  /** §86；目前保留的每根目錄空檔名 watchDir 狀態數，舊程序可缺少。 */
+  uncertainRescanStateCount?: number;
+  lastUncertainRescanAt?: string;
 }
 
 export interface LiveStartupCatchupStatus {
@@ -92,6 +99,12 @@ export interface LiveStatus {
   eventCount: number;
   /** 0.39.1 起；較舊的背景程序不回報。 */
   excludedEventCount?: number;
+  /** §86；較舊的背景程序不回報。 */
+  emptyFilenameEventCount?: number;
+  uncertainRescanCount?: number;
+  /** §86；所有根目錄目前保留的空檔名 watchDir 狀態數，舊程序可缺少。 */
+  uncertainRescanStateCount?: number;
+  lastUncertainRescanAt?: string;
   localUpdateCount: number;
   rootScanCount: number;
   subtreeScanCount: number;

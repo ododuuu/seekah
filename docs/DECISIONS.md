@@ -1,4 +1,32 @@
 # 設計決策紀錄
+## D118：監看不確定訊號採區域降級與有界補掃
+
+- 日期：2026-10-01。依 SPEC §86；本分支處理 `src/live-update.ts`、`src/autoupdate-control.ts`、`src/autoupdate.ts`、必要的 `src/live-queue.ts`／`src/workbench.ts` 狀態映射與 `test/m82.test.ts`。不修改 package 版本；所有實驗使用隔離 `LOCALDOCSEARCH_DATA_DIR` 與合成資料。
+- 事實：
+  - 產品在約 300 events/s 雜訊下曾出現約三分之一機率不收到目標檔名事件；失敗 run 收到 22,655 個事件、目標事件 0、空檔名 168，目標未進 work queue。既有獨立 writer／watcher 重現器在相同大致速率與拓撲下沒有重現目標遺失，因此只能把空檔名稱為 watcher 不確定訊號，不能證實是 `ReadDirectoryChangesW` 緩衝溢位。
+  - 既有 split attach 邏輯在任何直接子目錄 attach 拋錯時關閉全部 handle 並退回 coarse；這會讓一個 `EPERM` 子目錄把可監看的 sibling 一併暴露在同一個粗粒度 watcher。
+  - 既有子目錄空檔名已知道事件來源 `watchDir`，但缺少統一的冷卻、上限、退避與可觀測計數；root 空檔名只排 dirty scope，雜訊可能使週期校正成本放大。
+- 決定：
+  - `attachSplit` 先維持根目錄 watcher；每個直接子目錄獨立 try/catch。單一子目錄失敗只關閉該 handle、保存 `path`／原因於 `degradedSubdirectories`，其餘 sibling 保持 split；根 watcher 或整體 handle 預算失敗才沿用 root coarse fallback。runtime child error 同樣不呼叫 `closeHandles`，交給週期校正、有限重試與該子目錄 expansion 覆蓋。
+  - 空 filename／null filename 只計入 `emptyFilenameEventCount`，不 `lstat` 空值、不生成空 path。使用 callback 的 `watchDir` 作為唯一熱目錄；child watcher 排入該目錄的既有 local queue expansion，root watcher 同時保留 `unknown-filename` dirty scope 安全網並先讓熱目錄 expansion 取得 local 優先權。
+  - 以每根／每個 `watchDir` 的記憶體狀態實作 5 秒冷卻、60 秒最多 4 次、`5s → 15s → 60s` 退避。排入一次 expansion 才增加 `uncertainRescanCount`；抑制事件不建立新 work item。既有 local queue、`expandDirectory`、500 items／5 秒局部批次與 2,000 directory-entry 展開上限全部重用，不新增 scanner 或 schema。
+  - `LiveStatus` 與每根 status 追加空檔名數、實際補掃數、最近補掃時間及降級子目錄／原因；`autoupdate status` 與 `/api/index-status` 的 `autoupdate.live` 直接透出，舊欄位與舊 daemon 缺欄位仍相容。工作台不新增必要的控制面板，只保留 API 可觀測性。
+  - 補掃仍受 §53／§60／§64／§70 的排除、讀取失敗、延後核對、checkpoint、at-least-once 與 `removeMissing` 前提約束；不以 mtime 排序，不把近期檔案改走第二套 local queue，不因空 filename 宣稱 OS overflow。
+- 為避免不確定訊號的來源數量造成記憶體無界成長，每根 `uncertainRescans` 只保留最多 1,024 個 `watchDir` 狀態，超出淘汰最久未使用項目；child watcher 釋放／降級／移除、根重建／移除與監看停止均清除相應狀態。status 追加 `uncertainRescanStateCount` 供測試與診斷。
+- `expandDirectory` 的目錄列舉加入僅供測試的 `readdir` 注入點；讀取失敗沿用 `walk.failed` 未完成語意，不進行 `removeMissing`，用回歸測試保護既有索引列。
+- 理由：
+  - attach 失敗是 per-scope 資源／權限問題，不能讓健康 sibling 失去更窄的通知範圍；降級清單加週期校正能保留正確性安全網，也讓 status 說明實際覆蓋範圍。
+  - `watchDir` 是空 filename 唯一有證據的空間資訊；利用它做 bounded expansion 比整根立即重掃窄，且不依賴已否決、會被系統資料夾 mtime 誤導的排序。root dirty scope 仍保留，是因為 root watcher 無法提供更細位置。
+  - 冷卻／視窗上限／退避把高頻不確定訊號轉成有限成本；完整週期校正仍保留，因此 mitigation 不把 stochastic watcher callback 當成完整事件來源。
+- 否決：
+  - 不把空 filename 命名為 `ERROR_NOTIFY_ENUM_DIR` 或宣稱已證實 buffer overflow；不加入 native／ETW／USN、可調 `bufferSize`／`maxBuffer`、OCR、embedding、網路或外部服務。
+  - 不以任一失敗 child 觸發全根 coarse；不刪除失敗 scope 的既有索引、不在補掃未完成或有 read failure 時做 `removeMissing`。
+  - 不新增索引／工作狀態 schema、第二套掃描器、mtime 優先序或繞過既有 local queue 的即時全文掃描。
+- 驗證：
+  - `npm run build` 成功；`node --test --test-concurrency=1 dist/test/m82.test.js` 為 8 pass、0 fail，涵蓋 attach／runtime 局部降級、handle limit coarse、watchDir expansion、冷卻／60 秒上限／`5→15→60` 退避、空值不觸發 `lstat`、queue dirty scope 共存、每根 1,024 狀態上限／5,000 個不同來源界線、根移除清除、暫時 `readdir` 失敗保留既有索引列與 workbench API 欄位。將 `attachSplit` 反向改為 child 失敗即 `throw` 後，第 1 項於 5 秒 timeout、其餘 7 項通過；將狀態上限改為 10,000 後界線項目以 `5000 !== 10000` 失敗，還原後恢復 8 pass。
+  - 產品 r15 使用獨立 writer、普通合成根、`subst` 根、150／300／600 writes/s、深層 `Users\x\Desktop` 目標及 1 次實際 autoupdate daemon probe；9/9 直接案例與 daemon probe 都找到目標。普通 split 15 handles 搜尋 10.150～11.068 秒，預設排除 split 8 handles 1.096～3.044 秒，handle-limit coarse 1 handle 9.347～10.891 秒；daemon probe 搜尋 1.487 秒，最終 status 為 `eventCount=2340`、`emptyFilenameEventCount=11`、`uncertainRescanCount=3`、`degradedSubdirectories=[]`。**本機實驗未重現遺失，不能外推公司 Windows。**
+  - 完整 `npm test`：476 項，473 pass、0 fail、3 skip（含 TypeScript build）；公司 Windows 人工驗收未由使用者回報前不宣稱通過。
+
 ## D114：工作台以可選取的安全 DOM 呈現全部詞多段落
 
 - 日期：2026-10-01。依 SPEC §82；本分支只處理 `src/workbench-app.ts` 的搜尋結果列表／表格呈現、`test/m78.test.ts`、`scripts/ui-smoke.mjs` 與相關使用說明，不修改 `package.json` 版本、`docs/STATUS.md`、`docs/handoff/` 或 `docs/NEXT-TODO.md`。

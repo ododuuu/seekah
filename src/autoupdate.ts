@@ -68,6 +68,7 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     `開機補捉根目錄：${status.startupCatchup?.roots.join("、") ?? "無"}`,
     `待處理：${status.pendingCount}`,
     `基線：事件 ${status.eventCount}；${status.excludedEventCount !== undefined ? `已排除事件 ${status.excludedEventCount}；` : ""}局部更新 ${status.localUpdateCount}；根目錄掃描 ${status.rootScanCount}；子樹掃描 ${status.subtreeScanCount}`,
+    `不確定訊號：空檔名 ${status.emptyFilenameEventCount ?? 0}；補掃 ${status.uncertainRescanCount ?? 0}；狀態項目 ${status.uncertainRescanStateCount ?? 0}；最近補掃 ${status.lastUncertainRescanAt ?? "無"}`,
     `工作佇列：待辦 ${status.queuePendingCount}；${status.queueDegraded ? "降級（落盤失敗）" : "正常"}`,
     `最舊待辦：${status.oldestQueuedAt ?? "無"}`,
     `最後事件：${status.lastEvent ? `${status.lastEvent.at} ${status.lastEvent.root}` : "無"}`,
@@ -83,7 +84,10 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
     const reconcile = root.reconcile
       ? ` 校正=${root.reconcile.phase}#${root.reconcile.generation} 已檢查=${root.reconcile.checked} 剩餘範圍=${root.reconcile.frontierCount} 讀取失敗=${root.reconcile.readFailures} 延後核對=${root.reconcile.deferredChecks}`
       : "";
-    lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
+    const degraded = root.degradedSubdirectories?.length
+      ? ` 降級子目錄=${root.degradedSubdirectories.map(item => `${item.path}（${item.reason}）`).join("、")}`
+      : "";
+    lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${degraded}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
   }
   return lines.join("\n");
 }

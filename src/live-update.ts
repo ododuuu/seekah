@@ -45,6 +45,21 @@ export const LOCAL_WALK_MAX_ENTRIES = 2_000;
 export const HEARTBEAT_MS = 10_000;
 export const ROOT_REFRESH_MS = 10_000;
 export const WATCHER_RETRY_MS = [60_000, 300_000, 900_000] as const;
+/** 空檔名事件的預設同一 watchDir 冷卻時間。 */
+export const UNKNOWN_FILENAME_RESCAN_COOLDOWN_MS = 5_000;
+/** 空檔名補掃的視窗與每一視窗上限。 */
+export const UNKNOWN_FILENAME_RESCAN_WINDOW_MS = 60_000;
+export const UNKNOWN_FILENAME_RESCAN_MAX_PER_WINDOW = 4;
+/** 達到視窗上限後的有限退避。 */
+export const UNKNOWN_FILENAME_RESCAN_BACKOFF_MS = [5_000, 15_000, 60_000] as const;
+/** 每根目錄保留的空檔名 watchDir 狀態上限；超出時以最久未使用項目淘汰。 */
+export const MAX_UNCERTAIN_RESCAN_STATES_PER_ROOT = 1024;
+type UncertainRescanState = {
+  windowStartedAt: number;
+  accepted: number;
+  nextAllowedAt: number;
+  backoffIndex: number;
+};
 
 export interface LiveIO {
   write(text: string): void;
@@ -83,6 +98,13 @@ export interface LiveUpdateOptions {
   reconcileBatchMs?: number;
   /** 資料夾展開每輪讀取的目錄項目上限；預設 LOCAL_WALK_MAX_ENTRIES（SPEC §56.1）。 */
   localWalkEntries?: number;
+  /** 空檔名補掃測試／部署可調的有界參數；未指定時使用 §86 預設值。 */
+  uncertainRescanCooldownMs?: number;
+  uncertainRescanWindowMs?: number;
+  uncertainRescanMaxPerWindow?: number;
+  uncertainRescanBackoffMs?: readonly number[];
+  /** 資料夾展開的 readdir 注入點；正式路徑使用 fs.promises.readdir，測試可模擬暫時不可讀。 */
+  readdir?: (directory: fs.PathLike) => Promise<fs.Dirent[]>;
 }
 
 type LocalWorkItem = { filePath: string; generation: number; relPath: string; expand: boolean };
@@ -181,6 +203,11 @@ type RootState = {
   reconcileSkippedByRule?: Record<string, number>;
   exclusionCleanup?: { removed: number; pending: number };
   lastReconcileBatchAt?: number;
+  degradedChildren: Map<string, string>;
+  uncertainRescans: Map<string, UncertainRescanState>;
+  emptyFilenameEventCount: number;
+  uncertainRescanCount: number;
+  lastUncertainRescanAt?: string;
 };
 
 export class WatchError extends Error {
@@ -243,6 +270,10 @@ export class LiveUpdateEngine {
   private localUpdateCount = 0;
   private rootScanCount = 0;
   private subtreeScanCount = 0;
+  private emptyFilenameEventCount = 0;
+  private uncertainRescanCount = 0;
+  private lastUncertainRescanAt?: string;
+
   private queueDegraded = false;
   private readonly startupCatchupMode: StartupCatchupMode;
   private startupCatchupState: StartupCatchupState = "none";
@@ -297,6 +328,27 @@ export class LiveUpdateEngine {
       ? resolveAutoupdateReconcile(this.options.reconcileMs)
       : resolveWatchRescan(this.options.reconcileMs);
   }
+  private get uncertainRescanCooldownMs(): number {
+    const value = this.options.uncertainRescanCooldownMs ?? UNKNOWN_FILENAME_RESCAN_COOLDOWN_MS;
+    return Number.isSafeInteger(value) && value >= 0 ? value : UNKNOWN_FILENAME_RESCAN_COOLDOWN_MS;
+  }
+
+  private get uncertainRescanWindowMs(): number {
+    const value = this.options.uncertainRescanWindowMs ?? UNKNOWN_FILENAME_RESCAN_WINDOW_MS;
+    return Number.isSafeInteger(value) && value > 0 ? value : UNKNOWN_FILENAME_RESCAN_WINDOW_MS;
+  }
+
+  private get uncertainRescanMaxPerWindow(): number {
+    const value = this.options.uncertainRescanMaxPerWindow ?? UNKNOWN_FILENAME_RESCAN_MAX_PER_WINDOW;
+    return Number.isSafeInteger(value) && value > 0 ? value : UNKNOWN_FILENAME_RESCAN_MAX_PER_WINDOW;
+  }
+
+  private get uncertainRescanBackoffMs(): readonly number[] {
+    const value = this.options.uncertainRescanBackoffMs;
+    return value && value.length > 0 && value.every(item => Number.isSafeInteger(item) && item >= 0)
+      ? value
+      : UNKNOWN_FILENAME_RESCAN_BACKOFF_MS;
+  }
 
   private get setTimer(): (fn: () => void, ms: number) => ReturnType<typeof setTimeout> {
     return this.options.setTimer ?? setTimeout;
@@ -322,6 +374,7 @@ export class LiveUpdateEngine {
       timer: undefined, firstScheduledAt: undefined, exclusion: this.loadExclusion(root), sweep: new Set(), walks: new Map(), failed: false, offline: false, syncFailed: false, removed: false,
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
+      degradedChildren: new Map(), uncertainRescans: new Map(), emptyFilenameEventCount: 0, uncertainRescanCount: 0,
     };
   }
 
@@ -348,6 +401,11 @@ export class LiveUpdateEngine {
         scopeMode: state.scopeMode,
         handles: state.handles.length,
         ...(state.lastError ? { lastError: state.lastError } : {}),
+        degradedSubdirectories: [...state.degradedChildren.entries()].map(([childPath, reason]) => ({ path: childPath, reason })),
+        emptyFilenameEventCount: state.emptyFilenameEventCount,
+        uncertainRescanCount: state.uncertainRescanCount,
+        uncertainRescanStateCount: state.uncertainRescans.size,
+        ...(state.lastUncertainRescanAt ? { lastUncertainRescanAt: state.lastUncertainRescanAt } : {}),
         ...(state.reconcileSkippedByRule ? { skippedByRule: { ...state.reconcileSkippedByRule } } : {}),
         ...(state.exclusionCleanup ? { exclusionCleanup: { ...state.exclusionCleanup } } : {}),
         ...(reconcile ? {
@@ -380,6 +438,9 @@ export class LiveUpdateEngine {
       pendingCount: roots.reduce((sum, item) => sum + item.pending, 0),
       eventCount: this.eventCount,
       excludedEventCount: this.excludedEventCount,
+      emptyFilenameEventCount: this.emptyFilenameEventCount,
+      uncertainRescanCount: this.uncertainRescanCount,
+      uncertainRescanStateCount: roots.reduce((sum, root) => sum + (root.uncertainRescanStateCount ?? 0), 0),
       localUpdateCount: this.localUpdateCount,
       rootScanCount: this.rootScanCount,
       subtreeScanCount: this.subtreeScanCount,
@@ -391,6 +452,7 @@ export class LiveUpdateEngine {
       ...(this.lastEvent ? { lastEvent: this.lastEvent } : {}),
       ...(this.lastLocalUpdate ? { lastLocalUpdate: this.lastLocalUpdate } : {}),
       ...(this.lastReconcile ? { lastReconcile: this.lastReconcile } : {}),
+      ...(this.lastUncertainRescanAt ? { lastUncertainRescanAt: this.lastUncertainRescanAt } : {}),
       ...(this.lastReconcile && this.reconcileMs
         ? { nextReconcileAt: new Date(Date.parse(this.lastReconcile.at) + this.reconcileMs).toISOString() }
         : {}),
@@ -402,7 +464,7 @@ export class LiveUpdateEngine {
   private watchState(state: RootState): RootWatchState {
     if (state.removed) return "removed";
     if (state.offline) return "offline";
-    if (state.failed || this.queueDegraded) return "degraded";
+    if (state.failed || state.degradedChildren.size > 0 || this.queueDegraded) return "degraded";
     return "active";
   }
 
@@ -523,13 +585,14 @@ export class LiveUpdateEngine {
     const pending = [...state.pending];
     const queued = this.queue.listPaths(state.root);
     const hasEvents = pending.length > 0 || queued.length > 0;
+    if (!hasEvents) state.localPriority = false;
     const reconcileDue = !state.lastReconcileBatchAt
       || this.now() - state.lastReconcileBatchAt >= BACKGROUND_RECONCILE_INTERVAL_MS;
     const forceLocal = state.localPriority && hasEvents;
     const initialForegroundSync = this.options.mode !== "background" && this.options.syncNow !== false && !state.lastReconcileAt;
     const batchReconcile = this.options.mode === "background" && reconcileRequested
       && (!hasEvents || (reconcileDue && !forceLocal));
-    const fullReconcile = reconcileRequested && this.options.mode !== "background";
+    const fullReconcile = reconcileRequested && this.options.mode !== "background" && !forceLocal;
     if (!reconcileRequested && !hasEvents) {
       state.running = false;
       this.armRescan(state);
@@ -652,11 +715,11 @@ export class LiveUpdateEngine {
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
         if (batch.busy) throw batch.busy;
-        if (state.localPriority) state.localPriority = false;
         moreLocal = batch.interrupted || candidateCount > LOCAL_BATCH_MAX_ITEMS;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
         if (!batch.complete) state.syncFailed = true;
+        if (state.localPriority) state.localPriority = false;
       }
     } catch (error) {
       if (error instanceof OperationCancelledError) {
@@ -790,7 +853,7 @@ export class LiveUpdateEngine {
       let info: fs.Stats | undefined;
       try { info = await fs.promises.lstat(item.filePath); } catch { info = undefined; }
       if (info?.isSymbolicLink() && this.isExcluded(state, item.filePath, false, true)) { finish(item); continue; }
-      if (info?.isDirectory() && !info.isSymbolicLink() && !samePath(item.filePath, state.root)) {
+      if (info?.isDirectory() && !info.isSymbolicLink() && (item.expand || !samePath(item.filePath, state.root))) {
         if (this.isExcluded(state, item.filePath, true)) { finish(item); continue; }
         const walked = await this.expandDirectory(state, item.filePath, walkBudget);
         walkBudget = walked.budgetLeft;
@@ -801,7 +864,7 @@ export class LiveUpdateEngine {
         continue;
       }
       if (!info || !info.isFile()) {
-        // 不存在、根目錄、連結與其他類型沿用單一路徑處理（刪除、整根校正、略過）。
+        // 不存在、連結與其他類型沿用單一路徑處理（刪除、整根校正、略過）。
         finish(item, await this.applyOne(state, item.filePath, inner, syncOptions));
         continue;
       }
@@ -973,7 +1036,13 @@ export class LiveUpdateEngine {
         // readdir 一次回傳整份清單；讀到一半的清單留在展開狀態，下一輪從中斷處接續。
         const current = walk.frontier.pop()!;
         try {
-          walk.listing = { dir: current, entries: await fs.promises.readdir(current, { withFileTypes: true }), next: 0 };
+          walk.listing = {
+            dir: current,
+            entries: await (this.options.readdir
+              ? this.options.readdir(current)
+              : fs.promises.readdir(current, { withFileTypes: true }) as Promise<fs.Dirent[]>),
+            next: 0,
+          };
         } catch {
           walk.failed = true;
           continue;
@@ -1137,7 +1206,7 @@ export class LiveUpdateEngine {
   }
 
   private armWatcherRetry(state: RootState): void {
-    if (this.options.mode !== "background" || this.stopping || state.removed) return;
+    if (!this.reconcileMs || this.stopping || state.removed) return;
     if (state.retryTimer) this.clearTimer(state.retryTimer);
     const delay = WATCHER_RETRY_MS[Math.min(state.retryAttempt, WATCHER_RETRY_MS.length - 1)]!;
     state.retryAttempt++;
@@ -1153,6 +1222,8 @@ export class LiveUpdateEngine {
     if (state.rescanTimer) this.clearTimer(state.rescanTimer);
     if (state.retryTimer) this.clearTimer(state.retryTimer);
     state.pending.clear();
+    state.degradedChildren.clear();
+    state.uncertainRescans.clear();
     try { this.queue.isolateRoot(state.root); } catch (error) { this.onQueueFailure(state, error); }
     this.closeHandles(state);
     if (announce) {
@@ -1199,9 +1270,16 @@ export class LiveUpdateEngine {
   }
 
   private attachSplit(state: RootState, children: string[], recovering: boolean): void {
+    state.degradedChildren.clear();
     this.attachWatch(state, state.root, false);
-    for (const child of children) this.attachWatch(state, child, true);
     state.scopeMode = "split";
+    for (const child of children) {
+      try {
+        this.attachWatch(state, child, true);
+      } catch (error) {
+        this.degradeChild(state, child, error);
+      }
+    }
     state.failed = false;
     state.offline = false;
     state.retryAttempt = 0;
@@ -1216,6 +1294,7 @@ export class LiveUpdateEngine {
     try {
       this.closeHandles(state);
       this.attachWatch(state, state.root, true);
+      state.degradedChildren.clear();
       state.scopeMode = "coarse";
       state.failed = false;
       state.offline = false;
@@ -1233,6 +1312,7 @@ export class LiveUpdateEngine {
       if (!state.failed) this.failRoot(state, error);
     }
   }
+
 
   private attachWatch(state: RootState, dir: string, recursive: boolean): WatchHandle {
     const watchFn = this.options.watch ?? fs.watch;
@@ -1265,6 +1345,7 @@ export class LiveUpdateEngine {
       try { handle.watcher.close(); } catch { /* 回收失效句柄 */ }
     }
     state.handles = [];
+    state.uncertainRescans.clear();
     delete state.watcher;
   }
 
@@ -1285,15 +1366,29 @@ export class LiveUpdateEngine {
     return children;
   }
 
+  private degradeChild(state: RootState, dir: string, error: unknown): void {
+    const reason = error instanceof Error ? error.message : "未知錯誤";
+    state.uncertainRescans.delete(dir);
+    state.degradedChildren.set(dir, reason);
+    this.rememberError("WATCH_SCOPE_ERROR", `${dir}: ${reason}`);
+    this.persistPath(state, dir, "expand");
+    absorb(state.pending, dir);
+    state.reconcile = true;
+    state.localPriority = true;
+    this.schedule(state);
+    this.armWatcherRetry(state);
+  }
+
   private failHandle(state: RootState, handle: WatchHandle, error: unknown): void {
     if (state.removed || this.stopping) return;
     const message = error instanceof Error ? error.message : "未知錯誤";
     this.log(`監看錯誤：${handle.path}：${message}`);
-    this.rememberError("WATCH_SCOPE_ERROR", message);
-    this.persistPath(state, handle.path);
+    this.rememberError("WATCH_SCOPE_ERROR", `${handle.path}: ${message}`);
+    this.persistPath(state, handle.path, "expand");
     absorb(state.pending, handle.path);
     this.schedule(state);
     try { handle.watcher.close(); } catch { /* ignore */ }
+    state.uncertainRescans.delete(handle.path);
     state.handles = state.handles.filter(item => item !== handle);
     if (samePath(handle.path, state.root)) {
       this.failRoot(state, error);
@@ -1301,12 +1396,9 @@ export class LiveUpdateEngine {
     }
     try {
       this.attachWatch(state, handle.path, true);
-    } catch {
-      this.closeHandles(state);
-      this.attachCoarse(state, false, "子範圍失敗");
-      this.persistScope(state, "scope-fallback");
-      this.markReconcile(state);
-      this.schedule(state);
+      state.degradedChildren.delete(handle.path);
+    } catch (retryError) {
+      this.degradeChild(state, handle.path, retryError);
     }
   }
 
@@ -1323,14 +1415,11 @@ export class LiveUpdateEngine {
     }
     try {
       this.attachWatch(state, dir, true);
-    } catch {
+      state.degradedChildren.delete(dir);
+    } catch (error) {
       // 短暫存在的目錄在 attach 前已消失：路徑已排入待辦核對，不必退回 coarse（SPEC §53.2）。
       if (!fs.existsSync(dir)) return;
-      this.closeHandles(state);
-      this.attachCoarse(state, false, "新目錄 attach 失敗");
-      this.persistScope(state, "scope-fallback");
-      this.markReconcile(state);
-      this.schedule(state);
+      this.degradeChild(state, dir, error);
     }
   }
 
@@ -1341,6 +1430,7 @@ export class LiveUpdateEngine {
     absorb(state.pending, dir);
     this.schedule(state);
     try { handle.watcher.close(); } catch { /* ignore */ }
+    state.uncertainRescans.delete(handle.path);
     state.handles = state.handles.filter(item => item !== handle);
   }
 
@@ -1354,6 +1444,60 @@ export class LiveUpdateEngine {
     return state.handles.some(handle => handle.recursive && samePath(handle.path, dir));
   }
 
+  private rememberUncertainRescan(state: RootState, dir: string, value: UncertainRescanState): void {
+    if (!state.uncertainRescans.has(dir)) {
+      while (state.uncertainRescans.size >= MAX_UNCERTAIN_RESCAN_STATES_PER_ROOT) {
+        const oldest = state.uncertainRescans.keys().next().value;
+        if (typeof oldest !== "string") break;
+        state.uncertainRescans.delete(oldest);
+      }
+    }
+    state.uncertainRescans.delete(dir);
+    state.uncertainRescans.set(dir, value);
+  }
+
+  private scheduleUncertainRescan(state: RootState, watchDir: string): boolean {
+    const dir = path.resolve(watchDir);
+    if (!samePath(state.root, dir) && !coversPath(state.root, dir)) return false;
+    const now = this.now();
+    let rescan = state.uncertainRescans.get(dir);
+    if (!rescan || now < rescan.windowStartedAt) {
+      rescan = { windowStartedAt: now, accepted: 0, nextAllowedAt: now, backoffIndex: 0 };
+      this.rememberUncertainRescan(state, dir, rescan);
+    } else if (now - rescan.windowStartedAt >= this.uncertainRescanWindowMs) {
+      // 視窗重置但保留尚未到期的有限退避，避免視窗邊界連續觸發補掃。
+      rescan = {
+        windowStartedAt: now,
+        accepted: 0,
+        nextAllowedAt: rescan.nextAllowedAt,
+        backoffIndex: rescan.backoffIndex,
+      };
+      this.rememberUncertainRescan(state, dir, rescan);
+    } else {
+      // Map insertion order提供 bounded LRU：高頻 watchDir 保留自己的冷卻狀態。
+      this.rememberUncertainRescan(state, dir, rescan);
+    }
+    if (now < rescan.nextAllowedAt) return false;
+    if (rescan.accepted >= this.uncertainRescanMaxPerWindow) {
+      const delays = this.uncertainRescanBackoffMs;
+      const delay = delays[Math.min(rescan.backoffIndex, delays.length - 1)] ?? 0;
+      rescan.backoffIndex++;
+      rescan.nextAllowedAt = now + delay;
+      return false;
+    }
+    if (!this.persistPath(state, dir, "expand")) return false;
+    absorb(state.pending, dir);
+    rescan.accepted++;
+    rescan.nextAllowedAt = now + this.uncertainRescanCooldownMs;
+    const at = new Date(now).toISOString();
+    state.uncertainRescanCount++;
+    state.lastUncertainRescanAt = at;
+    this.uncertainRescanCount++;
+    this.lastUncertainRescanAt = at;
+    state.localPriority = true;
+    return true;
+  }
+
   private handleEvent(
     state: RootState,
     filename: string | Buffer | null | undefined,
@@ -1361,6 +1505,8 @@ export class LiveUpdateEngine {
     eventType: fs.WatchEventType = "rename",
   ): void {
     const label = filename ? String(filename) : "";
+    if (!label) state.emptyFilenameEventCount++;
+    if (!label) this.emptyFilenameEventCount++;
     const abs = label ? path.resolve(watchDir, label) : undefined;
     // coarse／split callback 先以字串和已載入規則做保守檔案判定；命中時不得觸發 IO。
     if (label && shouldIgnoreWatchPath(
@@ -1396,10 +1542,8 @@ export class LiveUpdateEngine {
       if (samePath(watchDir, state.root)) {
         this.persistScope(state, "unknown-filename");
         this.markReconcile(state);
-      } else {
-        this.persistPath(state, watchDir);
-        absorb(state.pending, watchDir);
       }
+      this.scheduleUncertainRescan(state, watchDir);
       this.schedule(state);
       return;
     }
@@ -1427,7 +1571,9 @@ export class LiveUpdateEngine {
 
   private persistPath(state: RootState, abs: string, reason: "event" | "expand" = "event"): boolean {
     try {
-      this.queue.acceptPath(state.root, path.relative(state.root, abs), reason);
+      const relPath = path.relative(state.root, abs);
+      if (reason === "expand" && (!relPath || relPath === ".")) this.queue.acceptDirectory(state.root, relPath);
+      else this.queue.acceptPath(state.root, relPath, reason);
       return true;
     } catch (error) {
       this.onQueueFailure(state, error);
