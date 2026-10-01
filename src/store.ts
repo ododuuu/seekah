@@ -17,6 +17,8 @@ import { RootError } from "./scanner.js";
 import { indexArtifactPaths, isIndexArtifact } from "./index-artifacts.js";
 export { indexArtifactPaths, isIndexArtifact };
 import { purgeWorkStateRoots } from "./live-queue.js";
+import { resolveStartupCatchupMode, type StartupCatchupMode } from "./startup-catchup.js";
+
 
 function bestEffortPurgeWorkStateRoots(indexDatabasePath: string, roots: readonly string[]): void {
   try {
@@ -990,6 +992,17 @@ export class IndexStore {
     this.db.prepare("INSERT INTO metadata(key, value) VALUES ('autoupdate_reconcile_ms', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .run(String(settings.reconcileMs));
   }
+
+  startupCatchupMode(): StartupCatchupMode {
+    return resolveStartupCatchupMode(this.metadata("startup_catchup_mode"));
+  }
+
+  setStartupCatchupMode(mode: StartupCatchupMode): void {
+    if (this.readOnly) throw new Error("唯讀索引不能變更工作台設定。");
+    this.db.prepare("INSERT INTO metadata(key, value) VALUES ('startup_catchup_mode', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(mode);
+  }
+
 
   moveRootsToTrash(roots: readonly string[]): TrashedRoot[] {
     const release = acquireWriteLock(this.databasePath);

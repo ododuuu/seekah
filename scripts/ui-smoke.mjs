@@ -142,8 +142,11 @@ function syntheticEnvironment(fixture) {
   };
 }
 
-function startCliAutoupdate(fixture) {
-  const result = spawnSync(process.execPath, [cli, "autoupdate", "start", "--data-dir", fixture.dataDir], {
+function startCliAutoupdate(fixture, startupCatchupMode) {
+  const args = [cli, "autoupdate", "start"];
+  if (startupCatchupMode) args.push("--startup-catchup", startupCatchupMode);
+  args.push("--data-dir", fixture.dataDir);
+  const result = spawnSync(process.execPath, args, {
     cwd: project,
     encoding: "utf8",
     timeout: 30_000,
@@ -152,6 +155,20 @@ function startCliAutoupdate(fixture) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`CLI autoupdate start 結束碼 ${result.status ?? "未知"}：${truncate(result.stderr || result.stdout, 1_200)}`);
+}
+
+function stopCliAutoupdate(fixture) {
+  const result = spawnSync(process.execPath, [cli, "autoupdate", "stop", "--data-dir", fixture.dataDir], {
+    cwd: project,
+    encoding: "utf8",
+    timeout: 30_000,
+    windowsHide: true,
+    env: syntheticEnvironment(fixture),
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0 && !/AUTOUPDATE_NOT_RUNNING|沒有正在執行的自動更新/u.test(result.stderr || result.stdout)) {
+    throw new Error(`CLI autoupdate stop 結束碼 ${result.status ?? "未知"}：${truncate(result.stderr || result.stdout, 1_200)}`);
+  }
 }
 
 function startWorkbench(dataDir, temp) {
@@ -340,7 +357,9 @@ async function installPickerPatch(cdp) {
       documentActions: [],
       clipboardText: null,
       failNextAutoupdate: false,
+      failNextStartupCatchupMode: false,
       delayNextSettingsMs: 0,
+      delayNextCatchupMs: 0,
       delayNextIndexStatusMs: 0,
     };
     try {
@@ -366,18 +385,25 @@ async function installPickerPatch(cdp) {
         window.__uiSmoke.documentActions.push(body);
         return new Response(JSON.stringify({ changed: false }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (requestPath === "/api/settings" && body?.startupCatchupMode !== undefined && window.__uiSmoke.failNextStartupCatchupMode) {
+        window.__uiSmoke.failNextStartupCatchupMode = false;
+        const response = new Response(JSON.stringify({ error: "煙霧測試模擬開機補捉策略保存失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
+        const delay = Number(window.__uiSmoke.delayNextSettingsMs) || 0;
+        window.__uiSmoke.delayNextSettingsMs = 0;
+        return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
+      }
+      if (requestPath === "/api/autoupdate/catchup" && Number(window.__uiSmoke.delayNextCatchupMs) > 0) {
+        const delay = Number(window.__uiSmoke.delayNextCatchupMs);
+        window.__uiSmoke.delayNextCatchupMs = 0;
+        const response = await originalFetch(input, init);
+        return await new Promise(resolve => setTimeout(() => resolve(response), delay));
+      }
       if (requestPath === "/api/settings" && body?.autoupdateEnabled !== undefined && window.__uiSmoke.failNextAutoupdate) {
         window.__uiSmoke.failNextAutoupdate = false;
         const response = new Response(JSON.stringify({ error: "煙霧測試模擬設定失敗。" }), { status: 503, headers: { "content-type": "application/json" } });
         const delay = Number(window.__uiSmoke.delayNextSettingsMs) || 0;
         window.__uiSmoke.delayNextSettingsMs = 0;
         return delay ? await new Promise(resolve => setTimeout(() => resolve(response), delay)) : response;
-      }
-      if (requestPath === "/api/index-status" && Number(window.__uiSmoke.delayNextIndexStatusMs) > 0) {
-        const delay = Number(window.__uiSmoke.delayNextIndexStatusMs);
-        window.__uiSmoke.delayNextIndexStatusMs = 0;
-        const response = await originalFetch(input, init);
-        return await new Promise(resolve => setTimeout(() => resolve(response), delay));
       }
       return originalFetch(input, init);
     };
@@ -399,6 +425,16 @@ async function settingSnapshot(cdp) {
     return {
       auto: read("settings-autoupdate"),
       startup: read("settings-autoupdate-startup"),
+      mode: {
+        value: document.getElementById("settings-startup-catchup-mode")?.value || "",
+        disabled: Boolean(document.getElementById("settings-startup-catchup-mode")?.disabled),
+        status: document.getElementById("startup-catchup-mode-status")?.textContent?.trim() || "",
+      },
+      catchup: {
+        hidden: Boolean(document.getElementById("startup-catchup-banner")?.hidden),
+        status: document.getElementById("startup-catchup-status")?.textContent?.trim() || "",
+        actionsDisabled: Array.from(document.querySelectorAll("#startup-catchup-banner button")).every(node => node.disabled),
+      },
       status: document.getElementById("settings-status")?.textContent?.trim() || "",
     };
   })()`);
@@ -854,6 +890,126 @@ async function runViewport(viewport, chromePath) {
           if (current?.autoupdate?.enabled) await settingsPost(cdp, { autoupdateEnabled: false });
         } catch { /* 主斷言已回報；清理只處理合成 daemon。 */ }
         await sleep(500);
+        await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
+      }
+    });
+    await check(`${label} 開機補捉 ask 四動作、auto／off、執行中與設定失敗回復`, async () => {
+      const start = browserEvents.length;
+      const refreshCatchup = async () => {
+        await click(cdp, "#settings-autoupdate-refresh");
+        await waitFor(async () => {
+          const current = await indexStatus(cdp);
+          return current?.autoupdate?.live?.mode === "background";
+        }, 30_000);
+      };
+      const catchupStatus = async () => {
+        const current = await indexStatus(cdp);
+        return current?.autoupdate?.live?.startupCatchup;
+      };
+      const chooseMode = async mode => {
+        await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-startup-catchup-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = ${JSON.stringify(mode)};
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        await waitFor(async () => {
+          const snapshot = await settingSnapshot(cdp);
+          return snapshot.mode?.value === mode && !snapshot.mode?.disabled;
+        }, 30_000);
+      };
+      const refreshPendingAsk = async () => {
+        await refreshCatchup();
+        await waitFor(async () => {
+          const status = await catchupStatus();
+          return status?.mode === "ask" && status?.state === "pending";
+        }, 30_000);
+        await waitFor(async () => {
+          const snapshot = await settingSnapshot(cdp);
+          return snapshot.catchup?.hidden === false && snapshot.mode?.value === "ask";
+        }, 30_000);
+      };
+
+      const initial = await settingsPost(cdp, { autoupdateEnabled: false, startupCatchupMode: "ask" });
+      expect(initial.status === 200 && initial.data?.startupCatchupMode === "ask", "無法先保存 ask 策略。");
+      startCliAutoupdate(fixture, "ask");
+      try {
+        await click(cdp, "#settings-toggle");
+        await waitFor(() => cdp.evaluate("document.getElementById('settings-dialog')?.open === true"));
+        await refreshPendingAsk();
+        let snapshot = await settingSnapshot(cdp);
+        expect(snapshot.catchup?.status.includes("等待你的選擇"), "ask pending 狀態沒有明確文字。");
+        expect(snapshot.catchup?.actionsDisabled === false, "ask pending 四個動作全部停用。");
+
+        await cdp.evaluate("window.__uiSmoke.failNextStartupCatchupMode = true; window.__uiSmoke.delayNextSettingsMs = 250;");
+        await cdp.evaluate(`(() => {
+          const node = document.getElementById("settings-startup-catchup-mode");
+          if (!(node instanceof HTMLSelectElement)) return false;
+          node.value = "auto";
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        })()`);
+        await sleep(50);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.mode?.disabled === true, "開機補捉策略保存期間沒有停用選擇器。");
+        await waitFor(async () => {
+          const current = await settingSnapshot(cdp);
+          return current.mode?.value === "ask" && !current.mode?.disabled;
+        }, 30_000);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.status.includes("煙霧測試模擬開機補捉策略保存失敗"), "策略保存失敗沒有顯示明確錯誤。");
+
+        await click(cdp, "#startup-catchup-later");
+        await waitFor(async () => (await settingSnapshot(cdp)).catchup?.hidden === true);
+        expect((await catchupStatus())?.state === "pending", "稍後提醒不應消費 downtime gap。");
+
+        stopCliAutoupdate(fixture);
+        startCliAutoupdate(fixture, "ask");
+        await refreshPendingAsk();
+        await click(cdp, "#startup-catchup-skip");
+        await waitFor(async () => (await catchupStatus())?.state === "skipped", 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "略過本次後 banner 沒有隱藏。");
+
+        stopCliAutoupdate(fixture);
+        startCliAutoupdate(fixture, "ask");
+        await refreshPendingAsk();
+        await click(cdp, "#startup-catchup-disable");
+        await waitFor(async () => {
+          const mode = await settingSnapshot(cdp);
+          const status = await catchupStatus();
+          return mode.mode?.value === "off" && !mode.mode?.disabled && status?.mode === "off" && status?.state === "skipped";
+        }, 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "關閉開機補捉後 banner 沒有隱藏。");
+
+        await chooseMode("auto");
+        await waitFor(async () => {
+          const status = await catchupStatus();
+          return status?.mode === "auto" && ["running", "complete"].includes(status?.state);
+        }, 30_000);
+        expect((await settingSnapshot(cdp)).catchup?.hidden === true, "auto 模式不應顯示 ask banner。");
+
+        await chooseMode("off");
+        await waitFor(async () => {
+          const status = await catchupStatus();
+          return status?.mode === "off" && status?.state === "skipped";
+        }, 30_000);
+        const explicitBefore = (await indexStatus(cdp)).autoupdate?.live?.localUpdateCount ?? 0;
+        await writeFile(path.join(fixture.root, `ui-smoke-explicit-${viewport.width}.txt`), "UI_SMOKE_EXPLICIT_EVENT\n");
+        await waitFor(async () => ((await indexStatus(cdp)).autoupdate?.live?.localUpdateCount ?? 0) > explicitBefore, 30_000);
+
+        await chooseMode("ask");
+        await refreshPendingAsk();
+        await cdp.evaluate("window.__uiSmoke.delayNextCatchupMs = 1_000");
+        await click(cdp, "#startup-catchup-start");
+        await sleep(50);
+        snapshot = await settingSnapshot(cdp);
+        expect(snapshot.catchup?.actionsDisabled === true && snapshot.catchup?.status.includes("處理中"), "立即補捉執行中沒有停用四個動作或顯示處理中。");
+        await waitFor(async () => ["running", "complete"].includes((await catchupStatus())?.state), 30_000);
+        expect((await catchupStatus())?.mode === "ask", "立即補捉後策略不應被改寫。");
+        await noBrowserErrorsSince(cdp, start, "開機補捉 ask／四動作／auto／off");
+      } finally {
+        try { stopCliAutoupdate(fixture); } catch { /* 主斷言保留；finally 僅清理合成 daemon。 */ }
         await cdp.evaluate("document.getElementById('settings-dialog')?.close()");
       }
     });

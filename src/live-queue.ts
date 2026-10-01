@@ -239,6 +239,18 @@ export class LiveWorkQueue {
     return this.upsert(root, SCOPE_REL, "downtime-gap", "restart");
   }
 
+  hasDowntimeGap(root: string): boolean {
+    const row = this.db.prepare("SELECT 1 AS ok FROM work_items WHERE root = ? AND kind = 'downtime-gap' LIMIT 1").get(root) as { ok: number } | undefined;
+    return Boolean(row);
+  }
+
+  skipDowntimeGap(root: string): void {
+    this.runWrite("ack", () => {
+      this.db.prepare("DELETE FROM work_items WHERE root = ? AND kind = 'downtime-gap'").run(root);
+    });
+  }
+
+
   ack(root: string, relPath: string, generation: number): void {
     this.runWrite("ack", () => {
       this.db.prepare("DELETE FROM work_items WHERE root = ? AND rel_path = ? AND generation <= ?").run(root, relPath, generation);

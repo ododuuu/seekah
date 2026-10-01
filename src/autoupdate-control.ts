@@ -5,12 +5,13 @@ import path from "node:path";
 import os from "node:os";
 import { canonicalIndexPath } from "./live-lease.js";
 import { dataDirectory } from "./store.js";
+import { resolveStartupCatchupMode, type StartupCatchupAction, type StartupCatchupMode, type StartupCatchupState } from "./startup-catchup.js";
 
 export const AUTOUPDATE_STATE_SCHEMA = 1;
 export const CONTROL_TIMEOUT_MS = 5000;
 
 export type LiveMode = "foreground" | "background";
-export type ControlMethod = "ping" | "status" | "stop";
+export type ControlMethod = "ping" | "status" | "stop" | "startup-catchup";
 export type LivePhase = "starting" | "idle" | "updating" | "reconciling" | "stopping";
 export type RootWatchState = "active" | "degraded" | "offline" | "removed";
 
@@ -28,6 +29,7 @@ export class AutoupdateError extends Error {
 export interface AutoupdateSettings {
   debounceMs: number;
   reconcileMs: number;
+  startupCatchupMode?: StartupCatchupMode;
 }
 
 export interface AutoupdateStateFile {
@@ -68,6 +70,12 @@ export interface LiveRootStatus {
   exclusionCleanup?: { removed: number; pending: number };
 }
 
+export interface LiveStartupCatchupStatus {
+  mode: StartupCatchupMode;
+  state: StartupCatchupState;
+  roots: string[];
+}
+
 export interface LiveStatus {
   schemaVersion: 1;
   instanceId: string;
@@ -77,6 +85,7 @@ export interface LiveStatus {
   lastHeartbeatAt: string;
   phase: LivePhase;
   settings: AutoupdateSettings;
+  startupCatchup?: LiveStartupCatchupStatus;
   ready: boolean;
   roots: LiveRootStatus[];
   pendingCount: number;
@@ -101,6 +110,7 @@ export interface ControlRequest {
   id: string;
   token: string;
   method: ControlMethod;
+  action?: StartupCatchupAction;
 }
 
 export interface ControlResponse {
@@ -198,8 +208,10 @@ export interface ControlServerOptions {
   mode: LiveMode;
   getStatus: () => LiveStatus;
   onStop: () => void;
+  onStartupCatchup?: (action: StartupCatchupAction) => unknown;
   allowRemoteStop?: boolean;
 }
+
 
 export async function startControlServer(options: ControlServerOptions): Promise<ControlServer> {
   const endpoint = controlEndpoint(options.databasePath);
@@ -262,6 +274,28 @@ async function reply(socket: net.Socket, line: string, options: ControlServerOpt
     writeResponse(socket, { id, ok: true, result: options.getStatus() });
     return;
   }
+  if (request.method === "startup-catchup") {
+    if (options.mode === "foreground") {
+      writeResponse(socket, {
+        id, ok: false,
+        error: { code: "AUTOUPDATE_FOREGROUND_ACTIVE", message: "前景監看請在原終端按 Ctrl+C 結束，不能從另一個程序補捉。" },
+      });
+      return;
+    }
+    if (!options.onStartupCatchup || (request.action !== "start" && request.action !== "skip")) {
+      writeResponse(socket, { id, ok: false, error: { code: "AUTOUPDATE_CATCHUP_INVALID", message: "開機補捉要求缺少有效動作。" } });
+      return;
+    }
+    try {
+      writeResponse(socket, { id, ok: true, result: options.onStartupCatchup(request.action) });
+    } catch (error) {
+      writeResponse(socket, {
+        id, ok: false,
+        error: { code: errorCode(error) || "AUTOUPDATE_CATCHUP_FAILED", message: error instanceof Error ? error.message : "開機補捉要求失敗。" },
+      });
+    }
+    return;
+  }
   if (request.method === "stop") {
     if (options.allowRemoteStop === false || options.mode === "foreground") {
       writeResponse(socket, {
@@ -286,19 +320,22 @@ export async function sendControlRequest(
   endpoint: string,
   token: string,
   method: ControlMethod,
+  timeoutMsOrAction: number | StartupCatchupAction = CONTROL_TIMEOUT_MS,
   timeoutMs = CONTROL_TIMEOUT_MS,
 ): Promise<ControlResponse> {
+  const action = typeof timeoutMsOrAction === "string" ? timeoutMsOrAction : undefined;
+  const timeout = typeof timeoutMsOrAction === "number" ? timeoutMsOrAction : timeoutMs;
   const id = randomUUID();
   return new Promise((resolve, reject) => {
     const socket = net.connect(endpoint);
     const timer = setTimeout(() => {
       socket.destroy();
       reject(new AutoupdateError("AUTOUPDATE_UNRESPONSIVE", "控制通道沒有在時限內回應。"));
-    }, timeoutMs);
+    }, timeout);
     let buffer = "";
     socket.setEncoding("utf8");
     socket.on("connect", () => {
-      socket.write(`${JSON.stringify({ id, token, method } satisfies ControlRequest)}\n`);
+      socket.write(`${JSON.stringify({ id, token, method, ...(action ? { action } : {}) } satisfies ControlRequest)}\n`);
     });
     socket.on("data", chunk => {
       buffer += String(chunk);
@@ -325,5 +362,7 @@ export async function sendControlRequest(
 }
 
 export function sameSettings(left: AutoupdateSettings, right: AutoupdateSettings): boolean {
-  return left.debounceMs === right.debounceMs && left.reconcileMs === right.reconcileMs;
+  return left.debounceMs === right.debounceMs
+    && left.reconcileMs === right.reconcileMs
+    && resolveStartupCatchupMode(left.startupCatchupMode) === resolveStartupCatchupMode(right.startupCatchupMode);
 }
