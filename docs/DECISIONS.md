@@ -24,6 +24,37 @@
 - 取捨：bytes 是檔案長度，不是假裝成配置容量或 quota；WAL／SHM／journal 存在時總量只代表當下 footprint。前端不重複掃描、不讀正文、不另建檔案清單。
 - 驗證：`test/m99.test.ts` 以 synthetic stat fixture 驗證 API 與設定頁的主庫、`-wal`、`-shm`、總量及提示；移除 API 或 UI 接線時正向／反向斷言失敗。
 
+## D138：背景更新記錄 recovery 並降級孤兒清理
+
+- 日期：2026-10-03。依 SPEC §102；本項只處理 `src/live-update.ts` 的錯誤記錄／啟動清理邊界與 `test/m98.test.ts`，不修改 work state schema、搜尋語意、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - `rememberError` 目前只接收字串；root catch 將 recovery SQLite error 的 message 直接保存為 `LIVE_UPDATE_FAILED`，可能把原始 SQLite 診斷放入 live status。
+  - `LiveUpdateEngine` 建構時直接呼叫 `cleanupOrphanRoots`；work DB locked／損壞的 cleanup exception 會在 watcher／consumer 建立前中止 engine。
+  - SPEC §69／D101 已將 orphan cleanup 定義為 best-effort，失敗時應由下一次 engine startup 重試；這個語意不等於可以吞掉主索引或同步資料完整性錯誤。
+- 決定：
+  - `rememberError` 增加原始 error 的分類入口，重用 `describeIndexClientError`；recovery／busy recent error 改存固定訊息，其他錯誤維持既有 code 與診斷。
+  - 先取得 `store.roots()`，只對 `cleanupOrphanRoots` 本身加降級 catch；失敗時寫 log 與 recent error，明確說明孤兒 rows 仍可能影響待辦／最舊時間且下次啟動再試，然後繼續建立 engine。主索引 roots、開啟、完整性與後續同步錯誤不在此 catch 範圍。
+  - 不刪除未確認 work rows、不清空工作狀態庫、不改 root 歸屬；cleanup 成功路徑與既有三表清理維持不變。
+- 理由：
+  - fixed client message 必須在產生 recent error 的根源消毒，不能只依賴 `formatLiveStatus` 的顯示層補救。
+  - startup cleanup 沒有 consumer 時仍是整理工作，不應讓背景更新完全不可用；記錄後降級保留可觀測性與 at-least-once 狀態，下一次啟動可重試。
+- 驗證：
+  - `test/m98.test.ts` 以暫存 synthetic index 注入 776 recovery 與 cleanup failure，驗證固定訊息、無 SQLite 原文、engine 可建立及 log 的後果說明；移除分類／catch 接線時對應斷言失敗。
+
+## D137：`compact` 沿用共用 SQLite client 錯誤分類
+
+- 日期：2026-10-03。依 SPEC §101；本項只處理 `src/cli.ts` 的 `compact` 錯誤邊界與 `test/m97.test.ts`，不修改搜尋、索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - `compact` 在 `main` 既有主流程 `try`／`catch` 之前直接開啟 `IndexStore`；主庫被另一個 SQLite 連線鎖住時，constructor 的 `database is locked` 會以未處理例外離開 CLI。
+  - `src/index-errors.ts` 已集中 `IndexBusyError`、SQLite busy／locked 與 776／1288／1294 recovery 類的固定 client message；其他 CLI 路徑已有相同分類語意。
+- 決定：
+  - 只在 compact 區段補上對共用 `describeIndexClientError` 的邊界處理；busy／locked 回退出碼 3 與固定 `INDEX_BUSY`，recovery 回固定 `INDEX_RECOVERY_REQUIRED`。
+  - 分類 catch 不處理一般未知錯誤；不以 catch 掩蓋壓縮失敗，不刪 journal／WAL／SHM，不改 compact 的 lock、VACUUM 或容量計算流程。
+  - `test/m97.test.ts` 以暫存索引與真實 SQLite 寫入鎖驗證子程序退出碼、固定訊息與原文不外洩；移除分類接線後測試必須失敗。
+- 理由：
+  - 命令分支的位置不應決定 SQLite client 邊界；重用既有分類可避免再建立一套 busy／recovery 判斷與字串。
+  - 對未知錯誤維持拋出，保留資料完整性與診斷訊號，避免把真正的壓縮或索引錯誤誤報成暫時忙碌。
+
 ## D136：表格結果操作採精簡主列與更多選單
 
 - 日期：2026-10-02。依 SPEC §94。本次只調整工作台結果列的呈現、勾選欄 CSS、`test/m90.test.ts` 與 `scripts/ui-smoke.mjs`；不新增 API、資料欄位、持久化資料或搜尋結果邏輯。
