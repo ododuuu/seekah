@@ -3134,3 +3134,33 @@ docsearch doctor
 - 共用狀態只保存 path、stable reference、檔名與臨時文件數；不得保存 snippet、query、answer、Codex 原文、對話、附件或文件內容。Codex page 不得因此取得任意 path 讀取能力，仍只能使用既有文件庫操作。
 - `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
 - `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。
+
+## 106. fs.watch 漏事件壓力驗證
+
+本節承接 §86 與 §89；漏事件根因仍未證實，不把補掃、分階段計時或壓力測試結果寫成根治保證。
+
+### 106.1 合成且真實 fs.watch 測試邊界
+
+- 壓力測試必須只使用暫存根目錄、合成文件與隔離的 `LOCALDOCSEARCH_DATA_DIR`；不得讀取或操作使用者真實索引、LocalDocSearch 資料目錄或背景更新。
+- `test/m102.test.ts` 必須使用真正的 `fs.watch`，覆蓋短時間大量建立／修改／改名／移動／刪除、深層目錄、接近 Windows 長路徑、Office 暫存檔、寫暫存再 rename 的原子替換、編輯器 safe-write、資料夾整批移入／移出，以及局部更新忙碌時的事件湧入。
+- 每個情境都必須保存只含合成識別字的「應被索引」集合、`search()` 實際可搜尋集合、遺失數與遺失率，並同時記錄 `eventCount`、`emptyFilenameEventCount`、`uncertainRescanCount`、`degradedSubdirectories`、`lastTiming` 與 watcher 錯誤。
+- 測試只在有可重現遺失且能縮小成確定重現時修改 watcher；沒有重現時必須保留結果與限制，不得把一次通過宣稱成根因已解決。已否決的 reconcile mtime 排序與近期檔案延後局部佇列實驗不得重試。
+
+### 106.2 可搜尋判定與清理
+
+- 每個 synthetic token 必須只出現在一份預期文件；測試以索引搜尋結果判定可搜尋，不以事件數相等代替資料正確性。
+- 測試結束前必須停止 `LiveUpdateEngine`／daemon，關閉 `IndexStore`，刪除暫存根目錄與資料目錄；不得留下程序、Chrome 或測試資料。
+
+## 107. autoupdate diagnose 診斷摘要
+
+### 107.1 命令與輸出
+
+- 新增 `seekah autoupdate diagnose`（相容 `docsearch autoupdate diagnose`）讀取目前自動更新控制通道的唯讀 live snapshot；沒有執行中的背景更新時沿用 `AUTOUPDATE_NOT_RUNNING`，不啟動、不停止、不重啟 daemon。
+- 輸出必須可直接貼給開發者，至少包含：目前模式／階段、根目錄數與匿名識別、事件／局部更新／根掃描／子樹掃描計數、`emptyFilenameEventCount`、`uncertainRescanCount`、`uncertainRescanStateCount`、每根 `degradedSubdirectories` 數量、watcher 錯誤代碼計數、事件到可搜尋延遲的樣本數／p50／p95／最大值，以及最近有界數量的 `lastTiming` 分階段資料。
+- 最近批次預設最多 20 筆，命令可要求 1～32 筆；daemon 只保留最近 32 筆每根批次，避免診斷記憶體與回應無界成長。
+- 延遲以事件批次第一個事件至局部提交完成的毫秒數表示；它是事件到索引可供搜尋的代理量，不是搜尋 query latency 或固定 SLA。沒有事件來源的完整校正不納入此分布。
+
+### 107.2 隱私與驗收
+
+- 摘要不得輸出文件內容、session／prompt、完整檔案路徑、檔名、路徑參數或 token；根目錄與降級子目錄只能以雜湊、相對深度、計數與時間表示，watcher 錯誤只輸出固定代碼與計數。
+- `test/m103.test.ts` 必須以 synthetic `LiveStatus` 與隔離暫存 daemon 驗證命令解析、最近批次上限、延遲統計、錯誤／降級路徑匿名化，以及 `autoupdate diagnose` 不會啟動或停止程序；移除匿名化、上限或 live-only 邊界時反向斷言必須失敗。

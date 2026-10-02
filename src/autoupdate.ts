@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,8 @@ import {
   AutoupdateError, createInstanceId, createInstanceToken,
   isPidAlive, readStateFile, removeStateFile, sameSettings, sendControlRequest,
   startControlServer, writeStateFile, type AutoupdateSettings, type AutoupdateStateFile,
-  type ControlServer, type LiveStatus,
+  type ControlServer, type LiveStatus, DEFAULT_AUTODIAGNOSE_LIMIT, MAX_AUTODIAGNOSE_LIMIT, resolveAutoupdateDiagnoseLimit,
+  liveTimingSummary, type LiveTimingSample,
 } from "./autoupdate-control.js";
 import { createAutoupdateLog, formatAutoupdateLogLine } from "./autoupdate-log.js";
 import { LiveUpdateEngine, resolveAutoupdateReconcile, resolveWatchDebounce, WatchError } from "./live-update.js";
@@ -88,9 +90,64 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
       ? ` 降級子目錄=${root.degradedSubdirectories.map(item => `${item.path}（${item.reason}）`).join("、")}`
       : "";
     const timing = root.lastTiming
-      ? ` 計時=事件→排程${root.lastTiming.eventToScheduleMs ?? "—"} ms／穩定${root.lastTiming.stableWaitMs} ms／列舉${root.lastTiming.enumerateMs} ms／取鎖${root.lastTiming.lockMs} ms／提交${root.lastTiming.commitMs} ms`
+      ? ` 計時=事件→排程${root.lastTiming.eventToScheduleMs ?? "—"} ms／事件→可搜尋${root.lastTiming.eventToSearchMs ?? "—"} ms／穩定${root.lastTiming.stableWaitMs} ms／列舉${root.lastTiming.enumerateMs} ms／取鎖${root.lastTiming.lockMs} ms／提交${root.lastTiming.commitMs} ms`
       : "";
     lines.push(`  ${root.path} 監看=${root.watch} 範圍=${root.scopeMode ?? "-"} 句柄=${root.handles ?? 0} 待處理=${root.pending}${reconcile}${degraded}${timing}${root.lastError ? ` 錯誤=${root.lastError}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+function diagnosticPathHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function diagnosticDepth(value: string): number {
+  return value.split(/[\\/]+/u).filter(Boolean).length;
+}
+
+function timingSamples(root: LiveStatus["roots"][number]): LiveTimingSample[] {
+  if (root.lastTimings?.length) return root.lastTimings.slice();
+  return root.lastTiming ? [root.lastTiming] : [];
+}
+
+function timingValue(value: number | undefined): string {
+  return value === undefined ? "—" : `${value} ms`;
+}
+
+export function formatLiveDiagnosis(status: LiveStatus, requestedLimit = DEFAULT_AUTODIAGNOSE_LIMIT): string {
+  const limit = resolveAutoupdateDiagnoseLimit(requestedLimit);
+  const roots = status.roots;
+  const allSamples = roots.flatMap(timingSamples);
+  const allLatencies = allSamples.flatMap(sample => sample.eventToSearchMs === undefined ? [] : [sample.eventToSearchMs]);
+  const latency = liveTimingSummary(allLatencies);
+  const watcherErrors = Object.entries(status.watcherErrorCounts ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  const errorText = watcherErrors.length
+    ? watcherErrors.map(([code, count]) => `${code}=${count}`).join("、")
+    : "無";
+  const lines = [
+    "Seekah autoupdate diagnose",
+    `實例雜湊：${diagnosticPathHash(status.instanceId)}；模式：${status.mode}；階段：${status.phase}`,
+    `根目錄：${roots.length}；事件：${status.eventCount}；局部更新：${status.localUpdateCount}；根目錄掃描：${status.rootScanCount}；子樹掃描：${status.subtreeScanCount}`,
+    `不確定訊號：空檔名 ${status.emptyFilenameEventCount ?? 0}；補掃 ${status.uncertainRescanCount ?? 0}；狀態項目 ${status.uncertainRescanStateCount ?? 0}`,
+    `watcher 錯誤：${errorText}`,
+    `事件→可搜尋延遲：樣本 ${latency.count}；p50 ${latency.p50Ms === undefined ? "—" : `${latency.p50Ms} ms`}；p95 ${latency.p95Ms === undefined ? "—" : `${latency.p95Ms} ms`}；最大 ${latency.maxMs === undefined ? "—" : `${latency.maxMs} ms`}`,
+    `最近批次上限：${limit}（daemon 每根最多 ${MAX_AUTODIAGNOSE_LIMIT} 筆）`,
+  ];
+  for (const root of roots) {
+    const samples = timingSamples(root).slice(-limit);
+    const rootLatencies = samples.flatMap(sample => sample.eventToSearchMs === undefined ? [] : [sample.eventToSearchMs]);
+    const rootLatency = liveTimingSummary(rootLatencies);
+    const degraded = root.degradedSubdirectories ?? [];
+    const degradedText = degraded.length
+      ? degraded.map(item => `深度=${Math.max(0, item.path.split(/[\\/]+/u).filter(Boolean).length - diagnosticDepth(root.path))}、雜湊=${diagnosticPathHash(item.path)}`).join("；")
+      : "無";
+    lines.push(`根目錄 ${diagnosticPathHash(root.path)}：深度=0；監看=${root.watch}；降級子目錄=${degraded.length}`);
+    lines.push(`  降級摘要：${degradedText}`);
+    lines.push(`  事件→可搜尋延遲：樣本 ${rootLatency.count}；p50 ${rootLatency.p50Ms === undefined ? "—" : `${rootLatency.p50Ms} ms`}；p95 ${rootLatency.p95Ms === undefined ? "—" : `${rootLatency.p95Ms} ms`}；最大 ${rootLatency.maxMs === undefined ? "—" : `${rootLatency.maxMs} ms`}`);
+    lines.push(`  最近 lastTiming：${samples.length}/${limit}`);
+    for (const sample of samples) {
+      lines.push(`    ${sample.at} 事件→排程 ${timingValue(sample.eventToScheduleMs)}；事件→可搜尋 ${timingValue(sample.eventToSearchMs)}；穩定 ${timingValue(sample.stableWaitMs)}；列舉 ${timingValue(sample.enumerateMs)}；取鎖 ${timingValue(sample.lockMs)}；提交 ${timingValue(sample.commitMs)}`);
+    }
   }
   return lines.join("\n");
 }
@@ -157,6 +214,16 @@ export async function autoupdateStatus(databasePath = defaultDatabasePath()): Pr
     }
     throw error;
   }
+}
+
+export async function autoupdateDiagnose(
+  databasePath = defaultDatabasePath(),
+  requestedLimit = DEFAULT_AUTODIAGNOSE_LIMIT,
+): Promise<{ code: number; text: string; live: LiveStatus }> {
+  const limit = resolveAutoupdateDiagnoseLimit(requestedLimit);
+  const live = await queryLive(databasePath);
+  if (!live) throw new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
+  return { code: 0, text: formatLiveDiagnosis(live.status, limit), live: live.status };
 }
 
 export async function autoupdateStop(
@@ -383,6 +450,7 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
   let debounce: number | undefined;
   let reconcile: number | undefined;
   let startupCatchupMode: StartupCatchupMode | undefined;
+  let diagnoseLimit: number | undefined;
   let dataDir: string | undefined;
   let databasePathOption: string | undefined;
   let daemon = false;
@@ -403,6 +471,10 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         const value = args[++index];
         if (!value || !isStartupCatchupMode(value)) throw new Error("--startup-catchup 必須是 ask、auto 或 off。");
         startupCatchupMode = value;
+      } else if (option === "--limit") {
+        const value = args[++index];
+        if (!value || value.startsWith("--")) throw new Error("--limit 缺少筆數。");
+        diagnoseLimit = resolveAutoupdateDiagnoseLimit(Number(value));
       } else if (option === "--data-dir") {
         if (dataDir !== undefined) throw new Error("不可重複指定 --data-dir。");
         const value = args[++index];
@@ -414,11 +486,11 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         if (!value || value.startsWith("--")) throw new Error("內部 database path 缺少值。");
         databasePathOption = path.resolve(value);
       } else if (option.startsWith("--") || !option.trim()) {
-        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
+        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
       } else positional.push(option);
     }
     if (daemon) {
-      if (positional.length) throw new Error("內部 --daemon 不接受其他子命令。");
+      if (positional.length || diagnoseLimit !== undefined) throw new Error("內部 --daemon 不接受其他子命令或 --limit。");
       return await runAutoupdateDaemon({
         debounceMs: resolveWatchDebounce(debounce),
         reconcileMs: resolveAutoupdateReconcile(reconcile),
@@ -432,10 +504,13 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
       if (positional.length !== 2 || !startupAction || !["enable", "disable", "status"].includes(startupAction)) {
         throw new Error("用法：docsearch autoupdate startup enable|disable|status");
       }
-    } else if (positional.length !== 1 || !action || !["start", "status", "stop"].includes(action)) {
-      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
+    } else if (positional.length !== 1 || !action || !["start", "status", "diagnose", "stop"].includes(action)) {
+      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
     }
-    if ((action === "status" || action === "stop" || action === "startup")
+    if (diagnoseLimit !== undefined && action !== "diagnose") {
+      throw new Error("只有 autoupdate diagnose 可指定 --limit。");
+    }
+    if ((action === "status" || action === "diagnose" || action === "stop" || action === "startup")
       && (debounce !== undefined || reconcile !== undefined || startupCatchupMode !== undefined)) {
       throw new Error(`autoupdate ${action} 不接受 --debounce／--reconcile／--startup-catchup。`);
     }
@@ -461,6 +536,11 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
     }
     if (action === "status") {
       const result = await autoupdateStatus(databasePath);
+      console.log(result.text);
+      return result.code;
+    }
+    if (action === "diagnose") {
+      const result = await autoupdateDiagnose(databasePath, diagnoseLimit);
       console.log(result.text);
       return result.code;
     }

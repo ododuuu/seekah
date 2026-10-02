@@ -54,6 +54,9 @@ export const UNKNOWN_FILENAME_RESCAN_MAX_PER_WINDOW = 4;
 export const UNKNOWN_FILENAME_RESCAN_BACKOFF_MS = [5_000, 15_000, 60_000] as const;
 /** 每根目錄保留的空檔名 watchDir 狀態上限；超出時以最久未使用項目淘汰。 */
 export const MAX_UNCERTAIN_RESCAN_STATES_PER_ROOT = 1024;
+
+/** 每根目錄保留的局部批次 timing 上限，供 autoupdate diagnose 使用。 */
+export const MAX_LIVE_TIMING_SAMPLES = 32;
 type UncertainRescanState = {
   windowStartedAt: number;
   accepted: number;
@@ -221,6 +224,7 @@ type RootState = {
   uncertainRescanCount: number;
   lastUncertainRescanAt?: string;
   lastTiming?: LiveTimingSample;
+  lastTimings: LiveTimingSample[];
 };
 
 export class WatchError extends Error {
@@ -293,6 +297,7 @@ export class LiveUpdateEngine {
   private emptyFilenameEventCount = 0;
   private uncertainRescanCount = 0;
   private lastUncertainRescanAt?: string;
+  private readonly watcherErrorCounts = new Map<string, number>();
 
   private queueDegraded = false;
   private readonly startupCatchupMode: StartupCatchupMode;
@@ -386,6 +391,9 @@ export class LiveUpdateEngine {
   private rememberError(code: string, message: string): void {
     this.recentErrors.push(`${code}: ${message}`);
     if (this.recentErrors.length > 20) this.recentErrors.shift();
+    if (code.startsWith("WATCH_")) {
+      this.watcherErrorCounts.set(code, (this.watcherErrorCounts.get(code) ?? 0) + 1);
+    }
   }
 
   private newState(root: string): RootState {
@@ -395,6 +403,7 @@ export class LiveUpdateEngine {
       handles: [], scopeMode: "split",
       rescanTimer: undefined, retryTimer: undefined, retryAttempt: 0, busyAttempt: 0,
       degradedChildren: new Map(), uncertainRescans: new Map(), emptyFilenameEventCount: 0, uncertainRescanCount: 0,
+      lastTimings: [],
     };
   }
 
@@ -427,6 +436,7 @@ export class LiveUpdateEngine {
         uncertainRescanStateCount: state.uncertainRescans.size,
         ...(state.lastUncertainRescanAt ? { lastUncertainRescanAt: state.lastUncertainRescanAt } : {}),
         ...(state.lastTiming ? { lastTiming: { ...state.lastTiming } } : {}),
+        ...(state.lastTimings.length ? { lastTimings: state.lastTimings.map(sample => ({ ...sample })) } : {}),
         ...(state.reconcileSkippedByRule ? { skippedByRule: { ...state.reconcileSkippedByRule } } : {}),
         ...(state.exclusionCleanup ? { exclusionCleanup: { ...state.exclusionCleanup } } : {}),
         ...(reconcile ? {
@@ -478,6 +488,7 @@ export class LiveUpdateEngine {
         ? { nextReconcileAt: new Date(Date.parse(this.lastReconcile.at) + this.reconcileMs).toISOString() }
         : {}),
       recentErrors: [...this.recentErrors],
+      ...(this.watcherErrorCounts.size ? { watcherErrorCounts: Object.fromEntries(this.watcherErrorCounts) } : {}),
       ...(this.logError ? { logError: "AUTOUPDATE_LOG_ERROR" as const } : {}),
     };
   }
@@ -582,24 +593,32 @@ export class LiveUpdateEngine {
   private printLocal(root: string, updated: number, unchanged: number, removed: number, elapsedMs: number, complete: boolean): void {
     this.log(`根目錄：${root}；更新 ${updated}、未變更 ${unchanged}、移除 ${removed}；耗時 ${elapsedMs} ms；完整：${complete ? "是" : "否"}`);
   }
-  private recordLocalTiming(state: RootState, eventClock: number | undefined, scheduleClock: number, timing: LocalBatchTiming): void {
+  private recordLocalTiming(
+    state: RootState,
+    eventClock: number | undefined,
+    scheduleClock: number,
+    searchClock: number,
+    timing: LocalBatchTiming,
+  ): void {
+    const round = (value: number) => Math.round(value * 100) / 100;
     const sample: LiveTimingSample = {
       at: new Date(this.now()).toISOString(),
       ...(eventClock === undefined ? {} : {
-        eventToScheduleMs: Math.round((scheduleClock - eventClock) * 100) / 100,
+        eventToScheduleMs: round(scheduleClock - eventClock),
+        eventToSearchMs: round(searchClock - eventClock),
       }),
-      stableWaitMs: Math.round(timing.stableWaitMs * 100) / 100,
-      enumerateMs: Math.round(timing.enumerateMs * 100) / 100,
-      lockMs: Math.round(timing.lockMs * 100) / 100,
-      commitMs: Math.round(timing.commitMs * 100) / 100,
+      stableWaitMs: round(timing.stableWaitMs),
+      enumerateMs: round(timing.enumerateMs),
+      lockMs: round(timing.lockMs),
+      commitMs: round(timing.commitMs),
     };
     state.lastTiming = sample;
+    state.lastTimings.push(sample);
+    if (state.lastTimings.length > MAX_LIVE_TIMING_SAMPLES) state.lastTimings.shift();
     if (this.options.verbose) {
-      this.log(`局部更新計時：事件→排程 ${sample.eventToScheduleMs ?? "—"} ms；穩定等待 ${sample.stableWaitMs} ms；列舉 ${sample.enumerateMs} ms；取鎖 ${sample.lockMs} ms；提交 ${sample.commitMs} ms`);
+      this.log(`局部更新計時：事件→排程 ${sample.eventToScheduleMs ?? "—"} ms；事件→可搜尋 ${sample.eventToSearchMs ?? "—"} ms；穩定等待 ${sample.stableWaitMs} ms；列舉 ${sample.enumerateMs} ms；取鎖 ${sample.lockMs} ms；提交 ${sample.commitMs} ms`);
     }
   }
-
-
   private syncFn(): typeof sync {
     return this.options.sync ?? sync;
   }
@@ -768,12 +787,14 @@ export class LiveUpdateEngine {
         const candidateCount = order.length;
         const scheduleClock = performance.now();
         const batch = await this.applyLocalBatch(state, this.selectLocalWork(order, LOCAL_BATCH_MAX_ITEMS), inner, syncOptions);
-        this.recordLocalTiming(state, firstEventClock, scheduleClock, batch.timing);
-        delete state.firstEventClock;
         for (const item of batch.attempted) state.sweep.add(item);
         state.pending = new Set([...state.pending].filter(item => !batch.finished.has(item)));
-        if (batch.busy) throw batch.busy;
         moreLocal = batch.interrupted || batch.deferred || candidateCount > LOCAL_BATCH_MAX_ITEMS;
+        if (!batch.busy) {
+          this.recordLocalTiming(state, firstEventClock, scheduleClock, performance.now(), batch.timing);
+        }
+        if (batch.busy) throw batch.busy;
+        if (!moreLocal) delete state.firstEventClock;
         if (batch.deferred) state.dirty = true;
         this.printLocal(state.root, batch.updated, batch.unchanged, batch.removed, Math.round((this.now() - started) * 100) / 100, batch.complete);
         if (!batch.complete) state.syncFailed = true;

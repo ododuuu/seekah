@@ -59,6 +59,8 @@ export interface LiveTimingSample {
   at: string;
   /** 事件收到後至本批開始排程處理的經過時間。沒有事件來源的批次省略。 */
   eventToScheduleMs?: number;
+  /** 事件批次第一個事件至局部提交完成的經過時間；是可搜尋延遲的代理量。 */
+  eventToSearchMs?: number;
   /** 本批檔案穩定觀察等待的總時間。 */
   stableWaitMs: number;
   /** 事件／局部佇列候選的檔案系統觀察與目錄展開時間。 */
@@ -69,6 +71,44 @@ export interface LiveTimingSample {
   commitMs: number;
 }
 
+export const DEFAULT_AUTODIAGNOSE_LIMIT = 20;
+export const MAX_AUTODIAGNOSE_LIMIT = 32;
+
+export function resolveAutoupdateDiagnoseLimit(value: number | undefined): number {
+  const limit = value ?? DEFAULT_AUTODIAGNOSE_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_AUTODIAGNOSE_LIMIT) {
+    throw new AutoupdateError("AUTOUPDATE_DIAGNOSE_LIMIT_INVALID", `--limit 必須是 1～${MAX_AUTODIAGNOSE_LIMIT} 的整數。`, 2);
+  }
+  return limit;
+}
+
+export function roundLiveTimingMs(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function liveTimingPercentile(values: readonly number[], percentile: number): number | undefined {
+  if (!values.length) return undefined;
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * percentile) - 1));
+  return roundLiveTimingMs(sorted[index]!);
+}
+
+export function liveTimingMax(values: readonly number[]): number | undefined {
+  if (!values.length) return undefined;
+  return roundLiveTimingMs(Math.max(...values));
+}
+
+export function liveTimingSummary(values: readonly number[]): { count: number; p50Ms?: number; p95Ms?: number; maxMs?: number } {
+  const p50Ms = liveTimingPercentile(values, 0.5);
+  const p95Ms = liveTimingPercentile(values, 0.95);
+  const maxMs = liveTimingMax(values);
+  return {
+    count: values.length,
+    ...(p50Ms === undefined ? {} : { p50Ms }),
+    ...(p95Ms === undefined ? {} : { p95Ms }),
+    ...(maxMs === undefined ? {} : { maxMs }),
+  };
+}
 
 export interface LiveRootStatus {
   path: string;
@@ -89,6 +129,8 @@ export interface LiveRootStatus {
   /** §86；目前保留的每根目錄空檔名 watchDir 狀態數，舊程序可缺少。 */
   uncertainRescanStateCount?: number;
   lastTiming?: LiveTimingSample;
+  /** 最近局部批次的有界 timing；舊 daemon 可缺少。 */
+  lastTimings?: LiveTimingSample[];
 }
 
 export interface LiveStartupCatchupStatus {
@@ -130,6 +172,8 @@ export interface LiveStatus {
   lastReconcile?: { at: string; root: string; complete: boolean };
   nextReconcileAt?: string;
   recentErrors: string[];
+  /** 只含固定 watcher error code 的計數；舊 daemon 可缺少。 */
+  watcherErrorCounts?: Record<string, number>;
   logError?: "AUTOUPDATE_LOG_ERROR";
 }
 

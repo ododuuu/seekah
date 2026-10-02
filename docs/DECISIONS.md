@@ -1718,3 +1718,18 @@
   - 固定表格操作欄同時放七項控制會在窄視窗或字型差異下互相覆蓋；共用 handler 加更多選單可縮短主列而不改行為。
   - 句點來源未必是文字節點，直接驗證 DOM 文字、偽元素與列表樣式可區分產品內容與繪製裝飾。
 - 驗證：`test/m90.test.ts` 包含精簡表格呼叫與勾選欄的反向契約；`scripts/ui-smoke.mjs` 實際切換表格、展開更多選單並驗證 bounding rect、溢出及勾選欄內容。
+
+## D142：以真實 fs.watch 合成壓力驗證漏事件，不先改 watcher 演算法（2026-10-02）
+
+- **背景**：0.46 的有界補掃與 0.47 的 `lastTiming` 已增加防護／觀測，但使用者偶爾漏事件的根因仍未證實；目前沒有可用的真實背景更新數據。本批先在隔離暫存根目錄以真正 `fs.watch` 壓測，避免把合成 watcher callback 或事件數相等誤當成資料正確性。
+- **決定**：`test/m102.test.ts` 覆蓋高頻建立／修改／改名／移動／刪除、深層與接近長路徑、Office 暫存檔、原子替換、safe-write、資料夾批次移入／移出與局部更新忙碌時事件湧入。每個情境以 synthetic token 比對「應被索引」與 `search()` 實際可搜尋集合，記錄遺失數／遺失率及既有 watcher 計數。
+- **取捨**：若未得到穩定且可縮小的遺失重現，不修改 watcher 排程、reconcile 排序或近期檔案延後策略，也不宣稱漏事件已解決；不得重試已否決的 mtime 排序與近期延後局部佇列實驗。若測試發現可重現遺失，才另以最小回歸測試與新決策修正。
+- **邊界**：測試只建立暫存 synthetic fixture，`LOCALDOCSEARCH_DATA_DIR` 指向同一暫存樹；測試結束停止 engine、關閉 store 並清理，不讀取真實 LocalDocSearch 資料或索引。
+- **本次結果**：m102 在一輪 Windows `win32` 真實 `fs.watch` 壓力矩陣中共核對 626 份 synthetic token，`search()` 可搜尋 626、遺失 0、stale 0；另觀測 `eventCount=446`、空檔名事件 2、補掃 1、降級子目錄 0，保留 timing sample 20 筆（上限 32）。這只證明該輪沒有重現遺失，不改變根因未證實的判定。
+
+## D143：autoupdate diagnose 只回報有界匿名 live watcher 摘要（2026-10-02）
+
+- **背景**：`autoupdate status` 已有單一根目錄的 `lastTiming` 與不確定事件計數，但難以直接提供最近多批次、事件到可搜尋延遲分布及 watcher 錯誤，又不能把完整來源路徑貼到外部診斷內容。
+- **決定**：新增唯讀 `autoupdate diagnose`。命令只查詢正在執行 daemon 的 live control snapshot，不啟動、停止或重啟程序；沒有 live daemon 沿用 `AUTOUPDATE_NOT_RUNNING`。每根保留最多 32 筆最近局部批次 timing；命令預設輸出最近 20 筆，接受 1～32 的上限。延遲樣本為該批第一個事件到局部提交完成，輸出 count、p50、p95、max。
+- **匿名化**：摘要只輸出模式／階段、計數、時間、根目錄雜湊、相對深度、降級數量與固定 watcher error code 計數；不輸出文件內容、檔名、完整路徑、路徑參數、session／prompt 或 control token。一般 `autoupdate status` 的既有詳細輸出契約不因診斷摘要而放寬。
+- **驗證**：`test/m103.test.ts` 覆蓋命令解析、live-only、最近批次上限、延遲統計與匿名化；移除任一安全邊界時反向斷言必須失敗。
