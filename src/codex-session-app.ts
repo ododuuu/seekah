@@ -85,13 +85,13 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     <section class="panel"><div class="panel-head"><div><h2>工作階段清單</h2><p>點選工作階段查看 path reference。</p></div></div><div id="session-list" class="session-list"></div></section>
     <section class="panel"><div class="panel-head"><div><h2>Reference 詳細資料</h2><p>只呈現路徑、來源、信心與索引狀態。</p></div></div><div id="session-detail" class="detail"><div class="detail-empty">尚未選取工作階段。</div></div></section>
   </section>
-  <p class="note">此頁不執行 Codex 工作階段或開啟附件；已索引 reference 可釘選或加入分類，右側上下文欄仍由工作台目前的選取流程管理。</p>
+  <p class="note">此頁不執行 Codex 工作階段或開啟附件；已索引 reference 可釘選、加入分類或加入目前工作階段上下文，右側上下文欄會與工作台同步。</p>
 </main>
 </div>
 <script nonce="${nonce}">
 (() => {
   "use strict";
-  const state = { sessions: [], selected: "", loading: false, libraryGroups: [] };
+  const state = { sessions: [], selected: "", loading: false, libraryGroups: [], contextSelection: new Map(), contextBusy: false };
   const $ = id => document.getElementById(id);
   function text(value) { return value === null || value === undefined ? "" : String(value); }
   function make(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; }
@@ -127,6 +127,7 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       const unknownCount = Number(session.unknownReferenceCount || 0);
       row.append(make("span", "meta", text(session.cwd || "無 cwd") + " · " + String(session.visibleReferenceCount ?? session.referenceCount ?? 0) + " refs"
         + (lowCount ? " · " + lowCount + " 低信心" : "") + (unknownCount ? " · " + unknownCount + " 待檢查" : "") + " · " + formatDate(session.lastEventAt || session.startedAt)));
+      list.append(row);
     }
   }
   function metaGrid(items) {
@@ -146,6 +147,54 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       state.libraryGroups = Array.isArray(data && data.groups) ? data.groups : [];
     } catch {
       state.libraryGroups = [];
+    }
+  }
+  function applyContextSelection(data) {
+    const previous = new Map(state.contextSelection);
+    state.contextSelection.clear();
+    for (const item of Array.isArray(data && data.items) ? data.items : []) {
+      if (item && typeof item.reference === "string") state.contextSelection.set(item.reference, item);
+    }
+    if (previous.size !== state.contextSelection.size) return true;
+    for (const [reference, item] of state.contextSelection) {
+      const old = previous.get(reference);
+      if (!old || old.path !== item.path || old.name !== item.name) return true;
+    }
+    return false;
+  }
+  async function loadContextSelection() {
+    try {
+      return applyContextSelection(await request("/api/context-selection"));
+    } catch (error) {
+      state.contextSelection.clear();
+      $("status-message").textContent = error.message || "上下文選取讀取失敗。";
+      $("status-message").className = "status error";
+      return false;
+    }
+  }
+  async function refreshContextSelection() {
+    if (state.loading || state.contextBusy) return;
+    if (await loadContextSelection() && state.selected) await loadDetail(state.selected);
+  }
+  async function toggleContext(reference, selected) {
+    if (state.contextBusy) return;
+    const body = libraryPayload(reference);
+    if (!body) return;
+    state.contextBusy = true;
+    try {
+      const data = await request("/api/context-selection", {
+        method: selected ? "DELETE" : "POST",
+        body: JSON.stringify(selected ? { reference: body.reference } : body),
+      });
+      applyContextSelection(data);
+      $("status-message").textContent = selected ? "已移出上下文。" : "已加入上下文。";
+      $("status-message").className = "status";
+      if (state.selected) await loadDetail(state.selected);
+    } catch (error) {
+      $("status-message").textContent = error.message || "上下文選取變更失敗。";
+      $("status-message").className = "status error";
+    } finally {
+      state.contextBusy = false;
     }
   }
   async function pinReference(reference) {
@@ -200,6 +249,12 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
         }
         return addReferenceToGroup(reference, select.value);
       }));
+      const contextSelected = state.contextSelection.has(reference.seekahReference);
+      const context = actionButton(contextSelected ? "移出上下文" : "加入上下文", () => toggleContext(reference, contextSelected));
+      context.classList.toggle("primary", !contextSelected);
+      context.disabled = state.contextBusy;
+      context.dataset.action = "context";
+      actions.append(context);
       indexCell.append(actions);
     }
     row.append(pathCell, sourceCell, indexCell);
@@ -251,6 +306,7 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       const data = await request("/api/codex/sessions");
       state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
       await loadLibraryGroups();
+      await loadContextSelection();
       renderSummary(); renderList();
       if (state.selected) await loadDetail(state.selected); else renderDetail(null);
       const indexed = state.selected ? $("session-detail").querySelectorAll(".reference-row") : [];
@@ -261,6 +317,7 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
   }
   $("back").href = "/#" + encodeURIComponent(token());
   $("refresh").addEventListener("click", () => void load());
+  setInterval(() => { void refreshContextSelection(); }, 1_000);
   void load();
 })();
 </script>

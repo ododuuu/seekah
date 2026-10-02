@@ -1658,6 +1658,22 @@
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
 
+## D125：工作台上下文採常駐側欄，Codex prompt 只複製絕對路徑（2026-10-02）
+
+- **背景**：工作台原本以遮罩抽屜承載上下文預覽，無法在瀏覽結果、臨時文件與頁面操作間保持可見；使用者要把選取文件交給 Codex 時，只需要可貼上的本機路徑，不需要文件內容或自動送出。
+- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 320 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
+- **路徑規則**：前端只收集已選索引結果中的完整絕對路徑，以穩定順序去重後用 `join("\n")` 產生剪貼簿文字；不加標題、標記、檔名、正文或尾端說明，也不自動送出。上傳臨時文件若沒有原始絕對路徑，側欄可以顯示其 session 項目，但排除於 prompt，禁止用檔名冒充路徑。
+- **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
+- **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
+
+## D126：結果列操作沿用文件庫 API 並以失敗回復（2026-10-02）
+
+- **背景**：§94 的列表與表格結果列需要提供釘選、分類及上下文等一致操作；§95 已定義文件庫的實際持久化模型與 loopback API，前端不得另建一套狀態或使用瀏覽器儲存。
+- **決策**：`src/workbench-app.ts` 的 `resultActions(item)` 同時供列表與表格使用；釘選使用目前 `state.library.pinned` 判斷文案，新增／取消分別呼叫 `PUT`／`DELETE /api/library/pinned`，取消只送 `path` 與 `reference`；分類呼叫 `POST /api/library/groups/:id/items`。所有 payload 只使用完整絕對路徑、stable reference 與顯示名稱。
+- **一致性**：釘選操作先以 session-local 暫存狀態更新按鈕，並以 `libraryActionChain` 依序送出釘選／分類請求；成功後重新讀取文件庫並清除暫存，失敗則回復原本釘選集合、重新讀取並顯示本機錯誤。成功 toast 只在 API 成功後顯示，不把失敗假稱為已保存。
+- **取捨**：不修改搜尋結果、排序、索引 schema 或文件內容，不使用 browser storage、外部服務或新 endpoint；後續 API 行為以 SPEC §95 為準。
+- **驗證**：`test/m90.test.ts` 驗證列表／表格操作與 API 呼叫點及反向斷言；`scripts/ui-smoke.mjs` 在 1920×1080、1440×900、1180×800 以隔離合成資料實際驗證釘選／取消釘選／分類請求。
+
 ## D133：Codex path recall 以逐行 token 掃描保留完整 reference
 
 - 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
@@ -1673,3 +1689,32 @@
 - detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
 - synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
 - M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。
+
+## D135：Codex 與工作台上下文採 token session 共用索引集合
+
+- 日期：2026-10-02。依 SPEC §100。本分支只處理 `src/workbench.ts`、`src/workbench-app.ts`、`src/codex-session-app.ts`、`test/m96.test.ts` 與 `scripts/ui-smoke.mjs`；不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - D125 的上下文選取原本只存在工作台頁面的 `state.selected`；Codex 頁使用同一個 loopback token 但另有 JavaScript execution context，導覽後無法看到或修改右側欄，因此 §99 刻意沒有虛構「加入上下文」。
+  - 以 URL fragment 傳送 selected reference 會把完整絕對路徑暴露在 history、referrer 或畫面 URL；browser storage 又違反本產品的本機偏好與安全邊界。文件庫 SQLite 是持久化資料，不適合保存這個 session-only 選取狀態。
+- 決定：
+  - 在單一 `createWorkbench` handle 內保存受 token 保護的 `contextSelection`：索引文件只保留經 `indexedLibraryDocument` 驗證後的 canonical `path`、stable `reference`、`name`，另保留工作台臨時文件計數供 20 份上限判斷。工作台關閉時由程序清除，不寫 SQLite、檔案、URL 或 browser storage。
+  - 新增 `GET`／`POST`／`DELETE`／`PUT /api/context-selection`。`POST` 只加入已索引文件；`DELETE` 移除一份或清除索引集合；`PUT` 只同步工作台的臨時文件數。所有變更沿用既有 token、Origin／Referer 與 same-origin API 檢查；API 回傳的只有 selection metadata。
+  - Codex reference row 的「加入上下文／移出上下文」直接呼叫共用 API；工作台啟動、結果操作、側欄移除／清除與有限輪詢均讀寫同一集合。輪詢只合併索引文件，保留臨時文件的 session-local 狀態；前端以遞增 mutation version 丟棄較舊的 optimistic response，避免快速移除後重新加入時被舊回應覆寫。optimistic mutation 失敗時回復並顯示錯誤。
+  - 不採 `window.opener`、`postMessage` 或 `BroadcastChannel` 作唯一來源：它們依賴分頁開啟方式，不能涵蓋同一分頁導覽、reload 或沒有 opener 的 Codex route；server memory session 同時覆蓋這些情況而不增加持久化資料。
+- 取捨：
+  - 同一個 Workbench process／token 的頁面共用，重啟 Workbench 後選取清除；這符合上下文「目前工作階段」語意，不把使用者選取變成文件庫資料。
+  - Codex 頁只可加入已索引 reference，不能加入低信心、未索引或 arbitrary path；臨時文件仍只屬工作台頁面，故 `temporaryCount` 只作上限協調，不把暫存內容跨頁傳出。
+- 驗證：
+  - `test/m96.test.ts` 使用暫存資料目錄與合成文件，覆蓋 API 邊界、stable reference、跨頁讀取、上限與反向契約；`scripts/ui-smoke.mjs` 實際操作工作台／Codex route 的加入、移除、reload 與右側欄同步。
+
+## D136：表格結果操作採精簡主列與更多選單
+
+- 日期：2026-10-02。依 SPEC §94。本次只調整工作台結果列的呈現、勾選欄 CSS、`test/m90.test.ts` 與 `scripts/ui-smoke.mjs`；不新增 API、資料欄位、持久化資料或搜尋結果邏輯。
+- 決定：
+  - 清單維持完整操作群組；表格沿用同一個 `resultActions` 與 action handler，但以 `compact: true` 顯示「開啟」、「加入上下文／移出上下文」與「更多」，複製、所在位置、釘選／取消釘選及分類控制收在同一個可收合選單。選單開啟時仍使用原本的按鈕、select、stable reference 與 library payload。
+  - 表格勾選 input 明確使用 block 排列並由儲存格置中；smoke 同時檢查儲存格 `innerText`／`textContent`、`::before`／`::after` content、`list-style-type` 與 input display，避免把截圖中的裝飾誤判成產品文字。
+  - smoke 在選單收合與展開兩種狀態收集可見控制的 `getBoundingClientRect()`，要求任兩個控制不重疊且操作群組 `scrollWidth <= clientWidth`；這是實際 DOM 版面契約，不以 source text 代替。
+- 理由：
+  - 固定表格操作欄同時放七項控制會在窄視窗或字型差異下互相覆蓋；共用 handler 加更多選單可縮短主列而不改行為。
+  - 句點來源未必是文字節點，直接驗證 DOM 文字、偽元素與列表樣式可區分產品內容與繪製裝飾。
+- 驗證：`test/m90.test.ts` 包含精簡表格呼叫與勾選欄的反向契約；`scripts/ui-smoke.mjs` 實際切換表格、展開更多選單並驗證 bounding rect、溢出及勾選欄內容。

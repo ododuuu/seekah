@@ -77,10 +77,9 @@ function assertSearchContract(source: string, uiSource = workbenchSource): void 
   assert.match(source, /const otherOccurrences =/u, "all-terms 沒有建立其他詞的候選出現處。");
   assert.match(source, /Math\.abs\(item\.block\.ordinal - other\.block\.ordinal\)/u, "all-terms 沒有使用最近 ordinal。");
   assert.match(source, /field === "filename"[\s\S]{0,180}passages: \[\]/u, "filename field 仍可能 materialize body passage。");
-  assert.match(uiSource, /grid-template-columns: minmax\(72px, 24%\) minmax\(0, 1fr\)/u, "列表位置欄沒有縮至 24%。");
-  assert.match(uiSource, /grid-template-columns: minmax\(60px, 28%\) minmax\(0, 1fr\)/u, "表格位置欄沒有縮至 28%。");
-  assert.match(uiSource, /\.result-passage \{ grid-template-columns: minmax\(72px, 26%\)/u, "窄桌面位置欄沒有縮窄。");
-  assert.doesNotMatch(uiSource, /minmax\(88px, 31%\)|minmax\(72px, 36%\)|minmax\(76px, 35%\)/u, "仍殘留舊位置欄比例。");
+  assert.match(uiSource, /\.result-passage \{\s+display: grid;[\s\S]*?grid-template-columns: fit-content\(110px\) minmax\(0, 1fr\)/u, "列表位置欄沒有縮至內容寬度上限。");
+  assert.match(uiSource, /\.documents-table \.result-passage \{ grid-template-columns: fit-content\(110px\) minmax\(0, 1fr\);/u, "表格位置欄沒有縮至內容寬度上限。");
+  assert.doesNotMatch(uiSource, /minmax\(88px, 31%\)|minmax\(72px, 36%\)|minmax\(76px, 35%\)|minmax\(72px, 24%\)|minmax\(60px, 28%\)/u, "仍殘留舊位置欄比例。");
 }
 
 test("M84 phrase 顯示同文件第二片段且檔名與內文共命中顯示 body", async t => {
@@ -149,6 +148,6 @@ test("M84 reverse 移除第二段、最近鄰或窄欄契約時必須失敗", ()
   const withoutNearest = searchSource.replace(/const otherOccurrences =/u, "const removedOtherOccurrences =");
   assert.throws(() => assertSearchContract(withoutNearest), /最近|候選/u);
 
-  const withoutNarrowList = workbenchSource.replace(/minmax\(72px, 24%\)/u, "minmax(88px, 31%)");
-  assert.throws(() => assertSearchContract(searchSource, withoutNarrowList), /列表位置欄|24%/u);
+  const withoutNarrowList = workbenchSource.replace(/grid-template-columns: fit-content\(110px\) minmax\(0, 1fr\)/u, "grid-template-columns: minmax(88px, 31%)");
+  assert.throws(() => assertSearchContract(searchSource, withoutNarrowList), /位置欄|內容寬度/u);
 });

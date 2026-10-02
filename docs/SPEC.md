@@ -2957,6 +2957,45 @@ docsearch doctor
 - `test/m88.test.ts` 必須以同一合成長文件分別走完整讀取與候選讀取，逐欄比較當頁結果，並證明候選路徑驗證的 chunks／bytes 較少；拿掉候選 terms 傳遞或退回完整讀取時，該讀取量斷言必須失敗。
 - 必須執行 `test/m76.test.ts` 的既有三種索引形狀回歸與 `scripts/search-diff.mjs`；搜尋差分的結果集合、欄位、排序、rank、total、`totalRelation` 必須為 0 差異。
 - 效能數字只作本機觀察；長文件查詢詞若分散於幾乎所有 chunks，收益可接近零，不得宣稱所有文件固定加速。
+
+## 93. 工作台上下文常駐側欄與 Codex 路徑 Prompt
+
+依 D125。本節處理工作台已選文件的可見性與本機 Codex 對話用路徑文字產生；不自動送出對話、不讀取 Codex session，也不改索引或搜尋 API。
+
+### 93.1 常駐側欄與選取
+
+- 工作台桌面版面必須在既有左導覽與主要內容右側提供常駐「上下文」側欄；側欄在文件頁、臨時文件頁、根目錄頁與垃圾桶頁切換時仍留在工作台外框內，不得只靠遮罩抽屜才能查看。
+- 側欄必須顯示目前已選的索引文件完整絕對路徑，每筆提供單筆移除；提供清空目前選取與「複製全部路徑」操作。左導覽的「已選上下文」數字、結果列選取樣式、表格勾選狀態與側欄清單必須由同一份 session-local 選取狀態同步。
+- 目前選取的索引文件路徑若不是完整絕對路徑，不得虛構、補根目錄或改以檔名代替；該筆不得進入 Codex 路徑文字。瀏覽器上傳的臨時文件沒有原始絕對路徑時可以留在既有臨時文件狀態，但不得混入路徑文字。
+- 桌面寬度使用右側可用空間顯示側欄；1180 px 工作台仍必須可用原生按鈕收合與重新展開側欄，收合不得清除選取。
+
+### 93.2 Codex 路徑文字
+
+- 「複製全部路徑」剪貼簿文字只能由目前可用的完整絕對路徑組成；每行一個路徑，不得加入標題、項目符號、引號、欄位名稱、檔名、片段、正文、說明或其他前後綴，不得自動送出任何 Codex／AI 對話。
+- 剪貼簿順序沿用側欄與選取集合的穩定順序；同一路徑只輸出一次。沒有可輸出的完整絕對路徑時不得清空既有剪貼簿，畫面只顯示本機提示。
+- 路徑文字產生不使用 browser storage、cookie、IndexedDB、外部服務或新 endpoint；既有選取只存在目前工作台 session。
+
+### 93.3 驗收
+
+- `test/m89.test.ts` 必須覆蓋常駐側欄、完整絕對路徑過濾、去重、清空／單筆移除契約、收合狀態與剪貼簿文字不含額外內容；移除路徑過濾、加入標題或恢復遮罩抽屜時，反向測試必須失敗。
+- `scripts/ui-smoke.mjs` 必須在 1920×1080、1440×900 與 1180×800 的隔離合成資料驗證側欄常駐、左導覽數字同步、選取後逐行複製絕對路徑、單筆移除、清空及 1180 收合／展開；必須確認瀏覽器沒有 exception。
+- 本節不新增文件內容 endpoint、不讀取使用者真實資料、不處理 Codex session／rollout 解析；那些需求由其他指定工作另行規格化。
+
+## 94. 搜尋結果一致快捷操作群組
+
+依 D126。本節處理工作台文件列表與表格結果列的操作呈現與前端 API 呼叫點；Pin、分類資料模型與真正持久化語意以後續 §95 為行為權威。
+
+### 94.1 結果列操作
+
+- 索引結果的操作群組必須在清單與表格都提供同一組可辨識操作：開啟原檔、顯示所在位置、複製完整路徑、複製檔名、釘選／取消釘選、加入分類、加入上下文／移出上下文。每個操作都必須是同一套可見按鈕群組樣式，不得混用有框按鈕與無框文字連結；表格為避免固定寬度操作欄重疊，主列保留「開啟」、「加入上下文／移出上下文」與「更多」，其餘操作收在同一列的可展開「更多操作」選單。
+- 表格檢視的操作群組必須放在獨立操作欄，不得擠在檔名旁；勾選欄只放區塊排列的勾選控制，儲存格的 `innerText`、`textContent` 與 `::before`／`::after` 偽元素不得產生句點或其他裝飾文字。清單與表格仍共用同一個 action handler 與穩定文件 reference。
+- 開啟、顯示所在位置、複製路徑、複製檔名與加入上下文沿用目前本機操作與選取語意；表格收合或展開更多操作不得改變 action、payload 或結果集合。結果集合、排名、排序、片段、總數與索引資料不因 UI 改動而改變。
+- 釘選／取消釘選與加入分類按鈕只能送出完整絕對路徑與穩定 reference；API 不可用或回應失敗時只顯示本機錯誤提示，不得假稱已保存。
+
+### 94.2 驗收
+
+- `test/m90.test.ts` 必須驗證列表／表格共同操作契約、表格獨立操作欄、七項 action 存在、表格精簡主列與更多選單、釘選切換文案、勾選欄的 `innerText`／`textContent`／偽元素無句點及釘選／分類呼叫點；拿掉任一操作、移除精簡表格呼叫、恢復文字連結或把操作放回標題欄時，反向測試必須失敗。
+- UI smoke 必須在合成結果上實際檢查清單與表格的操作群組、收合／展開更多操作後按鈕 bounding rect 互不重疊且 `scrollWidth <= clientWidth`、勾選儲存格 `innerText` 與 `::before`／`::after` content、排序文字、釘選／取消釘選／分類 mock API 請求、加入上下文後的路徑側欄與按鈕狀態；不以 source text 檢查取代瀏覽器操作。
  
 ## 95. 本機文件庫：最近、釘選、分類與已存搜尋
 
@@ -3074,6 +3113,24 @@ docsearch doctor
 ### 99.2 工作台呈現與驗收
 
 - `/codex-sessions` 顯示工作階段清單、cwd、時間、事件類型統計、Reference Set、來源分類、confidence、磁碟存在／未知原因、`kind`（檔案／資料夾／未知）與 Seekah 索引狀態；list 只顯示尚未檢查數，不執行 path existence check；detail 才呈現檢查結果，低信心／未知 path 置於可展開區塊。
-- 只有已在 Seekah 索引的 reference 顯示 `Pin` 與 `Add-to-category` 操作，且沿用既有 `/api/library/pinned`、`/api/library/groups/:id/items` stable reference API；Codex 獨立頁沒有跨頁 context bridge，因此不虛構 `Add-to-context`，右側上下文欄仍由工作台既有選取流程管理。
-- 頁面只提供重新整理、回到工作台及上述文件庫操作；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
+- 只有已在 Seekah 索引的 reference 顯示「釘選」、「加入分類」及「加入上下文／移出上下文」操作；文件庫操作沿用既有 stable reference API，上下文操作依 §100 使用目前工作台 token session 的共用集合。低信心、未索引、未知或不存在 reference 不顯示加入上下文操作。
+- 頁面只提供重新整理、回到工作台、上述文件庫操作與 §100 上下文操作；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
 - `test/m95.test.ts` 必須驗證 token／Origin 邊界、session／reference API、可見與低信心 buckets、索引比對、來源分類、頁面 CSP／安全文字呈現、文件庫按鈕 API 接線與 conversation content 不外洩；移除 API 索引比對或頁面入口的反向契約必須失敗。
+
+## 100. Codex Reference 與工作台上下文跨頁共用
+
+依 D135。本節只把已在 Seekah 索引的 Codex reference 接入工作台既有上下文選取；不把 Codex 對話內容、prompt、tool result 或文件正文加入新的儲存或傳輸流程。
+
+### 100.1 共用狀態與 API
+
+- 工作台以目前 URL fragment token 保護的 loopback session 作為上下文索引文件集合的唯一來源；狀態只存在 `createWorkbench` 的程序記憶體，工作台 reload 或在 `/codex-sessions` 間導覽仍保留，Workbench 關閉即消失。不得使用 `localStorage`、`sessionStorage`、cookie、IndexedDB、URL query／fragment payload 或外部服務保存選取。
+- `GET /api/context-selection` 回傳目前 session 的已選索引文件 `{path, reference, name}` 與工作台目前已選臨時文件數；只回傳 stable reference metadata，不回傳文件內容。`POST /api/context-selection` 僅接受一份已由 Seekah 索引且 stable reference／absolute path 相符的文件；`DELETE` 可移除一份或清除整個索引選取；`PUT` 只更新工作台已選臨時文件數。所有 endpoint 沿用 token、loopback Origin／Referer、CSP 與 `no-store` 邊界。
+- API 每次都重新以現有索引驗證 stable reference、canonical path 與 ownership；失效、路徑不符或非索引文件不得加入。索引與臨時文件合計仍最多 20 份；超過上限回傳錯誤且不改變既有集合。
+- Codex 頁每筆已索引 reference 顯示「加入上下文」或「移出上下文」，操作成功後更新該頁及共用 session；低信心、未索引、未知或不存在 reference 不顯示此操作。工作台右側上下文欄、列表／表格結果按鈕及 Codex 頁讀取同一份 session 集合。
+- 工作台在已開啟的另一頁存在時以受限輪詢重新讀取共用集合；輪詢只更新索引文件，不覆寫本工作台臨時文件。新增或移除失敗必須回復本地 optimistic state 並顯示錯誤，不得假稱成功。
+
+### 100.2 安全與驗收
+
+- 共用狀態只保存 path、stable reference、檔名與臨時文件數；不得保存 snippet、query、answer、Codex 原文、對話、附件或文件內容。Codex page 不得因此取得任意 path 讀取能力，仍只能使用既有文件庫操作。
+- `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
+- `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。
