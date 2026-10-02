@@ -54,7 +54,7 @@ HTTP／HTTPS URL 永遠不是 absolute file path，parser 不輸出 URL referenc
 
 ## 後續 parser 邊界與效能決定
 
-- 合成負例另外涵蓋 `data:` image URI、含 base64 signature 的片段、URL、跨行 token、句末標點、`:line` suffix 及超過 400 字元的單一路徑 token；這些內容不得變成 Reference Set。長說明文字即使超過 400 字元，仍須保留其中獨立的合法 path。事件 type 不接受 rollout 任意字串，超長或不在 allowlist 的值統一為 `unknown`。
+- 合成負例另外涵蓋 `data:` image URI、含 base64 signature 的片段、URL、跨行 token、句末標點、`:line` suffix 及超過 400 字元的單一路徑 token；這些內容不得變成 Reference Set。長說明文字即使超過 400 字元，仍須保留其中獨立的合法 path。path scanner 每段文字最多掃描 2,000,000 字元，單一 token 最多前進 401 字元；M96 的 200 KiB 未閉合引號／連續反斜線／空白 synthetic case 修正後約 13 ms，必須低於 200 ms。事件 type 不接受 rollout 任意字串，超長或不在 allowlist 的值統一為 `unknown`。
 
 產品 parser 對單一 rollout 設 64 MiB 檔案上限；超限只回傳 `skipped` metadata，不讀取檔案。正常檔案使用 64 KiB stream chunk 組行，2,000,000 字元以上的單行只計為 invalid，不先由 `readline` 配置無界字串。
 

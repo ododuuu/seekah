@@ -1661,6 +1661,7 @@
 ## D133：Codex path recall 以逐行 token 掃描保留完整 reference
 
 - 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
-- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
+- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。掃描器不再對每個 regex match 重掃剩餘全文，而是以單調 cursor、每個 token 最多 401 字元、每段文字最多 2,000,000 字元的確定性狀態機前進，避免連續反斜線／未閉合引號形成 O(n²)。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
 - 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
 - m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。
+- M96 synthetic 200 KiB 未閉合引號、連續反斜線與空白輸入，修正後抽取約 13 ms；修正前同類 rollout 在 5 秒 watchdog 內未完成。性能門檻固定為單段文字 200 ms 內完成，不以真實使用者資料作測試。

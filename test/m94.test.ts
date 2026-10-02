@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import test from "node:test";
 import {
   codexReferencePathForTest,
+  codexReferencePathsForTest,
   parseCodexRolloutFile,
   parseCodexSessionFiles,
   parseCodexSessions,
@@ -146,6 +148,16 @@ test("M94 path noise、事件 type 上限與 stream line 上限必須拒絕", as
   const limitedLine = await parseCodexRolloutFile(longLinePath, { maxLineLength: 32 });
   assert.equal(limitedLine.invalidLineCount, 1);
   assert.equal(limitedLine.eventCount, 0);
+});
+
+test("M96 200 KB 未閉合 path 惡意輸入必須在 200 ms 內完成", () => {
+  const hostile = "\"" + "C:\\synthetic\\" + "\\".repeat(100_000) + " ".repeat(105_000);
+  assert.ok(hostile.length >= 200 * 1024);
+  const started = performance.now();
+  const paths = codexReferencePathsForTest(hostile);
+  const elapsed = performance.now() - started;
+  assert.deepEqual(paths, []);
+  assert.ok(elapsed < 200, `200 KB 惡意 path 掃描耗時 ${elapsed.toFixed(1)} ms`);
 });
 
 test("M94 path recall 保留中文、空白、JSON escape、包裝與資料夾", async t => {

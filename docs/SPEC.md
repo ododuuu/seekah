@@ -3043,7 +3043,7 @@ docsearch doctor
 - 輸入只限 Codex home 下 `sessions/` 遞迴的 `rollout-*.jsonl`。不得為補資料而讀取 `history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔或 SQLite 狀態檔。
 - 每行 JSONL 個別解析；`session_meta`、`response_item`、`event_msg`、`turn_context`、`world_state` 與未知事件至少保留事件類型統計、有效／無效行數與必要的 session metadata。不得把 JSONL 原文、message、reasoning、query、command、tool arguments 或 result 放入公開結果。
 - `session_meta.cwd`、`session_id`、時間欄位可作工作階段 metadata；`turn_context`／`thread_settings_applied` 的 permission profile、sandbox、workspace root、cwd、`world_state` filesystem 與 developer message 是環境設定，禁止進入 Reference Set。
-- 路徑抽取只接受 Windows drive、UNC、POSIX 或 `file://` 絕對路徑；`http://`／`https://`／`ftp://`、`data:`、base64 片段永遠排除。單一 path token 超過 400 字元排除，但長說明文字與跨行 message 仍須逐行抽取其中完整 path；句末標點與 `:line` suffix 不得污染 canonical path。
+- 路徑抽取只接受 Windows drive、UNC、POSIX 或 `file://` 絕對路徑；`http://`／`https://`／`ftp://`、`data:`、base64 片段永遠排除。單一 path token 超過 400 字元排除，但長說明文字與跨行 message 仍須逐行抽取其中完整 path；每段文字最多掃描 2,000,000 字元，起點與 token 結尾採線性且有界的確定性掃描；句末標點與 `:line` suffix 不得污染 canonical path。
 - 事件類型輸出只接受固定 allowlist 且長度上限為 128；未知或超長 type 統一記為 `unknown`，不得把 rollout 任意字串直接回傳成事件 key。
 - 單一 rollout 檔案大小上限為 64 MiB；超過上限不得讀取內容，session 回傳 `parseStatus: "skipped"` 與 `skipReason: "file-too-large"`。讀檔以 64 KiB stream chunk 組行，單行上限為 2,000,000 字元，超限行只增加 `invalidLineCount`，不得先以無界 `readline` 配置整行。
 
@@ -3060,7 +3060,7 @@ docsearch doctor
 
 - 無法辨識事件來源時仍可只從明確的 `message`／`text` 欄位抽取絕對路徑，但來源固定為 `user-provided`、confidence 為 `low`，並標記 `message-path-fallback`；不得猜測事件語意，也不得遞迴掃描環境設定或工具輸出。
 - parser cache 以 canonical rollout path、`mtimeMs` 與檔案 size 作有效性條件；清單建立後，detail 只解析被選取的 target rollout，命中相同 path／mtime／size 時重用 session result，不得每次 detail 重新解析全部 rollout。
-- `test/m94.test.ts` 必須以暫存 Codex home 的合成 rollout 驗證真實 schema 的正／負欄位、session metadata、事件統計、四種來源、HTTP／HTTPS/data URI/base64 noise 排除、換行／400 字元／event type／檔案大小／單行上限、中文／空白／JSON escape／正斜線 Windows／UNC／Markdown 包裝／資料夾尾斜線的完整 path recall、directory kind、cache、只讀檔案邊界與不輸出 conversation content；移除 path collection 的反向契約必須失敗。
+- `test/m94.test.ts` 必須以暫存 Codex home 的合成 rollout 驗證真實 schema 的正／負欄位、session metadata、事件統計、四種來源、HTTP／HTTPS/data URI/base64 noise 排除、換行／400 字元／event type／檔案大小／單行上限、中文／空白／JSON escape／正斜線 Windows／UNC／Markdown 包裝／資料夾尾斜線的完整 path recall、directory kind、200 KiB 未閉合引號／反斜線輸入在 200 ms 內完成、cache、只讀檔案邊界與不輸出 conversation content；移除 path collection 的反向契約必須失敗。
 
 ## 99. Codex 工作階段 loopback API 與工作台頁面
 
