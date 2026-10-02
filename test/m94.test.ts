@@ -6,9 +6,11 @@ import test from "node:test";
 import {
   codexReferencePathForTest,
   parseCodexRolloutFile,
+  parseCodexSessionFiles,
   parseCodexSessions,
   resolveCodexHome,
   type CodexSession,
+  type CodexSessionCache,
 } from "../src/codex-session.js";
 
 async function fixture(): Promise<{ temp: string; codexHome: string; rollout: string; privateText: string }> {
@@ -29,7 +31,7 @@ async function fixture(): Promise<{ temp: string; codexHome: string; rollout: st
       { type: "input_text:turn_aborted", text: "C:/synthetic/aborted.txt" },
       { type: "input_text:recommended_plugins", text: "C:/synthetic/plugins.txt" },
       { type: "input_text:# AGENTS.md", text: "C:/synthetic/agents.txt" },
-      { type: "input_text:(plain)", text: "Please inspect C:/synthetic/user-provided.txt " + privateText + " https://example.test/C:/synthetic/url.txt HTTP://example.test/C:/synthetic/url-uppercase.txt" },
+      { type: "input_text:(plain)", text: "Please inspect C:/synthetic/user-provided.txt " + privateText + " https://example.test/C:/synthetic/url.txt HTTP://example.test/C:/synthetic/url-uppercase.txt data:image/png;base64,/9j/4AAQSkZJRgABAQ" },
       { type: "input_image", image_url: { url: "file:///C:/synthetic/user-image.png" } },
     ] } },
     { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "# Seekah 上下文\n\n## 1. C:/synthetic/prompt-a.txt\n- 文件代碼：`1-a`\n\nC:/synthetic/snippet-path.txt\n\n## 2. C:/synthetic/prompt-b.txt" }] } },
@@ -91,6 +93,7 @@ test("M94 依真實 schema allowlist 解析 metadata、四種來源並排除環�
   assert.equal(reference(session, "fallback.txt").confidence, "low");
 
   const serialized = JSON.stringify(session);
+  assert.equal(session.eventTypes["unknown"], 1);
   for (const excluded of [
     "auto-environment.txt", "turn-context-cwd", "thread-permission.txt", "world-root", "base-instructions.txt", "writable-root",
     "permission-profile.txt", "file-change-output.txt", "file-change-map-output.txt", "command-cwd",
@@ -117,6 +120,55 @@ test("M94 真實摘要無 localdocsearch MCP 時不得猜成 seekah-mcp", async 
   const session = await parseCodexRolloutFile(filePath);
   assert.equal(session.parseMode, "structured");
   assert.equal(session.references.length, 0);
+});
+
+test("M94 path noise、事件 type 上限與 stream line 上限必須拒絕", async t => {
+  const fixtureData = await fixture();
+  t.after(() => rm(fixtureData.temp, { recursive: true, force: true }));
+  assert.equal(codexReferencePathForTest("data:image/png;base64,/9j/4AAQSkZJRgABAQ"), null);
+  assert.equal(codexReferencePathForTest("/9j/4AAQSkZJRgABAQ"), null);
+  assert.equal(codexReferencePathForTest("/tmp/synthetic/file.md:123"), "/tmp/synthetic/file.md");
+  assert.equal(codexReferencePathForTest("/tmp/synthetic/file.md，後續句子"), "/tmp/synthetic/file.md");
+  assert.equal(codexReferencePathForTest("/tmp/synthetic/file.md\nnext"), null);
+  assert.equal(codexReferencePathForTest("C:/synthetic/" + "x".repeat(400)), null);
+
+  const longTypePath = path.join(fixtureData.codexHome, "sessions", "2026", "10", "02", "rollout-limits.jsonl");
+  await writeFile(longTypePath, [
+    JSON.stringify({ type: "x".repeat(129), payload: { type: "message", role: "user", content: [] } }),
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "C:/synthetic/after-limit.txt" }] } }),
+  ].join("\n") + "\n", "utf8");
+  const limitedType = await parseCodexRolloutFile(longTypePath);
+  assert.equal(limitedType.eventTypes.unknown, 1);
+  assert.equal(limitedType.references.length, 1);
+
+  const longLinePath = path.join(fixtureData.codexHome, "sessions", "2026", "10", "rollout-long-line.jsonl");
+  await writeFile(longLinePath, "{\"type\":\"unknown\",\"message\":\"" + "x".repeat(128) + "\"}\n", "utf8");
+  const limitedLine = await parseCodexRolloutFile(longLinePath, { maxLineLength: 32 });
+  assert.equal(limitedLine.invalidLineCount, 1);
+  assert.equal(limitedLine.eventCount, 0);
+});
+
+test("M94 檔案大小上限回傳 skipped，path+mtime+size cache 重用 parse result", async t => {
+  const fixtureData = await fixture();
+  t.after(() => rm(fixtureData.temp, { recursive: true, force: true }));
+  const skipped = await parseCodexRolloutFile(fixtureData.rollout, { maxFileBytes: 1 });
+  assert.equal(skipped.parseStatus, "skipped");
+  assert.equal(skipped.skipReason, "file-too-large");
+  assert.equal(skipped.eventCount, 0);
+
+  const cache: CodexSessionCache = new Map();
+  const first = await parseCodexSessionFiles({ codexHome: fixtureData.codexHome, cache });
+  const second = await parseCodexSessionFiles({ codexHome: fixtureData.codexHome, cache });
+  const firstRollout = first.find(file => file.path === path.resolve(fixtureData.rollout));
+  const secondRollout = second.find(file => file.path === path.resolve(fixtureData.rollout));
+  assert.ok(firstRollout);
+  assert.ok(secondRollout);
+  assert.equal(firstRollout.session, secondRollout.session);
+  await writeFile(fixtureData.rollout, "\n", { flag: "a" });
+  const third = await parseCodexSessionFiles({ codexHome: fixtureData.codexHome, cache });
+  const thirdRollout = third.find(file => file.path === path.resolve(fixtureData.rollout));
+  assert.ok(thirdRollout);
+  assert.notEqual(thirdRollout.session, secondRollout.session);
 });
 
 test("M94 Codex home 可由環境變數設定且絕對路徑正規化", () => {

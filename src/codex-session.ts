@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { documentReference } from "./document-reference.js";
 import type { IndexStore, StoredDocumentRow } from "./store.js";
 
@@ -19,6 +18,7 @@ export interface CodexSessionReference {
   sources: CodexReferenceSource[];
   confidence: CodexReferenceConfidence;
   display: CodexReferenceDisplay;
+  exists: boolean;
   occurrences: number;
   eventTypes: string[];
   indexed: boolean;
@@ -26,6 +26,8 @@ export interface CodexSessionReference {
   seekahReference?: string;
   indexedStatus?: string;
 }
+
+export type CodexSessionParseStatus = "parsed" | "skipped";
 
 export interface CodexSession {
   id: string;
@@ -36,6 +38,8 @@ export interface CodexSession {
   invalidLineCount: number;
   eventTypes: Record<string, number>;
   parseMode: CodexSessionParseMode;
+  parseStatus: CodexSessionParseStatus;
+  skipReason?: "file-too-large";
   references: CodexSessionReference[];
 }
 
@@ -44,16 +48,39 @@ export interface CodexSessionParserOptions {
   environment?: NodeJS.ProcessEnv;
   maxSessions?: number;
   maxReferencesPerSession?: number;
+  maxFileBytes?: number;
+  maxLineLength?: number;
+  cache?: CodexSessionCache;
+}
+
+export interface CodexSessionCacheEntry {
+  mtimeMs: number;
+  size: number;
+  session: CodexSession;
+}
+
+export type CodexSessionCache = Map<string, CodexSessionCacheEntry>;
+
+export interface CodexSessionFile {
+  path: string;
+  mtimeMs: number;
+  size: number;
+  session: CodexSession;
 }
 
 export interface CodexSessionSummary extends Omit<CodexSession, "references"> {
   referenceCount: number;
+  visibleReferenceCount: number;
+  lowReferenceCount: number;
   sourceCounts: Record<CodexReferenceSource, number>;
 }
 
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_REFERENCES = 2_000;
-const MAX_ROLLOUT_LINE_LENGTH = 2_000_000;
+const DEFAULT_MAX_FILE_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_LINE_LENGTH = 2_000_000;
+const MAX_REFERENCE_TEXT_LENGTH = 400;
+const MAX_EVENT_TYPE_LENGTH = 128;
 const SOURCE_PRIORITY = new Map<CodexReferenceSource, number>(CODEX_REFERENCE_SOURCES.map((source, index) => [source, index]));
 const PATH_FIELD_KEYS = new Set(["path", "savedPath", "saved_path", "filePath", "file_path"]);
 const TOOL_NAME_KEYS = new Set(["name", "tool_name", "toolName"]);
@@ -65,6 +92,16 @@ const AUTO_INJECTED_USER_PREFIXES = [
 ];
 const SEEKAH_CONTEXT_MARKER = "# Seekah 上下文";
 const MCP_SERVER_NAMES = new Set(["localdocsearch", "seekah"]);
+const PATH_BOUNDARY = /[\u0022\u0027\u0060\u003c\u003e\u007c\u0028\u0029\u005b\u005d\u007b\u007d\u3001\u3002\u3009\u300a\u300b\u300d\u3010\u3011\u3014\u3015\u3017\u3019\u301b\u2026\uff0c\uff1a\uff1b\uff01\uff1f]/u;
+const ALLOWED_EVENT_TYPES = new Set([
+  "unknown", "session_meta", "turn_context", "world_state", "compacted",
+  "response", "response_item", "response/message", "response_item/message",
+  "response_item/function_call", "response_item/custom_tool_call",
+  "response_item/custom_tool_call_output", "response_item/function_call_output",
+  "event_msg", "event_msg/thread_settings_applied", "event_msg/item_completed",
+  "event_msg/user_message", "event_msg/agent_message", "event_msg/reasoning",
+  "event_msg/plan", "event_msg/web_search", "event_msg/context_compaction",
+]);
 const ABSOLUTE_PATH_TOKEN = /(?:file:\/\/[^\s"'`<>|]+|[A-Za-z]:[\\/][^\s"'`<>|]+|\\\\[^\s"'`<>|]+|\/(?:[^\s"'`<>|]+\/)*[^\s"'`<>|/]+)/gu;
 
 interface JsonRecord { [key: string]: unknown }
@@ -94,6 +131,8 @@ interface MutableSession {
   invalidLineCount: number;
   eventTypes: Record<string, number>;
   parseMode: CodexSessionParseMode;
+  parseStatus: CodexSessionParseStatus;
+  skipReason?: "file-too-large";
   references: Map<string, MutableReference>;
 }
 
@@ -127,7 +166,8 @@ function canonicalEventType(line: JsonRecord): string {
   const type = stringValue(line.type) ?? "unknown";
   const payload = nestedRecord(line.payload) ?? nestedRecord(line.data) ?? nestedRecord(line.event);
   const subtype = payload ? firstString(payload.type, payload.event_type, payload.kind) : null;
-  return subtype && (type === "response_item" || type === "event_msg" || type === "response") ? `${type}/${subtype}` : type;
+  const candidate = subtype && (type === "response_item" || type === "event_msg" || type === "response") ? `${type}/${subtype}` : type;
+  return candidate.length <= MAX_EVENT_TYPE_LENGTH && ALLOWED_EVENT_TYPES.has(candidate) ? candidate : "unknown";
 }
 
 function eventTimestamp(line: JsonRecord, payload: JsonRecord): string | null {
@@ -138,8 +178,26 @@ function isWindowsAbsolute(value: string): boolean {
   return /^[A-Za-z]:[\\/]/u.test(value) || /^\\\\/u.test(value);
 }
 
-function normalizeAbsolutePath(value: string): string | null {
+function trimPathToken(value: string): string {
   let candidate = value.trim();
+  const boundary = candidate.search(PATH_BOUNDARY);
+  if (boundary >= 0) candidate = candidate.slice(0, boundary);
+  candidate = candidate.replace(/[,:;.!?]+$/u, "");
+  candidate = candidate.replace(/:(?:\d+)$/u, "");
+  return candidate.replace(/[,:;.!?]+$/u, "").trim();
+}
+function isLikelyBase64Fragment(value: string): boolean {
+  const candidate = value.replace(/^\/+/u, "");
+  return /^(?:9j\/|iVBORw0KGgo|R0lGOD|JVBER|UEsDB|H4sI|eyJ)/u.test(candidate);
+}
+
+
+function normalizeAbsolutePath(value: string): string | null {
+  let candidate = trimPathToken(value);
+  if (!candidate || candidate.length > MAX_REFERENCE_TEXT_LENGTH || candidate.includes("\n") || candidate.includes("\r")) return null;
+  if (isLikelyBase64Fragment(candidate)) return null;
+  if (/^(?:data|https?|ftp):/iu.test(candidate) || /^\/\/[^/]/u.test(candidate)) return null;
+  if (/(?:;base64)(?:,|;|$)/iu.test(candidate)) return null;
   if (/^file:\/\//iu.test(candidate)) {
     try {
       const url = new URL(candidate);
@@ -150,11 +208,8 @@ function normalizeAbsolutePath(value: string): string | null {
       return null;
     }
   }
-  candidate = candidate
-    .replace(/^['"`]+/u, "")
-    .replace(/[,'"`.;:!?)}\]]+$/u, "")
-    .trim();
-  if (!candidate || candidate.includes("\n") || candidate.includes("\r")) return null;
+  candidate = trimPathToken(candidate);
+  if (!candidate || candidate.length > MAX_REFERENCE_TEXT_LENGTH || candidate.includes("\n") || candidate.includes("\r")) return null;
   if (isWindowsAbsolute(candidate)) return path.win32.normalize(candidate);
   if (candidate.startsWith("/")) return path.posix.normalize(candidate);
   return null;
@@ -166,6 +221,7 @@ function pathKey(value: string): string {
 }
 
 function extractAbsolutePaths(text: string): string[] {
+  if (text.length > MAX_REFERENCE_TEXT_LENGTH || /[\r\n]/u.test(text)) return [];
   const paths: string[] = [];
   for (const match of text.matchAll(ABSOLUTE_PATH_TOKEN)) {
     const candidate = match[0];
@@ -174,11 +230,16 @@ function extractAbsolutePaths(text: string): string[] {
     const lowerPrefix = prefix.toLowerCase();
     const networkStarts = [lowerPrefix.lastIndexOf("http://"), lowerPrefix.lastIndexOf("https://"), lowerPrefix.lastIndexOf("ftp://")];
     const networkStart = Math.max(...networkStarts);
+    const dataStart = lowerPrefix.lastIndexOf("data:");
+    const base64Start = lowerPrefix.lastIndexOf(";base64");
     const splitNetworkUrl = (lowerPrefix.endsWith("htt") && /^p:[\\/]/iu.test(candidate))
       || (lowerPrefix.endsWith("http") && /^s:[\\/]/iu.test(candidate))
       || (lowerPrefix.endsWith("ft") && /^p:[\\/]/iu.test(candidate));
     const insideNetworkUrl = (networkStart >= 0 && !/\s/u.test(text.slice(networkStart, index))) || splitNetworkUrl;
-    if (insideNetworkUrl || (candidate.startsWith("/") && (text[index - 1] === ":" || text[index - 1] === "/"))) continue;
+    const insideDataUri = dataStart >= 0 && !/\s/u.test(text.slice(dataStart, index));
+    const insideBase64 = base64Start >= 0 && !/\s/u.test(text.slice(base64Start, index));
+    if (insideNetworkUrl || insideDataUri || insideBase64 || isLikelyBase64Fragment(candidate) || candidate.startsWith("//")
+      || (candidate.startsWith("/") && (text[index - 1] === ":" || text[index - 1] === "/"))) continue;
     const normalized = normalizeAbsolutePath(candidate);
     if (normalized && !paths.includes(normalized)) paths.push(normalized);
   }
@@ -449,18 +510,20 @@ function addReference(session: MutableSession, item: PathEvidence & { eventType:
 
 function createMutableSession(id: string): MutableSession {
   return { id, cwd: null, startedAt: null, lastEventAt: null, eventCount: 0, invalidLineCount: 0,
-    eventTypes: {}, parseMode: "structured", references: new Map() };
+    eventTypes: {}, parseMode: "structured", parseStatus: "parsed", references: new Map() };
 }
 
 function finalizeReference(reference: MutableReference): CodexSessionReference {
   const sources = [...reference.sources].sort((left, right) => (SOURCE_PRIORITY.get(left) ?? 99) - (SOURCE_PRIORITY.get(right) ?? 99));
-  const display: CodexReferenceDisplay = reference.confidence === "low" && !existsSync(reference.path) ? "low-confidence-missing" : "normal";
+  const exists = existsSync(reference.path);
+  const display: CodexReferenceDisplay = exists ? "normal" : "low-confidence-missing";
   return {
     path: reference.path,
     source: reference.source,
     sources,
     confidence: reference.confidence,
     display,
+    exists,
     occurrences: reference.occurrences,
     eventTypes: [...reference.eventTypes].sort(),
     indexed: reference.indexed,
@@ -480,13 +543,15 @@ function finalizeSession(session: MutableSession): CodexSession {
     invalidLineCount: session.invalidLineCount,
     eventTypes: Object.fromEntries(Object.entries(session.eventTypes).sort(([left], [right]) => left.localeCompare(right))),
     parseMode: session.parseMode,
+    parseStatus: session.parseStatus,
+    ...(session.skipReason ? { skipReason: session.skipReason } : {}),
     references: [...session.references.values()].map(finalizeReference),
   };
 }
 
-function consumeLine(session: MutableSession, line: string, maxReferences: number): void {
+function consumeLine(session: MutableSession, line: string, maxReferences: number, maxLineLength: number): void {
   if (!line.trim()) return;
-  if (line.length > MAX_ROLLOUT_LINE_LENGTH) {
+  if (line.length > maxLineLength) {
     session.invalidLineCount++;
     return;
   }
@@ -518,21 +583,65 @@ function consumeLine(session: MutableSession, line: string, maxReferences: numbe
   if (fallback.length) session.parseMode = "message-path-fallback";
 }
 
-async function rolloutFiles(codexHome: string): Promise<string[]> {
+async function consumeRolloutStream(
+  input: AsyncIterable<string>,
+  session: MutableSession,
+  maxReferences: number,
+  maxLineLength: number,
+): Promise<void> {
+  let pending = "";
+  let discarding = false;
+  for await (const chunk of input) {
+    let current = chunk;
+    if (discarding) {
+      const newline = current.indexOf("\n");
+      if (newline < 0) continue;
+      current = current.slice(newline + 1);
+      discarding = false;
+    }
+    pending += current;
+    let newline = pending.indexOf("\n");
+    while (newline >= 0) {
+      const line = pending.slice(0, newline).replace(/\r$/u, "");
+      consumeLine(session, line, maxReferences, maxLineLength);
+      pending = pending.slice(newline + 1);
+      newline = pending.indexOf("\n");
+    }
+    if (pending.length > maxLineLength) {
+      session.invalidLineCount++;
+      pending = "";
+      discarding = true;
+    }
+  }
+  if (!discarding && pending) consumeLine(session, pending.replace(/\r$/u, ""), maxReferences, maxLineLength);
+}
+
+interface RolloutFileDescriptor {
+  path: string;
+  mtimeMs: number;
+  size: number;
+}
+
+async function rolloutFiles(codexHome: string): Promise<RolloutFileDescriptor[]> {
   const root = path.join(codexHome, "sessions");
-  const result: string[] = [];
+  const result: RolloutFileDescriptor[] = [];
   const visit = async (directory: string): Promise<void> => {
     let entries;
     try { entries = await readdir(directory, { withFileTypes: true }); }
     catch { return; }
     for (const entry of entries) {
-      const full = path.join(directory, entry.name);
+      const full = path.resolve(path.join(directory, entry.name));
       if (entry.isDirectory()) await visit(full);
-      else if (entry.isFile() && /^rollout-[^/\\]+\.jsonl$/u.test(entry.name)) result.push(full);
+      else if (entry.isFile() && /^rollout-[^/\\]+\.jsonl$/u.test(entry.name)) {
+        try {
+          const info = await stat(full);
+          result.push({ path: full, mtimeMs: info.mtimeMs, size: info.size });
+        } catch { /* A deleted rollout is not a parse failure for other sessions. */ }
+      }
     }
   };
   await visit(root);
-  return result.sort((left, right) => right.localeCompare(left));
+  return result.sort((left, right) => right.path.localeCompare(left.path));
 }
 
 export function resolveCodexHome(explicit?: string, environment: NodeJS.ProcessEnv = process.env): string {
@@ -544,38 +653,111 @@ function fallbackSessionId(filePath: string): string {
   return `rollout-${createHash("sha256").update(path.normalize(filePath), "utf8").digest("hex").slice(0, 16)}`;
 }
 
-export async function parseCodexRolloutFile(filePath: string, options: Pick<CodexSessionParserOptions, "maxReferencesPerSession"> = {}): Promise<CodexSession> {
-  const session = createMutableSession(fallbackSessionId(filePath));
-  const input = createReadStream(filePath, { encoding: "utf8" });
-  const lines = createInterface({ input, crlfDelay: Infinity });
+async function parseCodexRolloutDescriptor(
+  file: RolloutFileDescriptor,
+  options: Pick<CodexSessionParserOptions, "maxReferencesPerSession" | "maxFileBytes" | "maxLineLength"> = {},
+): Promise<CodexSession> {
+  const session = createMutableSession(fallbackSessionId(file.path));
+  const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
+  if (file.size > maxFileBytes) {
+    session.parseStatus = "skipped";
+    session.skipReason = "file-too-large";
+    return finalizeSession(session);
+  }
+  const input = createReadStream(file.path, { encoding: "utf8", highWaterMark: 64 * 1024 });
   try {
-    for await (const line of lines) consumeLine(session, line, options.maxReferencesPerSession ?? DEFAULT_MAX_REFERENCES);
+    await consumeRolloutStream(input, session, options.maxReferencesPerSession ?? DEFAULT_MAX_REFERENCES, options.maxLineLength ?? DEFAULT_MAX_LINE_LENGTH);
   } finally {
     input.destroy();
   }
   return finalizeSession(session);
 }
 
-export async function parseCodexSessions(options: CodexSessionParserOptions = {}): Promise<CodexSession[]> {
+function cacheKey(filePath: string): string {
+  return path.resolve(filePath);
+}
+
+async function parseCachedDescriptor(
+  file: RolloutFileDescriptor,
+  options: Pick<CodexSessionParserOptions, "maxReferencesPerSession" | "maxFileBytes" | "maxLineLength">,
+  cache: CodexSessionCache,
+): Promise<CodexSession> {
+  const key = cacheKey(file.path);
+  const cached = cache.get(key);
+  if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) return cached.session;
+  const session = await parseCodexRolloutDescriptor(file, options);
+  cache.set(key, { mtimeMs: file.mtimeMs, size: file.size, session });
+  return session;
+}
+
+export async function parseCodexRolloutFile(
+  filePath: string,
+  options: Pick<CodexSessionParserOptions, "maxReferencesPerSession" | "maxFileBytes" | "maxLineLength"> = {},
+): Promise<CodexSession> {
+  const resolved = cacheKey(filePath);
+  const info = await stat(resolved);
+  return parseCodexRolloutDescriptor({ path: resolved, mtimeMs: info.mtimeMs, size: info.size }, options);
+}
+
+export async function parseCodexRolloutFileCached(
+  filePath: string,
+  options: Pick<CodexSessionParserOptions, "maxReferencesPerSession" | "maxFileBytes" | "maxLineLength"> = {},
+  cache: CodexSessionCache,
+): Promise<CodexSession> {
+  const resolved = cacheKey(filePath);
+  const info = await stat(resolved);
+  return parseCachedDescriptor({ path: resolved, mtimeMs: info.mtimeMs, size: info.size }, options, cache);
+}
+
+export async function parseCodexSessionFiles(options: CodexSessionParserOptions = {}): Promise<CodexSessionFile[]> {
   const home = resolveCodexHome(options.codexHome, options.environment);
-  const files = await rolloutFiles(home);
-  const sessions: CodexSession[] = [];
-  for (const file of files.slice(0, options.maxSessions ?? DEFAULT_MAX_SESSIONS)) {
-    try { sessions.push(await parseCodexRolloutFile(file, options)); }
-    catch { /* A deleted or unreadable rollout is not a reason to expose raw filesystem errors. */ }
+  const files = (await rolloutFiles(home)).slice(0, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+  const sessions: CodexSessionFile[] = [];
+  for (const file of files) {
+    try {
+      const session = options.cache
+        ? await parseCachedDescriptor(file, options, options.cache)
+        : await parseCodexRolloutDescriptor(file, options);
+      sessions.push({ ...file, session });
+    } catch { /* A deleted or unreadable rollout is not a reason to expose raw filesystem errors. */ }
   }
-  return sessions.sort((left, right) => (right.startedAt ?? "").localeCompare(left.startedAt ?? "") || right.id.localeCompare(left.id));
+  return sessions.sort((left, right) =>
+    (right.session.startedAt ?? "").localeCompare(left.session.startedAt ?? "") || right.session.id.localeCompare(left.session.id));
+}
+
+export async function parseCodexSessions(options: CodexSessionParserOptions = {}): Promise<CodexSession[]> {
+  return (await parseCodexSessionFiles(options)).map(file => file.session);
 }
 
 function referenceSummary(session: CodexSession): CodexSessionSummary {
   const sourceCounts = Object.fromEntries(CODEX_REFERENCE_SOURCES.map(source => [source, 0])) as Record<CodexReferenceSource, number>;
   for (const reference of session.references) for (const source of reference.sources) sourceCounts[source]++;
+  const lowReferenceCount = session.references.filter(reference => !reference.exists && !reference.indexed).length;
   const { references: _references, ...summary } = session;
-  return { ...summary, referenceCount: session.references.length, sourceCounts };
+  return {
+    ...summary,
+    referenceCount: session.references.length,
+    visibleReferenceCount: session.references.length - lowReferenceCount,
+    lowReferenceCount,
+    sourceCounts,
+  };
 }
 
 export function summarizeCodexSessions(sessions: readonly CodexSession[]): CodexSessionSummary[] {
   return sessions.map(referenceSummary);
+}
+
+export function codexReferenceBuckets(references: readonly CodexSessionReference[]): {
+  references: CodexSessionReference[];
+  lowReferences: CodexSessionReference[];
+} {
+  const visible: CodexSessionReference[] = [];
+  const lowReferences: CodexSessionReference[] = [];
+  for (const reference of references) {
+    if (reference.exists || reference.indexed) visible.push(reference);
+    else lowReferences.push(reference);
+  }
+  return { references: visible, lowReferences };
 }
 
 function indexedDocument(store: Pick<IndexStore, "getDocument" | "getDocumentCaseInsensitive">, filePath: string): StoredDocumentRow | undefined {
@@ -592,6 +774,7 @@ export function markIndexedCodexReferences(sessions: readonly CodexSession[], st
         return {
           ...reference,
           indexed: false,
+          display: reference.exists ? "normal" : "low-confidence-missing",
           ...(reference.display === "low-confidence-missing" ? { indexedStatus: "low-confidence-missing" } : {}),
         };
       }
@@ -607,9 +790,6 @@ export function markIndexedCodexReferences(sessions: readonly CodexSession[], st
   }));
 }
 
-export function codexSessionById(sessions: readonly CodexSession[], id: string): CodexSession | undefined {
-  return sessions.find(session => session.id === id);
-}
 
 export function codexReferencePathForTest(value: string): string | null {
   return normalizeAbsolutePath(value);

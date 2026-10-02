@@ -22,7 +22,7 @@ import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, p
 import { workbenchHtml } from "./workbench-app.js";
 import { traceHtml } from "./trace-app.js";
 import { codexSessionHtml } from "./codex-session-app.js";
-import { codexSessionById, markIndexedCodexReferences, parseCodexSessions, summarizeCodexSessions } from "./codex-session.js";
+import { codexReferenceBuckets, markIndexedCodexReferences, parseCodexRolloutFileCached, parseCodexSessionFiles, summarizeCodexSessions, type CodexSessionCache } from "./codex-session.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { sync } from "./sync.js";
@@ -499,10 +499,35 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }),
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   };
+  const codexParserCache: CodexSessionCache = new Map();
+  const codexSessionFilePaths = new Map<string, string>();
+  const readCodexSessionFiles = async () => {
+    const files = await parseCodexSessionFiles({ ...codexParserOptions, cache: codexParserCache });
+    codexSessionFilePaths.clear();
+    for (const file of files) codexSessionFilePaths.set(file.session.id, file.path);
+    return files;
+  };
   const readCodexSessions = async () => {
-    const sessions = await parseCodexSessions(codexParserOptions);
+    const files = await readCodexSessionFiles();
+    const sessions = files.map(file => file.session);
     if (!existsSync(options.databasePath)) return sessions;
     return openStore(options.databasePath, store => markIndexedCodexReferences(sessions, store), options.createIndexStore);
+  };
+  const readCodexSession = async (id: string) => {
+    let filePath = codexSessionFilePaths.get(id);
+    if (!filePath) {
+      const files = await readCodexSessionFiles();
+      filePath = files.find(file => file.session.id === id)?.path;
+    }
+    if (!filePath) return undefined;
+    let session;
+    try {
+      session = await parseCodexRolloutFileCached(filePath, {}, codexParserCache);
+    } catch {
+      return undefined;
+    }
+    if (!existsSync(options.databasePath)) return session;
+    return openStore(options.databasePath, store => markIndexedCodexReferences([session], store)[0], options.createIndexStore);
   };
 
   function persistIndexing(force = false): void {
@@ -809,6 +834,16 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       if (!url.pathname.startsWith("/api/")) { json(response, 404, { error: "找不到本機資源。" }); return; }
       if (request.headers["x-localdocsearch-token"] !== token) { json(response, 403, { error: "工作階段 token 無效。" }); return; }
+      const codexApi = url.pathname.startsWith("/api/codex/");
+      if (codexApi) {
+        let allowedOrigin = !request.headers.origin;
+        if (request.headers.origin) allowedOrigin = request.headers.origin === origin;
+        else if (request.headers.referer) {
+          try { allowedOrigin = new URL(request.headers.referer).origin === origin; }
+          catch { allowedOrigin = false; }
+        }
+        if (!allowedOrigin) { json(response, 403, { error: "跨來源要求已拒絕。" }); return; }
+      }
       if (request.method === "GET" && url.pathname === "/api/codex/sessions") {
         const sessions = await readCodexSessions();
         json(response, 200, { readOnly: true, sessions: summarizeCodexSessions(sessions) });
@@ -821,8 +856,9 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         try { sessionId = decodeURIComponent(encodedId); }
         catch { throw Object.assign(new Error("Codex 工作階段代碼無效。"), { statusCode: 400 }); }
         if (!sessionId || sessionId.length > 512) throw Object.assign(new Error("Codex 工作階段代碼無效。"), { statusCode: 400 });
-        const session = codexSessionById(await readCodexSessions(), sessionId);
+        const session = await readCodexSession(sessionId);
         if (!session) { json(response, 404, { error: "找不到 Codex 工作階段。" }); return; }
+        const buckets = codexReferenceBuckets(session.references);
         json(response, 200, {
           readOnly: true,
           sessionId: session.id,
@@ -833,7 +869,13 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
           invalidLineCount: session.invalidLineCount,
           eventTypes: session.eventTypes,
           parseMode: session.parseMode,
-          references: session.references,
+          parseStatus: session.parseStatus,
+          ...(session.skipReason ? { skipReason: session.skipReason } : {}),
+          referenceCount: session.references.length,
+          visibleReferenceCount: buckets.references.length,
+          lowReferenceCount: buckets.lowReferences.length,
+          references: buckets.references,
+          lowReferences: buckets.lowReferences,
         });
         return;
       }

@@ -1,4 +1,21 @@
 # 設計決策紀錄
+## D132：Codex 安全邊界、增量解析與文件庫操作
+
+- 日期：2026-10-03。依 SPEC §§98–99；先將本分支 rebase 到 `main`，保留 main 的文件庫 API、工作台導覽與上下文抽屜實作；本次只修改 Codex parser、loopback API、Codex 頁面與 m94／m95 合成測試，不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - Codex API 原本沿用 token，但 GET Codex route 未套用既有 non-GET Origin guard；Codex 頁面的 `Origin`／`Referer` 必須在有提供時限制為目前 loopback origin。
+  - rollout 可能包含 data URI、base64／URL noise、超長文字、超長單行與大型檔案；每次 request 重新解析全部 rollout 會放大 I/O 與 JSON 配置成本。
+  - main 的文件庫已有 stable reference 驗證、釘選與分類 API；main 的上下文抽屜是工作台選取狀態，沒有 Codex 獨立頁到該狀態的跨頁共享契約。
+- 決定：
+  - path text 加上 data／base64／URL／換行／400 字元邊界與標點／`:line` 清理；event type 使用固定 allowlist 與 128 字元上限；單檔 64 MiB、單行 2,000,000 字元，超檔回傳 skipped，stream 組行避免無界 readline 配置。
+  - cache key 採 canonical rollout path + `mtimeMs` + size；session 清單建立後 detail 只解析目標 rollout，並將 `exists`、可見／低信心 reference buckets 與 parse status 明確放入 API。
+  - 已索引 reference 才提供 Pin 與 Add-to-category，payload 沿用 main 的 canonical path／stable reference API。Codex 頁面不新增虛構的 Add-to-context；需要上下文時仍使用工作台既有選取流程。
+- 理由：
+  - 這些邊界同時限制輸出 injection、錯誤 path 顯示、單一檔案資源消耗與重複解析成本，並保留真實 rollout schema 的未知事件可觀測性。
+  - 直接復用文件庫 API 可保留 stable reference／Origin／transaction 驗證；沒有跨頁 context contract 時不新增第二套 context state，避免 UI 宣稱已加入但工作台看不到。
+- 驗證：
+  - `test/m94.test.ts` 使用暫存 synthetic Codex home 覆蓋 path noise、event type、line／file cap、skip 與 cache；`test/m95.test.ts` 覆蓋 token／Origin、visible／low buckets、exists／indexed 與頁面 library action 接線。未讀取真實 `~/.codex` 或 `%LOCALAPPDATA%\\LocalDocSearch*`，不宣稱公司 Windows 驗收。
+
 ## D127：文件庫採獨立 SQLite 並以路徑去重
 
 - 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。

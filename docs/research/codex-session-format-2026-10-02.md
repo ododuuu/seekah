@@ -52,6 +52,16 @@
 
 HTTP／HTTPS URL 永遠不是 absolute file path，parser 不輸出 URL reference。未知事件才允許 `message`／`text` 欄位做 `user-provided`／`low` 的 `message-path-fallback`；這類低信心、未在磁碟且未命中 Seekah 索引的 path 只能作低信心 metadata，不得提升成工具或 Seekah 來源。頁面仍以 confidence／indexed 狀態降級呈現，不開啟來源檔案。
 
+## 後續 parser 邊界與效能決定
+
+合成負例另外涵蓋 `data:` image URI、含 base64 signature 的片段、URL、換行、句末標點、`:line` suffix 及超過 400 字元的 path text；這些內容不得變成 Reference Set。事件 type 不接受 rollout 任意字串，超長或不在 allowlist 的值統一為 `unknown`。
+
+產品 parser 對單一 rollout 設 64 MiB 檔案上限；超限只回傳 `skipped` metadata，不讀取檔案。正常檔案使用 64 KiB stream chunk 組行，2,000,000 字元以上的單行只計為 invalid，不先由 `readline` 配置無界字串。
+
+session cache 以 canonical rollout path、`mtimeMs` 與檔案 size 驗證；session 清單建立後 detail 只解析目標檔案並重用相同 cache。API 將磁碟 `exists`、Seekah `indexed` 與主要／低信心 buckets 分開，避免不存在的未知 path 和已確認文件混在同一主要列表。
+
+main 已有文件庫 stable reference API，因此已索引 Codex reference 的 UI 只接 Pin 與分類；工作台右側 context drawer 沒有跨頁共享狀態契約，Codex 頁面不自行宣稱加入 context。上述結論仍只用 synthetic fixture 驗證。
+
 ## 合成 fixture 必須覆蓋的負例
 
 fixture 必須同時包含：`turn_context` permission／workspace／cwd、`thread_settings_applied` permission／cwd、`world_state`、session base instructions、developer／assistant message、tool output／result URL、`mcp__beeper`、非 localdocsearch 的 `McpToolCall`、HTTP／HTTPS URL；這些值不得進入 Reference Set。正例必須包含 plain user path、Seekah Markdown／pi path list、localdocsearch MCP、FileChange、CommandExecution、shell command、apply_patch 與 exec。

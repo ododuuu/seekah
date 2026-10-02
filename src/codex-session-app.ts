@@ -57,6 +57,12 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
 .reference-row { grid-template-columns:minmax(0,1.8fr) 120px minmax(130px,1fr); }
 .reference-path { overflow-wrap:anywhere; font-family:"Cascadia Mono",Consolas,monospace; }
 .reference-meta { color:var(--muted); }
+.reference-actions { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:6px; }
+.reference-actions .btn { min-height:28px; padding:4px 7px; font-size:11px; }
+.reference-actions select { min-height:28px; max-width:160px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink); font-size:11px; }
+.low-reference-details { margin-top:10px; padding:8px 10px; border:1px solid var(--line); background:#f8faf9; }
+.low-reference-details summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.low-reference-details .reference-row:last-child { border-bottom:0; }
 .mono { font-family:"Cascadia Mono",Consolas,monospace; font-variant-numeric:tabular-nums; }
 .note { color:var(--muted); font-size:12px; }
 @media (max-width:1050px) { html,body { min-width:0; } .workspace { grid-template-columns:1fr; } .session-list { max-height:360px; min-height:180px; } .summary { grid-template-columns:1fr; } }
@@ -79,21 +85,23 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     <section class="panel"><div class="panel-head"><div><h2>工作階段清單</h2><p>點選工作階段查看 path reference。</p></div></div><div id="session-list" class="session-list"></div></section>
     <section class="panel"><div class="panel-head"><div><h2>Reference 詳細資料</h2><p>只呈現路徑、來源、信心與索引狀態。</p></div></div><div id="session-detail" class="detail"><div class="detail-empty">尚未選取工作階段。</div></div></section>
   </section>
-  <p class="note">此頁沒有送出、修改、執行 Codex 工作階段或開啟附件的操作；未知事件會標示低信心 fallback。</p>
+  <p class="note">此頁不執行 Codex 工作階段或開啟附件；已索引 reference 可釘選或加入分類，右側上下文欄仍由工作台目前的選取流程管理。</p>
 </main>
 </div>
 <script nonce="${nonce}">
 (() => {
   "use strict";
-  const state = { sessions: [], selected: "", loading: false };
+  const state = { sessions: [], selected: "", loading: false, libraryGroups: [] };
   const $ = id => document.getElementById(id);
   function text(value) { return value === null || value === undefined ? "" : String(value); }
   function make(tag, className, value) { const node = document.createElement(tag); if (className) node.className = className; if (value !== undefined) node.textContent = value; return node; }
   function token() { try { return decodeURIComponent(location.hash.slice(1)); } catch { return ""; } }
   function formatDate(value) { if (!value) return "—"; const date = new Date(value); return Number.isNaN(date.getTime()) ? text(value) : new Intl.DateTimeFormat("zh-TW", { dateStyle:"short", timeStyle:"medium", hour12:false }).format(date); }
   function sourceLabel(value) { return ({ "seekah-prompt":"Seekah prompt", "user-provided":"使用者提供", "seekah-mcp":"Seekah MCP", "codex-tool":"Codex tool" })[value] || text(value); }
-  async function request(pathname) {
-    const response = await fetch(pathname, { headers: { "X-LocalDocSearch-Token": token() }, cache: "no-store" });
+  function actionButton(label, action) { const node = make("button", "btn", label); node.type = "button"; node.addEventListener("click", event => { event.stopPropagation(); void action(); }); return node; }
+  async function request(pathname, options = {}) {
+    const headers = { "X-LocalDocSearch-Token": token(), ...(options.body ? { "content-type": "application/json" } : {}), ...(options.headers || {}) };
+    const response = await fetch(pathname, { ...options, headers, cache: "no-store" });
     let data = null;
     try { data = await response.json(); } catch { /* response is not JSON */ }
     if (!response.ok) throw new Error(data && data.error ? data.error : "Codex 工作階段讀取失敗。");
@@ -115,7 +123,9 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       row.type = "button";
       row.addEventListener("click", () => { state.selected = session.id; renderList(); void loadDetail(session.id); });
       row.append(make("span", "id", session.id));
-      row.append(make("span", "meta", text(session.cwd || "無 cwd") + " · " + String(session.referenceCount || 0) + " refs · " + formatDate(session.lastEventAt || session.startedAt)));
+      const lowCount = Number(session.lowReferenceCount || 0);
+      row.append(make("span", "meta", text(session.cwd || "無 cwd") + " · " + String(session.visibleReferenceCount ?? session.referenceCount ?? 0) + " refs"
+        + (lowCount ? " · " + lowCount + " 低信心" : "") + " · " + formatDate(session.lastEventAt || session.startedAt)));
       list.append(row);
     }
   }
@@ -124,15 +134,82 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     for (const item of items) { const cell = make("div"); cell.append(make("strong", "", item[0]), make("span", "", text(item[1]))); meta.append(cell); }
     return meta;
   }
+  function libraryPayload(reference) {
+    if (!reference || !reference.indexed || typeof reference.seekahReference !== "string" || !reference.seekahReference) return null;
+    const pathValue = typeof reference.indexedPath === "string" && reference.indexedPath ? reference.indexedPath : reference.path;
+    const name = pathValue.split(/[\\\\/]/u).filter(Boolean).pop() || pathValue;
+    return { path: pathValue, reference: reference.seekahReference, name };
+  }
+  async function loadLibraryGroups() {
+    try {
+      const data = await request("/api/library/groups");
+      state.libraryGroups = Array.isArray(data && data.groups) ? data.groups : [];
+    } catch {
+      state.libraryGroups = [];
+    }
+  }
+  async function pinReference(reference) {
+    const body = libraryPayload(reference);
+    if (!body) return;
+    try {
+      await request("/api/library/pinned", { method: "PUT", body: JSON.stringify(body) });
+      $("status-message").textContent = "已釘選文件。";
+    } catch (error) {
+      $("status-message").textContent = error.message || "釘選操作失敗。";
+      $("status-message").className = "status error";
+    }
+  }
+  async function addReferenceToGroup(reference, groupId) {
+    const body = libraryPayload(reference);
+    if (!body || !groupId) return;
+    try {
+      await request("/api/library/groups/" + encodeURIComponent(String(groupId)) + "/items", { method: "POST", body: JSON.stringify(body) });
+      $("status-message").textContent = "已加入分類。";
+    } catch (error) {
+      $("status-message").textContent = error.message || "加入分類失敗。";
+      $("status-message").className = "status error";
+    }
+  }
+  function referenceRow(reference, allowLibraryActions) {
+    const row = make("div", "reference-row");
+    const pathCell = make("span", "reference-path", reference.path);
+    const sources = Array.isArray(reference.sources) && reference.sources.length ? reference.sources.map(sourceLabel).join("、") : sourceLabel(reference.source);
+    const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence));
+    const status = (reference.exists ? "磁碟存在" : "磁碟不存在") + " · " + (reference.indexed ? "已在 Seekah 索引" : "未在 Seekah 索引");
+    const indexCell = make("span", "reference-meta", status + " · " + String(reference.occurrences || 0) + " 次");
+    if (reference.seekahReference) indexCell.append(make("div", "mono", reference.seekahReference));
+    if (allowLibraryActions && reference.indexed && reference.seekahReference) {
+      const actions = make("div", "reference-actions");
+      actions.append(actionButton("釘選", () => pinReference(reference)));
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", "選擇分類");
+      select.append(new Option(state.libraryGroups.length ? "加入分類…" : "尚無分類", ""));
+      for (const group of state.libraryGroups) select.append(new Option(group.name, String(group.id)));
+      select.addEventListener("click", event => event.stopPropagation());
+      actions.append(select, actionButton("加入分類", () => {
+        if (!select.value) {
+          $("status-message").textContent = "請先在工作台建立分類。";
+          return;
+        }
+        return addReferenceToGroup(reference, select.value);
+      }));
+      indexCell.append(actions);
+    }
+    row.append(pathCell, sourceCell, indexCell);
+    return row;
+  }
   function renderDetail(session) {
     const detail = $("session-detail");
     detail.replaceChildren();
     if (!session) { detail.append(make("div", "detail-empty", "尚未選取工作階段。")); return; }
     const title = make("div", "detail-title");
     title.append(make("h2", "", session.sessionId));
-    title.append(make("span", "badge" + (session.parseMode === "structured" ? "" : " warning"), session.parseMode));
+    title.append(make("span", "badge" + (session.parseStatus === "skipped" || session.parseMode !== "structured" ? " warning" : ""), session.parseStatus === "skipped" ? "skipped" : session.parseMode));
     detail.append(title);
-    detail.append(metaGrid([["cwd", session.cwd || "—"], ["開始", formatDate(session.startedAt)], ["最後事件", formatDate(session.lastEventAt)], ["事件數", session.eventCount], ["無效行", session.invalidLineCount], ["reference 數", (session.references || []).length]]));
+    const references = Array.isArray(session.references) ? session.references : [];
+    const lowReferences = Array.isArray(session.lowReferences) ? session.lowReferences : [];
+    const referenceCount = Number(session.referenceCount ?? references.length + lowReferences.length);
+    detail.append(metaGrid([["cwd", session.cwd || "—"], ["開始", formatDate(session.startedAt)], ["最後事件", formatDate(session.lastEventAt)], ["事件數", session.eventCount], ["無效行", session.invalidLineCount], ["reference 數", referenceCount]]));
     const events = make("section", "detail-section");
     events.append(make("h3", "", "事件類型統計"));
     const eventEntries = Object.entries(session.eventTypes || {});
@@ -140,18 +217,16 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     for (const entry of eventEntries) { const row = make("div", "event-row"); row.append(make("span", "mono", entry[0]), make("span", "mono", entry[1]), make("span", "", "")); events.append(row); }
     detail.append(events);
     const refs = make("section", "detail-section");
-    refs.append(make("h3", "", "絕對路徑 references"));
-    const references = Array.isArray(session.references) ? session.references : [];
-    if (!references.length) refs.append(make("div", "detail-empty", "沒有抽取到絕對路徑。"));
-    for (const reference of references) {
-      const row = make("div", "reference-row");
-      const pathCell = make("span", "reference-path", reference.path);
-      const sources = Array.isArray(reference.sources) && reference.sources.length ? reference.sources.map(sourceLabel).join("、") : sourceLabel(reference.source);
-      const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence));
-      const indexLabel = reference.indexed ? "已在 Seekah 索引" : reference.display === "low-confidence-missing" ? "低信心：檔案與索引皆不存在" : "未在 Seekah 索引";
-      const indexCell = make("span", "reference-meta", indexLabel + " · " + String(reference.occurrences || 0) + " 次");
-      if (reference.seekahReference) indexCell.append(make("div", "mono", reference.seekahReference));
-      row.append(pathCell, sourceCell, indexCell); refs.append(row);
+    refs.append(make("h3", "", "磁碟存在或已索引的 references"));
+    if (!references.length) refs.append(make("div", "detail-empty", "沒有磁碟存在或已索引的 reference。"));
+    for (const reference of references) refs.append(referenceRow(reference, true));
+    if (lowReferences.length) {
+      const low = make("details", "low-reference-details");
+      low.append(make("summary", "", "可能已移動或其他電腦的路徑（" + lowReferences.length + "）"));
+      const lowList = make("div", "");
+      for (const reference of lowReferences) lowList.append(referenceRow(reference, false));
+      low.append(lowList);
+      refs.append(low);
     }
     detail.append(refs);
   }
@@ -168,6 +243,7 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     try {
       const data = await request("/api/codex/sessions");
       state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      await loadLibraryGroups();
       renderSummary(); renderList();
       if (state.selected) await loadDetail(state.selected); else renderDetail(null);
       const indexed = state.selected ? $("session-detail").querySelectorAll(".reference-row") : [];
