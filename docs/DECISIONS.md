@@ -1749,3 +1749,12 @@
   - startup cleanup 沒有 consumer 時仍是整理工作，不應讓背景更新完全不可用；記錄後降級保留可觀測性與 at-least-once 狀態，下一次啟動可重試。
 - 驗證：
   - `test/m98.test.ts` 以暫存 synthetic index 注入 776 recovery 與 cleanup failure，驗證固定訊息、無 SQLite 原文、engine 可建立及 log 的後果說明；移除分類／catch 接線時對應斷言失敗。
+
+## D139：D137／D138 審查補強測試
+
+- 日期：2026-10-03。依 SPEC §§101–102；本次只補 `test/m97.test.ts` 與 `test/m98.test.ts`，不修改產品程式、索引 schema、package 版本或相容入口。
+- 決定：
+  - m97 以合成錯誤物件覆蓋數值 `SQLITE_BUSY_*` extended code、字串 busy／locked code，並保留一個真實主庫 lock 子程序案例。
+  - m98 以 `SQLITE_CORRUPT`／`SQLITE_NOTADB` 負向案例確認同步回傳失敗、保留原始 failure recent error 且不變成 `INDEX_RECOVERY_REQUIRED`；另建立實際 orphan work row，讓 cleanup 的 before-commit 失敗後啟動 engine，確認孤兒 row 保留、孤兒文件不被重新搜尋、活躍根文件不被刪除。
+  - 三項新增測試均做反向驗證：暫時移除 locked extended-code 分支、把 corrupt／notadb 納入 recovery，及讓 cleanup catch 重新拋錯；對應測試均先失敗，再還原。
+- 驗證：`npm test` 530 項，527 通過、0 失敗、3 略過；本次未修改 `src/`。

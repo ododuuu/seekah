@@ -1,12 +1,13 @@
 # 目前交接：Seekah 0.48.0（文件庫、Codex Reference Set 與跨頁上下文）
 
-更新：2026-10-02。
+更新：2026-10-03。
 
 **package 為 0.48.0。** 本版合併文件庫最近／釘選／分類／已存搜尋、Codex session 唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100／D127–D136）。右側上下文欄只顯示絕對路徑；Codex 頁只有已索引且有 stable reference 的 reference 可加入／移出上下文。監工在合併後 `main`（`994c920`）實跑：`npm run build` 通過；`npm test` 524 項、521 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。公司 Windows 驗收仍只到 0.44。
 
 - 從 [0.48.0.md](0.48.0.md) 開始：本版範圍、分支內容、監工提供的 rollout 統計、實跑驗證、限制與部署步驟。
 - [0.48.0 驗證](../0.48.0-VALIDATION.md)。
 - 本批已檢視並更新 `docs/USER-GUIDE.md`；文件庫、Codex session 與跨頁上下文說明已與 0.48 行為一致。Codex rollout 格式未公開，可能隨 Codex 更新變動。
+- `fix/robust-errors-49` 依 D139 補強 D137／D138 的 m97／m98 回歸測試；本機 win32 `npm test` 為 530 項、527 通過、0 失敗、3 略過，並完成三項反向驗證；未修改 `src/`，不代表公司 Windows 驗收。
 
 ## 0.47.0 交接
 

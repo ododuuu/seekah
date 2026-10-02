@@ -5,6 +5,25 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { classifyIndexClientError, describeIndexClientError } from "../src/index-errors.js";
+
+function sqliteError(fields: { errcode?: number; code?: string }): Error {
+  return Object.assign(new Error("synthetic SQLite error"), fields);
+}
+
+test("m97: SQLITE_BUSY_* 子碼與 SQLITE_LOCKED 都分類為 INDEX_BUSY", () => {
+  const cases: Array<[string, Error]> = [
+    ["SQLITE_BUSY_SNAPSHOT numeric extended code", sqliteError({ errcode: 517 })],
+    ["SQLITE_BUSY_TIMEOUT string code", sqliteError({ code: "SQLITE_BUSY_TIMEOUT" })],
+    ["SQLITE_LOCKED_SHAREDCACHE numeric extended code", sqliteError({ errcode: 262 })],
+    ["SQLITE_LOCKED_VTAB string code", sqliteError({ code: "SQLITE_LOCKED_VTAB" })],
+  ];
+  for (const [label, error] of cases) {
+    assert.equal(classifyIndexClientError(error), "busy", label);
+    assert.equal(describeIndexClientError(error), INDEX_BUSY_MESSAGE, label);
+  }
+});
+
 
 const cli = path.resolve("dist/src/cli.js");
 const INDEX_BUSY_MESSAGE = "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。";

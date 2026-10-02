@@ -1,6 +1,8 @@
 # 專案狀態
 
-最後更新：2026-10-02（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；合併後 main 994c920 的 build、npm test、ui-smoke、search-diff 已實跑）
+最後更新：2026-10-03（D139：D137／D138 審查補強測試；fix/robust-errors-49 未修改 `src/`）
+
+- **2026-10-03 `fix/robust-errors-49` 測試補強**：依 D139 補 m97 的 `SQLITE_BUSY_*`／`SQLITE_LOCKED` 分類與真實 lock 案例；補 m98 的 `SQLITE_CORRUPT`／`SQLITE_NOTADB` 負向失敗及實際 orphan row cleanup 降級隔離。`npm test` 為 530 項，527 通過、0 失敗、3 略過；本機 win32 證據，不是公司 Windows 驗收。
 
 ## 目前狀態
 
