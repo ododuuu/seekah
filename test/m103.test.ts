@@ -45,6 +45,11 @@ function syntheticStatus(): LiveStatus {
       uncertainRescanStateCount: 1,
       lastTiming: lastTimings.at(-1)!,
       lastTimings,
+    },
+    {
+      path: "C:\\Users\\synthetic\\m103-other-root",
+      watch: "active",
+      pending: 0,
     }],
     pendingCount: 2,
     eventCount: 40,
@@ -72,10 +77,14 @@ test("M103 diagnose formatting is bounded, statistically useful, and path/conten
   assert.match(output, /  事件→可搜尋延遲：樣本 20；p50 220 ms；p95 310 ms；最大 320 ms/u);
   assert.match(output, /watcher 錯誤：WATCH_ERROR=1、WATCH_SCOPE_ERROR=3/u);
   assert.match(output, /降級子目錄=1/u);
-  assert.match(output, /根目錄 [a-f0-9]{12}：深度=0；監看=degraded；降級子目錄=1/u);
+  assert.match(output, /根目錄 R1：深度=0；監看=degraded；降級子目錄=1/u);
+  assert.match(output, /根目錄 R2：深度=0；監看=active；降級子目錄=0/u);
   assert.doesNotMatch(output, /C:\\Users\\synthetic\\m103-secret-root/u);
   assert.doesNotMatch(output, /m103-file-content-secret/u);
   assert.doesNotMatch(output, /instance-secret/u);
+  assert.match(output, /降級摘要：深度=2/u);
+  assert.doesNotMatch(output, /[0-9a-f]{12,}/iu);
+  assert.doesNotMatch(output, /[\\/](?=[A-Za-z_~.])[A-Za-z0-9_.~-]+/u);
   const timingLines = output.split("\n").filter(line => /^    2026-/u.test(line));
   assert.equal(timingLines.length, 20);
 
@@ -130,6 +139,9 @@ test("M103 autoupdate diagnose is live-only and uses an isolated synthetic daemo
     assert.match(diagnosis.stdout, /事件→可搜尋延遲：樣本 [1-9]/u);
     assert.doesNotMatch(diagnosis.stdout, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
     assert.doesNotMatch(diagnosis.stdout, /m103-synthetic-content/u);
+    assert.match(diagnosis.stdout, /根目錄 R1：深度=0/u);
+    assert.doesNotMatch(diagnosis.stdout, /[0-9a-f]{12,}/iu);
+    assert.doesNotMatch(diagnosis.stdout, /[\\/](?=[A-Za-z_~.])[A-Za-z0-9_.~-]+/u);
   } finally {
     if (daemonStarted) {
       const stopped = spawnSync(process.execPath, [cli, "autoupdate", "stop", "--data-dir", dataDir], { encoding: "utf8", env, timeout: 30_000 });

@@ -3171,6 +3171,7 @@ docsearch doctor
 - `test/m98.test.ts` 使用暫存合成索引，注入 recovery 錯誤驗證 live recent error 不含 SQLite 原文且使用固定 `INDEX_RECOVERY_REQUIRED`；另注入 work DB cleanup failure，驗證 engine 仍可建立、log 說明孤兒狀態後果，且固定分類不洩漏原文。
 - 反向驗證移除 `rememberError` 分類或 cleanup startup catch 時，m98 對應斷言必須失敗；還原後通過。測試不得讀取真實使用者資料或真實索引。
 - 執行 `npm run build`、m97／m98 聚焦測試與完整 `npm test`；本節不改搜尋語意、前端介面、package 版本或資料目錄相容性。
+
 ## 103. 工作台顯示索引儲存容量與 SQLite sidecar
 
 依 D139。工作台的 `GET /api/index-status` 必須在不讀取文件內容、不改變索引狀態的前提下，顯示目前索引產物的檔案容量；計算必須沿用 CLI 已使用的 `IndexStore.storageFootprint()`／`collectIndexStorage()`，不得在工作台另寫一套檔案清單或總量演算法。

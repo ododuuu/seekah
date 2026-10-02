@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -97,9 +96,6 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
   return lines.join("\n");
 }
 
-function diagnosticPathHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 12);
-}
 
 function diagnosticDepth(value: string): number {
   return value.split(/[\\/]+/u).filter(Boolean).length;
@@ -126,22 +122,22 @@ export function formatLiveDiagnosis(status: LiveStatus, requestedLimit = DEFAULT
     : "無";
   const lines = [
     "Seekah autoupdate diagnose",
-    `實例雜湊：${diagnosticPathHash(status.instanceId)}；模式：${status.mode}；階段：${status.phase}`,
+    `模式：${status.mode}；階段：${status.phase}`,
     `根目錄：${roots.length}；事件：${status.eventCount}；局部更新：${status.localUpdateCount}；根目錄掃描：${status.rootScanCount}；子樹掃描：${status.subtreeScanCount}`,
     `不確定訊號：空檔名 ${status.emptyFilenameEventCount ?? 0}；補掃 ${status.uncertainRescanCount ?? 0}；狀態項目 ${status.uncertainRescanStateCount ?? 0}`,
     `watcher 錯誤：${errorText}`,
     `事件→可搜尋延遲：樣本 ${latency.count}；p50 ${latency.p50Ms === undefined ? "—" : `${latency.p50Ms} ms`}；p95 ${latency.p95Ms === undefined ? "—" : `${latency.p95Ms} ms`}；最大 ${latency.maxMs === undefined ? "—" : `${latency.maxMs} ms`}`,
     `最近批次上限：${limit}（daemon 每根最多 ${MAX_AUTODIAGNOSE_LIMIT} 筆）`,
   ];
-  for (const root of roots) {
+  for (const [rootIndex, root] of roots.entries()) {
     const samples = timingSamples(root).slice(-limit);
     const rootLatencies = samples.flatMap(sample => sample.eventToSearchMs === undefined ? [] : [sample.eventToSearchMs]);
     const rootLatency = liveTimingSummary(rootLatencies);
     const degraded = root.degradedSubdirectories ?? [];
     const degradedText = degraded.length
-      ? degraded.map(item => `深度=${Math.max(0, item.path.split(/[\\/]+/u).filter(Boolean).length - diagnosticDepth(root.path))}、雜湊=${diagnosticPathHash(item.path)}`).join("；")
+      ? degraded.map(item => `深度=${Math.max(0, item.path.split(/[\\/]+/u).filter(Boolean).length - diagnosticDepth(root.path))}`).join("；")
       : "無";
-    lines.push(`根目錄 ${diagnosticPathHash(root.path)}：深度=0；監看=${root.watch}；降級子目錄=${degraded.length}`);
+    lines.push(`根目錄 R${rootIndex + 1}：深度=0；監看=${root.watch}；降級子目錄=${degraded.length}`);
     lines.push(`  降級摘要：${degradedText}`);
     lines.push(`  事件→可搜尋延遲：樣本 ${rootLatency.count}；p50 ${rootLatency.p50Ms === undefined ? "—" : `${rootLatency.p50Ms} ms`}；p95 ${rootLatency.p95Ms === undefined ? "—" : `${rootLatency.p95Ms} ms`}；最大 ${rootLatency.maxMs === undefined ? "—" : `${rootLatency.maxMs} ms`}`);
     lines.push(`  最近 lastTiming：${samples.length}/${limit}`);
