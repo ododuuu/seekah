@@ -1374,17 +1374,27 @@ async function runViewport(viewport, chromePath) {
       await setSearchMode(cdp, "all-terms");
       await inputAndSearch(cdp, "private node");
       await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
+      const sort = await cdp.evaluate(`(() => {
+        const select = document.getElementById("document-sort"); return { value: select?.value || "", label: select?.selectedOptions?.[0]?.textContent || "" };
+      })()`);
+      expect(sort?.value === "relevance" && sort.label === "目前結果：相關性", `排序下拉顯示不符：${JSON.stringify(sort)}`);
       const listActions = await cdp.evaluate(`(() => {
         const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const group = row?.querySelector(".document-actions");
+        const buttons = Array.from(group?.querySelectorAll("button") || []);
         return row ? {
-          labels: Array.from(row.querySelectorAll(".document-actions button")).map(node => node.textContent || ""),
-          actions: Array.from(row.querySelectorAll(".document-actions button[data-action]")).map(node => node.dataset.action),
-          groupClass: row.querySelector(".document-actions")?.className || "",
+          labels: buttons.map(node => node.textContent || ""),
+          actions: buttons.filter(node => node.dataset.action).map(node => node.dataset.action),
+          groupClass: group?.className || "",
+          gap: group ? getComputedStyle(group).gap : "",
+          heights: buttons.map(node => Math.round(node.getBoundingClientRect().height)),
+          primaryContext: Boolean(row.querySelector('button[data-action="context"].primary')),
         } : null;
       })()`);
-      const expectedLabels = ["複製路徑", "複製檔名", "開啟", "顯示所在位置", "Pin", "加入分類", "加入上下文"];
+      const expectedLabels = ["複製路徑", "複製檔名", "開啟", "顯示所在位置", "釘選", "加入分類", "加入上下文"];
       expect(listActions && expectedLabels.every(value => listActions.labels.includes(value)), "列表結果遺失一致快捷操作。");
       expect(listActions?.actions.join(",") === "open,reveal,pin,group,context" && listActions.groupClass.includes("document-actions"), "列表 action data contract 不符。");
+      expect(listActions?.gap === "6px" && listActions.heights.every(value => value === 30) && listActions.primaryContext, "列表操作列沒有統一 gap／高度或主色上下文按鈕。");
       const clickedLibraryButtons = await cdp.evaluate(`(() => {
         const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
         const pin = row?.querySelector('button[data-action="pin"]');
@@ -1393,7 +1403,7 @@ async function runViewport(viewport, chromePath) {
         if (group instanceof HTMLElement) group.click();
         return { pin: Boolean(pin), group: Boolean(group) };
       })()`);
-      expect(clickedLibraryButtons?.pin && clickedLibraryButtons?.group, `列表沒有可點擊的 Pin／分類按鈕：${JSON.stringify(clickedLibraryButtons)}`);
+      expect(clickedLibraryButtons?.pin && clickedLibraryButtons?.group, `列表沒有可點擊的釘選／分類按鈕：${JSON.stringify(clickedLibraryButtons)}`);
       try {
         await waitFor(() => cdp.evaluate("window.__uiSmoke.libraryActions.length === 2"), 5_000);
       } catch (error) {
@@ -1408,9 +1418,18 @@ async function runViewport(viewport, chromePath) {
         })()`);
         throw new Error(`${errorText(error)}；library debug=${JSON.stringify(libraryDebug)}`);
       }
+      const toggledAgain = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const pin = row?.querySelector('button[data-action="pin"]');
+        if (pin instanceof HTMLElement) pin.click();
+        return Boolean(pin);
+      })()`);
+      expect(toggledAgain, "釘選成功後找不到取消釘選按鈕。");
+      await waitFor(() => cdp.evaluate("window.__uiSmoke.libraryActions.length === 3"), 5_000);
       const libraryActions = await cdp.evaluate("window.__uiSmoke.libraryActions");
-      expect(libraryActions[0].path === "/api/library/pins" && libraryActions[0].method === "POST" && libraryActions[0].body?.path === fixture.multiPath && libraryActions[0].body?.pinned === true, "Pin 沒有送出預期 library payload。");
+      expect(libraryActions[0].path === "/api/library/pins" && libraryActions[0].method === "POST" && libraryActions[0].body?.path === fixture.multiPath && libraryActions[0].body?.pinned === true, "釘選沒有送出預期 library payload。");
       expect(libraryActions[1].path === "/api/library/groups" && libraryActions[1].method === "POST" && libraryActions[1].body?.path === fixture.multiPath && !Object.prototype.hasOwnProperty.call(libraryActions[1].body, "pinned"), "分類沒有送出預期 library payload。");
+      expect(libraryActions[2].path === "/api/library/pins" && libraryActions[2].method === "POST" && libraryActions[2].body?.path === fixture.multiPath && libraryActions[2].body?.pinned === false, "取消釘選沒有送出 pinned=false。");
       await click(cdp, "#view-table");
       await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
       const tableActions = await cdp.evaluate(`(() => {
@@ -1419,11 +1438,16 @@ async function runViewport(viewport, chromePath) {
         const cells = Array.from(row.children);
         const actionCell = cells.at(-1);
         const checkCell = cells[0];
+        const group = actionCell?.querySelector(".document-actions");
+        const buttons = Array.from(group?.querySelectorAll("button") || []);
         return {
           cellCount: cells.length,
           headerCount: document.querySelectorAll(".documents-table thead th").length,
-          labels: Array.from(actionCell?.querySelectorAll(".document-actions button") || []).map(node => node.textContent || ""),
+          labels: buttons.map(node => node.textContent || ""),
           actionCellClass: actionCell?.className || "",
+          gap: group ? getComputedStyle(group).gap : "",
+          heights: buttons.map(node => Math.round(node.getBoundingClientRect().height)),
+          primaryContext: Boolean(actionCell?.querySelector('button[data-action="context"].primary')),
           titleCopyButtons: row.querySelectorAll("td:nth-child(2) .copy-control").length,
           checkText: (checkCell?.textContent || "").trim(),
           hasStandaloneDot: Array.from(checkCell?.childNodes || []).some(node => node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim() === "."),
@@ -1431,7 +1455,9 @@ async function runViewport(viewport, chromePath) {
       })()`);
       expect(tableActions?.cellCount === 7 && tableActions.headerCount === 7, "表格結果沒有獨立七欄操作結構。");
       expect(tableActions.labels.length === expectedLabels.length && expectedLabels.every(value => tableActions.labels.includes(value)), "表格操作群組與列表不一致。");
-      expect(tableActions.titleCopyButtons === 0 && tableActions.actionCellClass.includes("document-actions-cell") && !tableActions.checkText && !tableActions.hasStandaloneDot, "表格標題欄或勾選欄仍有擁擠／多餘句點。");
+      expect(tableActions.gap === "6px" && tableActions.heights.every(value => value === 30) && tableActions.primaryContext
+        && tableActions.titleCopyButtons === 0 && tableActions.actionCellClass.includes("document-actions-cell")
+        && !tableActions.checkText && !tableActions.hasStandaloneDot, "表格操作列樣式或勾選欄仍有擁擠／多餘句點。");
       await click(cdp, "#view-list");
       await waitFor(() => visible(cdp, "#document-list"));
       await noBrowserErrorsSince(cdp, start, "列表／表格快捷操作");
@@ -1936,17 +1962,40 @@ async function runViewport(viewport, chromePath) {
     });
 
 
-    await check(`${label} 多段落結果截圖已保存`, async () => {
+    await check(`${label} 多段落結果與上下文操作截圖已保存`, async () => {
       await click(cdp, "#nav-documents");
       await waitFor(() => visible(cdp, "#documents-page"));
       await setSearchMode(cdp, "all-terms");
       await inputAndSearch(cdp, "private node");
       await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
-      const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-      const file = path.join(outputDir, `ui-smoke-${label}.png`);
-      writeFileSync(file, Buffer.from(screenshot.result.data, "base64"));
-      expect(existsSync(file) && readFileSync(file).length > 0, `找不到截圖檔案：${file}`);
-      console.log(`  截圖：${file}`);
+      const selected = await cdp.evaluate(`(() => {
+        let count = 0;
+        for (const title of ["single-passage.txt", "multi-passage-lines.txt"]) {
+          const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === title);
+          const control = row?.querySelector('button[data-action="context"]');
+          if (control instanceof HTMLElement && control.textContent === "加入上下文") { control.click(); count += 1; }
+        }
+        return count;
+      })()`);
+      expect(selected === 2, `截圖前無法加入兩個上下文檔案：${selected}`);
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '2'"));
+      const capture = async names => {
+        const screenshot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+        for (const name of names) {
+          const file = path.join(outputDir, name);
+          writeFileSync(file, Buffer.from(screenshot.result.data, "base64"));
+          expect(existsSync(file) && readFileSync(file).length > 0, `找不到截圖檔案：${file}`);
+          console.log(`  截圖：${file}`);
+        }
+      };
+      if (viewport.width === 1920) {
+        await click(cdp, "#view-table");
+        await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
+        await capture([`after-table-${label}.png`]);
+        await click(cdp, "#view-list");
+        await waitFor(() => visible(cdp, "#document-list"));
+      }
+      await capture([`ui-smoke-${label}.png`, `after-${label}.png`]);
     });
   } catch (error) {
     results.push({ status: "fail", label: `${label} 煙霧測試執行`, message: truncate(errorText(error)) });

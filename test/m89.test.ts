@@ -7,7 +7,7 @@ const workbenchSource = readFileSync(path.resolve("src/workbench-app.ts"), "utf8
 const smokeSource = readFileSync(path.resolve("scripts/ui-smoke.mjs"), "utf8");
 
 function assertContextContract(source: string, smoke: string = smokeSource): void {
-  assert.match(source, /--context-width: 338px/u, "桌面上下文側欄沒有固定寬度。");
+  assert.match(source, /--context-width: 320px/u, "桌面上下文側欄沒有固定寬度。");
   assert.match(source, /grid-template-columns: var\(--sidebar-width\) minmax\(0, 1fr\) var\(--context-width\)/u, "工作台沒有右側第三欄。");
   assert.match(source, /\.app-shell\.context-panel-collapsed\s*\{\s*grid-template-columns:\s*var\(--sidebar-width\)\s+minmax\(0, 1fr\)\s+0;\s*\}/u, "上下文側欄沒有可收合版面。");
   assert.match(source, /\.context-panel \{/u, "缺少常駐上下文側欄樣式。");

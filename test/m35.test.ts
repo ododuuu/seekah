@@ -114,7 +114,7 @@ test("0.40.0 search results are a search-engine style list without a detail page
   // SPEC §57：沒有明細頁與預覽紙；標題直接開啟原檔，次要連結為顯示位置與上下文。
   assert.doesNotMatch(html, /dataset\.page = "detail"|detail-preview|preview-paper|openDetail/u);
   assert.ok(html.includes(`button(name, "document-title", event => openDocumentTitle(item, event))`));
-  for (const action of ["顯示所在位置", "Pin", "加入分類", "加入上下文"]) assert.match(html, new RegExp(action, "u"));
+  for (const action of ["顯示所在位置", "釘選", "取消釘選", "加入分類", "加入上下文"]) assert.match(html, new RegExp(action, "u"));
   assert.match(html, /result-action/u);
   assert.doesNotMatch(html, /link-action/u);
   assert.ok(html.includes("檔名符合"));

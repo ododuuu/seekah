@@ -1666,17 +1666,17 @@
 - **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
 - **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
 
-## D126：Pin／分類先採 pi2 假定的 library API 呼叫點（2026-10-02）
+## D126：釘選／分類先採 pi2 假定的 library API 呼叫點（2026-10-02）
 
-- **背景**：本分支需要先提供結果列 Pin 與加入分類按鈕，但 pi2 的 library 行為規格 §95 尚未在本分支出現；前端不得自行建立另一份持久化模型。
+- **背景**：本分支需要先提供結果列釘選與加入分類按鈕，但 pi2 的 library 行為規格 §95 尚未在本分支出現；前端不得自行建立另一份持久化模型。
 - **假定契約**：
-  - `GET /api/library/pins` 回傳 `{ "items": [...] }`，供未來載入既有 Pin 狀態。
-  - `POST /api/library/pins` 接受 `{ "path": string, "reference": string, "pinned": true }`，成功回傳可選 `message` 與 `item`。
+  - `GET /api/library/pins` 回傳 `{ "items": [...] }`，供未來載入既有釘選狀態。
+  - `POST /api/library/pins` 接受 `{ "path": string, "reference": string, "pinned": boolean }`，成功回傳可選 `message` 與 `item`。
   - `GET /api/library/groups` 回傳 `{ "groups": [{ "id": string, "name": string }] }`，供未來分類選擇器使用。
   - `POST /api/library/groups` 接受 `{ "path": string, "reference": string }`；pi2 可在後續 §95 擴充 `groupId` 或分類選擇欄位，成功回傳可選 `message` 與 `item`。
   - 失敗回應使用既有 `api` helper 的錯誤格式；前端顯示錯誤 toast，不得把失敗當成功。
-- **決策**：`src/workbench-app.ts` 只保留 Pin 與分類的 POST 呼叫點，使用索引結果的絕對路徑與 reference，不在前端 fake persistence、不讀取或寫入外部服務；GET 契約先記錄供 pi2 後續整合，分類 UI 不在本項偷偷選擇或建立資料。
-- **取捨**：按鈕目前可驗證 request payload 與錯誤處理，但真正的 Pin 狀態同步、分類選擇與持久化由 §95／pi2 決定；若 §95 改變 endpoint 或 payload，必須同步更新本決策、前端與 `test/m90.test.ts`。
+- **決策**：`src/workbench-app.ts` 只保留釘選與分類的 POST 呼叫點，使用索引結果的絕對路徑與 reference，不在前端 fake persistence、不讀取或寫入外部服務；GET 契約先記錄供 pi2 後續整合，分類 UI 不在本項偷偷選擇或建立資料。
+- **取捨**：按鈕目前可驗證釘選切換、request payload 與錯誤處理，但真正的釘選狀態同步、分類選擇與持久化由 §95／pi2 決定；若 §95 改變 endpoint 或 payload，必須同步更新本決策、前端與 `test/m90.test.ts`。
 - **驗證**：UI smoke 以隔離瀏覽器 fetch mock 驗證兩個 POST 呼叫點及 payload；不連線真實 library，也不使用使用者索引。
 
 ## D133：Codex path recall 以逐行 token 掃描保留完整 reference

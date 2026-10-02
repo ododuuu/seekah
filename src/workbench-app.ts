@@ -39,7 +39,7 @@ export function workbenchHtml(nonce: string): string {
   --bulk-surface: #eff8f4;
   --dialog-surface: #f6f8f7;
   --sidebar-width: 246px;
-  --context-width: 338px;
+  --context-width: 320px;
   --focus: #e1a42a;
 }
 @media (prefers-color-scheme: dark) {
@@ -557,7 +557,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   border-radius: 5px;
   background: var(--paper);
 }
-.document-row { min-width: 0; max-width: 780px; padding-left: 12px; border-left: 3px solid transparent; }
+.document-row { min-width: 0; max-width: none; padding-left: 12px; border-left: 3px solid transparent; }
 .document-row.is-selected { border-left-color: var(--brand); }
 .document-title {
   max-width: 100%;
@@ -601,8 +601,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 }
 .result-passage {
   display: grid;
-  grid-template-columns: minmax(72px, 24%) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: fit-content(110px) minmax(0, 1fr);
+  gap: 6px;
   min-width: 0;
   padding: 4px 0;
   border-top: 1px solid var(--line);
@@ -633,7 +633,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .result-passage-snippet mark { padding: 0 1px; background: var(--highlight); color: inherit; }
 .result-passages-omitted { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .documents-table .result-passages { margin-top: 7px; }
-.documents-table .result-passage { grid-template-columns: minmax(60px, 28%) minmax(0, 1fr); gap: 6px; }
+.documents-table .result-passage { grid-template-columns: fit-content(110px) minmax(0, 1fr); gap: 6px; }
 .documents-table .result-passage-snippet { font-size: 12px; line-height: 1.4; }
 
 .document-title, .document-title.btn, .table-title, .table-title.btn,
@@ -641,16 +641,35 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   -webkit-user-select: text;
   user-select: text;
 }
-.copy-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
-.copy-action { display: inline-flex; align-items: center; gap: 4px; }
-.copy-feedback { min-width: 3.4em; color: var(--brand-2); font-size: 11px; white-space: nowrap; }
+.copy-actions { display: contents; }
+.copy-action { display: inline-flex; min-width: 0; align-items: center; gap: 4px; }
+.copy-feedback {
+  display: inline-block;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--brand-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.copy-feedback:not(:empty) { width: auto; min-width: 3.4em; }
 .clipboard-fallback { position: fixed; top: 0; left: -10000px; width: 1px; height: 1px; opacity: 0; }
-.copy-control.btn { min-height: 28px; padding: 4px 8px; }
-.document-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
-.result-action.btn { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.copy-control.btn { height: 30px; min-height: 30px; padding: 4px 8px; }
+.document-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 8px;
+}
+.document-actions .btn { flex: 0 0 auto; height: 30px; min-height: 30px; }
+.result-action.btn { height: 30px; min-height: 30px; padding: 4px 8px; font-size: 11px; }
 .result-action.is-active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-2); }
 .table-wrap {
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--paper);
@@ -658,6 +677,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 }
 .documents-table {
   width: 100%;
+  min-width: 1240px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -675,11 +695,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .documents-table tr:last-child td { border-bottom: 0; }
 .documents-table tbody tr:hover, .documents-table tbody tr.is-selected { background: var(--table-selected); }
 .documents-table td:first-child, .documents-table th:first-child { width: 42px; text-align: center; }
-.documents-table th:nth-child(2) { width: 27%; }
-.documents-table th:nth-child(4) { width: 10%; }
-.documents-table th:nth-child(5) { width: 12%; }
-.documents-table th:nth-child(6) { width: 10%; }
-.documents-table th:nth-child(7) { width: 27%; }
+.documents-table th:nth-child(2) { width: 270px; }
+.documents-table th:nth-child(3) { width: 180px; }
+.documents-table th:nth-child(4) { width: 75px; }
+.documents-table th:nth-child(5) { width: 100px; }
+.documents-table th:nth-child(6) { width: 80px; }
+.documents-table th:nth-child(7) { width: 480px; }
 .documents-table .document-actions { margin-top: 0; }
 .table-title {
   min-height: 0;
@@ -978,12 +999,12 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 
 /* desktop width adjustments */
 @media (max-width: 1320px) {
-  :root { --sidebar-width: 220px; --context-width: 310px; }
+  :root { --sidebar-width: 220px; --context-width: 320px; }
   .topbar { grid-template-columns: 204px minmax(300px, 1fr) auto; gap: 18px; }
   .scope-bar { gap: 6px; }
   .document-query { flex: 1 1 300px; }
   .document-query select, .scope-summary select { max-width: 126px; }
-  .result-passage { grid-template-columns: minmax(72px, 26%) minmax(0, 1fr); gap: 6px; }
+  .result-passage { grid-template-columns: fit-content(110px) minmax(0, 1fr); gap: 6px; }
   .result-passage-snippet { font-size: 12px; line-height: 1.4; }
 }
 /* reduced motion */
@@ -1011,6 +1032,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     typeFilter: "",
     sortMode: "relevance",
     statusFilter: "",
+    sortMode: "relevance",
     queryDraft: "",
     submittedQuery: "",
     data: null,
@@ -1910,18 +1932,28 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   async function libraryAction(action, item) {
     const documentPath = escapeText(item && item.path);
     if (!isAbsoluteDocumentPath(documentPath)) {
-      showToast("只有完整絕對路徑文件可加入固定或分類。");
+      showToast("只有完整絕對路徑文件可加入釘選或分類。");
       return;
     }
     const endpoint = action === "pin" ? "/api/library/pins" : "/api/library/groups";
+    const pinned = action === "pin" ? !Boolean(item.pinned) : undefined;
     try {
       const data = await api(endpoint, {
         method: "POST",
-        body: action === "pin" ? { path: documentPath, reference: item.reference, pinned: true } : { path: documentPath, reference: item.reference },
+        body: action === "pin" ? { path: documentPath, reference: item.reference, pinned } : { path: documentPath, reference: item.reference },
       });
-      showToast(data && data.message ? data.message : action === "pin" ? "已更新固定文件。" : "已加入分類。");
+      if (action === "pin") {
+        const returnedItem = data && data.item;
+        item.pinned = returnedItem && typeof returnedItem.pinned === "boolean"
+          ? returnedItem.pinned
+          : data && typeof data.pinned === "boolean" ? data.pinned : pinned;
+        renderDocuments();
+      }
+      showToast(data && data.message ? data.message : action === "pin"
+        ? item.pinned ? "已釘選文件。" : "已取消釘選。"
+        : "已加入分類。");
     } catch (error) {
-      showToast(error.message || (action === "pin" ? "固定文件失敗。" : "加入分類失敗。"));
+      showToast(error.message || (action === "pin" ? "釘選操作失敗。" : "加入分類失敗。"));
     }
   }
   function resultActions(item) {
@@ -1929,7 +1961,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     actions.append(resultCopyActions(item));
     if (item.temporary) {
       const source = state.imported.get(item.id);
-      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "small result-action",
+      const selected = Boolean(source?.selected);
+      const toggle = button(selected ? "移出上下文" : "加入上下文",
+        selected ? "small result-action is-active" : "small result-action primary",
         () => source && toggleImported(source, !source.selected));
       toggle.disabled = !source || source.status !== "indexed";
       toggle.dataset.action = "context";
@@ -1940,14 +1974,18 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     open.dataset.action = "open";
     const reveal = button("顯示所在位置", "small result-action", () => void documentAction(item, "reveal"));
     reveal.dataset.action = "reveal";
-    const pin = button("Pin", "small result-action", () => void libraryAction("pin", item));
+    const pinned = Boolean(item.pinned);
+    const pin = button(pinned ? "取消釘選" : "釘選", "small result-action", () => void libraryAction("pin", item));
     pin.dataset.action = "pin";
+    pin.dataset.pinned = String(pinned);
+    pin.classList.toggle("is-active", pinned);
     const group = button("加入分類", "small result-action", () => void libraryAction("group", item));
     group.dataset.action = "group";
-    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "small result-action",
+    const selected = selectedReference(item.reference);
+    const toggle = button(selected ? "移出上下文" : "加入上下文",
+      selected ? "small result-action is-active" : "small result-action primary",
       () => toggleSelection(item, !selectedReference(item.reference)));
     toggle.dataset.action = "context";
-    toggle.classList.toggle("is-active", selectedReference(item.reference));
     actions.append(open, reveal, pin, group, toggle);
     return actions;
   }
