@@ -64,6 +64,7 @@ test("M64 volume-root defaults are exact, non-UNC, and reversible by choosing a 
   for (const relative of [
     "Windows\\System32\\kernel.dll",
     "Program Files\\Seekah\\README.txt",
+    "PROGRA~1\\Seekah\\README.txt",
     "Program Files (x86)\\Legacy\\README.txt",
     "ProgramData\\Vendor\\report.txt",
     "Users\\Alice\\AppData\\Local\\cache.bin",
@@ -75,7 +76,6 @@ test("M64 volume-root defaults are exact, non-UNC, and reversible by choosing a 
   for (const relative of [
     "Windows.old\\notes.txt",
     "Program Files2\\notes.txt",
-    "PROGRA~1\\Seekah\\README.txt",
     "ProgramData-old\\notes.txt",
     "Users\\Alice\\AppData-old\\notes.txt",
     "User\\Alice\\AppData\\notes.txt",
