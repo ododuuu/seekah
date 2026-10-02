@@ -8,7 +8,7 @@
   - 直接把人類行文字串拆回欄位會複製格式化邏輯、遺失 optional／null 語意，也無法對新欄位提供相容承諾。
 - 決定：
   - 在 status 輸出層建立單一結構化 JSON：頂層固定 `schemaVersion: 1`，狀態資料保留結構化版本、容量、根目錄最近摘要、錯誤／診斷計數與預覽、排除政策、目前文件問題及格式統計。`--issues` 與 `--types` 只控制對應詳細陣列，`options` 明列實際旗標。
-  - `autoupdate status --json` 直接輸出既有 `LiveStatus` 欄位加固定 `stale`，不另建第二套 daemon 狀態模型；人類格式繼續使用 `formatLiveStatus`。
+  - `autoupdate status --json` 直接輸出既有 `LiveStatus` 欄位加固定 `stale`，包含 daemon 提供時的 `roots[*].lastTimings` 與 `watcherErrorCounts`，不另建第二套 daemon 狀態模型或重複的 `diagnose` JSON 物件；人類格式繼續使用 `formatLiveStatus`。
   - JSON 成功或失敗都只寫一個 stdout 文件；失敗沿用既有退出碼與固定對外訊息，錯誤物件仍含 `schemaVersion` 與穩定 `error.code`／`error.message`，不把 SQLite 原文作為契約。
   - schema version 1 允許加欄位，禁止刪除／改名／改型別／改語意；此保證只適用 JSON，不凍結人類可讀行文字以外的內部物件。
 - 理由：
@@ -18,6 +18,21 @@
 - 驗證：
   - `test/m104.test.ts` 以暫存資料目錄與 synthetic source 驗證 status JSON 欄位結構、人類輸出保留、autoupdate status JSON、可新增欄位及 daemon 結束；移除 JSON 接線或既有欄位後測試必須失敗。
   - 本次沒有搜尋邏輯或前端改動，因此不執行 `scripts/search-diff.mjs`／`node scripts/ui-smoke.mjs`；不宣稱公司 Windows 驗收通過。
+
+## D143：autoupdate diagnose 只回報有界匿名 live watcher 摘要（2026-10-02）
+
+- **背景**：`autoupdate status` 已有單一根目錄的 `lastTiming` 與不確定事件計數，但難以直接提供最近多批次、事件到可搜尋延遲分布及 watcher 錯誤，又不能把完整來源路徑貼到外部診斷內容。
+- **決定**：新增唯讀 `autoupdate diagnose`。命令只查詢正在執行 daemon 的 live control snapshot，不啟動、停止或重啟程序；沒有 live daemon 沿用 `AUTOUPDATE_NOT_RUNNING`。每根保留最多 32 筆最近局部批次 timing；命令預設輸出最近 20 筆，接受 1～32 的上限。延遲樣本為該批第一個事件到局部提交完成，輸出 count、p50、p95、max。
+- **匿名化**：摘要只輸出模式／階段、計數、時間、根目錄序號標籤（`R1`、`R2`……依登錄順序）、相對深度、降級數量與固定 watcher error code 計數；不輸出任何根目錄或降級子目錄雜湊、文件內容、檔名、完整路徑、路徑參數、session／prompt 或 control token。一般 `autoupdate status` 的既有詳細輸出契約不因診斷摘要而放寬。
+- **驗證**：`test/m103.test.ts` 覆蓋命令解析、live-only、最近批次上限、延遲統計與匿名化；移除序號／深度匿名化、上限或 live-only 邊界時反向斷言必須失敗。
+
+## D142：以真實 fs.watch 合成壓力驗證漏事件，不先改 watcher 演算法（2026-10-02）
+
+- **背景**：0.46 的有界補掃與 0.47 的 `lastTiming` 已增加防護／觀測，但使用者偶爾漏事件的根因仍未證實；目前沒有可用的真實背景更新數據。本批先在隔離暫存根目錄以真正 `fs.watch` 壓測，避免把合成 watcher callback 或事件數相等誤當成資料正確性。
+- **決定**：`test/m102.test.ts` 覆蓋高頻建立／修改／改名／移動／刪除、深層與接近長路徑、Office 暫存檔、原子替換、safe-write、資料夾批次移入／移出與局部更新忙碌時事件湧入。每個情境以 synthetic token 比對「應被索引」與 `search()` 實際可搜尋集合，記錄遺失數／遺失率及既有 watcher 計數。
+- **取捨**：若未得到穩定且可縮小的遺失重現，不修改 watcher 排程、reconcile 排序或近期檔案延後策略，也不宣稱漏事件已解決；不得重試已否決的 mtime 排序與近期延後局部佇列實驗。若測試發現可重現遺失，才另以最小回歸測試與新決策修正。
+- **邊界**：測試只建立暫存 synthetic fixture，`LOCALDOCSEARCH_DATA_DIR` 指向同一暫存樹；測試結束停止 engine、關閉 store 並清理，不讀取真實 LocalDocSearch 資料或索引。
+- **本次結果**：m102 在一輪 Windows `win32` 真實 `fs.watch` 壓力矩陣中共核對 626 份 synthetic token，`search()` 可搜尋 626、遺失 0、stale 0；另觀測 `eventCount=446`、空檔名事件 2、補掃 1、降級子目錄 0，保留 timing sample 20 筆（上限 32）。這只證明該輪沒有重現遺失，不改變根因未證實的判定。
 
 ## D141：Windows 8.3 與 subst alias 先正規化再套用預設排除
 

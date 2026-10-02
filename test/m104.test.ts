@@ -162,9 +162,16 @@ test("M104 autoupdate status --json exposes the LiveStatus fields and stops its 
     assert.equal(typeof json.instanceId, "string");
     assert.equal(typeof json.pid, "number");
     assert.equal(json.stale, false);
+    for (const key of ["emptyFilenameEventCount", "uncertainRescanCount", "uncertainRescanStateCount"]) {
+      if (Object.hasOwn(json, key)) assert.equal(typeof json[key], "number", `autoupdate.${key} 應為數字`);
+    }
     required(object(json.settings, "autoupdate.settings"), ["debounceMs", "reconcileMs"], "autoupdate.settings");
     required(object(json.startupCatchup, "autoupdate.startupCatchup"), ["mode", "state", "roots"], "autoupdate.startupCatchup");
-    array(json.roots, "autoupdate.roots");
+    const liveRoots = array(json.roots, "autoupdate.roots");
+    const liveRoot = object(liveRoots[0], "autoupdate.roots[0]");
+    if (Object.hasOwn(liveRoot, "lastTiming")) object(liveRoot.lastTiming, "autoupdate.roots[0].lastTiming");
+    if (Object.hasOwn(liveRoot, "lastTimings")) array(liveRoot.lastTimings, "autoupdate.roots[0].lastTimings");
+    if (Object.hasOwn(json, "watcherErrorCounts")) object(json.watcherErrorCounts, "autoupdate.watcherErrorCounts");
     array(json.recentErrors, "autoupdate.recentErrors");
   } finally {
     if (started) {

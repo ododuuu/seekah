@@ -3171,6 +3171,7 @@ docsearch doctor
 - `test/m98.test.ts` 使用暫存合成索引，注入 recovery 錯誤驗證 live recent error 不含 SQLite 原文且使用固定 `INDEX_RECOVERY_REQUIRED`；另注入 work DB cleanup failure，驗證 engine 仍可建立、log 說明孤兒狀態後果，且固定分類不洩漏原文。
 - 反向驗證移除 `rememberError` 分類或 cleanup startup catch 時，m98 對應斷言必須失敗；還原後通過。測試不得讀取真實使用者資料或真實索引。
 - 執行 `npm run build`、m97／m98 聚焦測試與完整 `npm test`；本節不改搜尋語意、前端介面、package 版本或資料目錄相容性。
+
 ## 103. 工作台顯示索引儲存容量與 SQLite sidecar
 
 依 D139。工作台的 `GET /api/index-status` 必須在不讀取文件內容、不改變索引狀態的前提下，顯示目前索引產物的檔案容量；計算必須沿用 CLI 已使用的 `IndexStore.storageFootprint()`／`collectIndexStorage()`，不得在工作台另寫一套檔案清單或總量演算法。
@@ -3222,6 +3223,38 @@ docsearch doctor
 
 - `test/m101.test.ts` 必須以 synthetic realpath resolver 驗證 `C:\\PROGRA~1` 命中 `volume-default:program-files`、subst alias 不列出 volume-default 規則且 `S:\\Windows\\...` 不被誤判成 volume root；移除 realpath 正規化時，正向／反向斷言必須失敗。
 - 測試只能使用字串與暫存合成 fixture，不得執行 `subst`、讀取真實 Windows volume 或宣稱公司 Windows 驗收。
+
+## 106. fs.watch 漏事件壓力驗證
+
+本節承接 §86 與 §89；漏事件根因仍未證實，不把補掃、分階段計時或壓力測試結果寫成根治保證。
+
+### 106.1 合成且真實 fs.watch 測試邊界
+
+- 壓力測試必須只使用暫存根目錄、合成文件與隔離的 `LOCALDOCSEARCH_DATA_DIR`；不得讀取或操作使用者真實索引、LocalDocSearch 資料目錄或背景更新。
+- `test/m102.test.ts` 必須使用真正的 `fs.watch`，覆蓋短時間大量建立／修改／改名／移動／刪除、深層目錄、接近 Windows 長路徑、Office 暫存檔、寫暫存再 rename 的原子替換、編輯器 safe-write、資料夾整批移入／移出，以及局部更新忙碌時的事件湧入。
+- 每個情境都必須保存只含合成識別字的「應被索引」集合、`search()` 實際可搜尋集合、遺失數與遺失率，並同時記錄 `eventCount`、`emptyFilenameEventCount`、`uncertainRescanCount`、`degradedSubdirectories`、`lastTiming` 與 watcher 錯誤。
+- 測試只在有可重現遺失且能縮小成確定重現時修改 watcher；沒有重現時必須保留結果與限制，不得把一次通過宣稱成根因已解決。已否決的 reconcile mtime 排序與近期檔案延後局部佇列實驗不得重試。
+
+### 106.2 可搜尋判定與清理
+
+- 每個 synthetic token 必須只出現在一份預期文件；測試以索引搜尋結果判定可搜尋，不以事件數相等代替資料正確性。
+- 測試結束前必須停止 `LiveUpdateEngine`／daemon，關閉 `IndexStore`，刪除暫存根目錄與資料目錄；不得留下程序、Chrome 或測試資料。
+
+## 107. autoupdate diagnose 診斷摘要
+
+### 107.1 命令與輸出
+
+- 新增 `seekah autoupdate diagnose`（相容 `docsearch autoupdate diagnose`）讀取目前自動更新控制通道的唯讀 live snapshot；沒有執行中的背景更新時沿用 `AUTOUPDATE_NOT_RUNNING`，不啟動、不停止、不重啟 daemon。
+- 輸出必須可直接貼給開發者，至少包含：目前模式／階段、根目錄數與匿名識別、事件／局部更新／根掃描／子樹掃描計數、`emptyFilenameEventCount`、`uncertainRescanCount`、`uncertainRescanStateCount`、每根 `degradedSubdirectories` 數量、watcher 錯誤代碼計數、事件到可搜尋延遲的樣本數／p50／p95／最大值，以及最近有界數量的 `lastTiming` 分階段資料。
+- 根目錄必須依 live snapshot 的登錄順序標示為 `R1`、`R2`……；每根及其 degraded child 只能輸出相對深度與必要計數，不得輸出任何根目錄或子目錄雜湊、完整路徑、檔名或路徑片段。`R1` 僅代表本次 snapshot 的第一個 root，不承諾跨次或跨程序穩定對應。
+- 最近批次預設最多 20 筆，命令可要求 1～32 筆；daemon 只保留最近 32 筆每根批次，避免診斷記憶體與回應無界成長。
+- 延遲以事件批次第一個事件至局部提交完成的毫秒數表示；它是事件到索引可供搜尋的代理量，不是搜尋 query latency 或固定 SLA。沒有事件來源的完整校正不納入此分布。
+
+### 107.2 隱私與驗收
+
+- 摘要不得輸出文件內容、session／prompt、完整檔案路徑、檔名、路徑參數或 token；不得輸出任何根目錄／子目錄雜湊或其他可由路徑直接計算的固定識別值。輸出文字不得含任何 12 位以上的連續 hex 字串，也不得含路徑分隔符後接名稱的路徑形狀；watcher 錯誤只輸出固定代碼與計數。
+- `test/m103.test.ts` 必須以 synthetic `LiveStatus` 與隔離暫存 daemon 驗證命令解析、最近批次上限、延遲統計、R 序號／相對深度匿名化、錯誤／降級路徑匿名化，以及 `autoupdate diagnose` 不會啟動或停止程序；移除序號／深度匿名化、隱私輸出界線、上限或 live-only 邊界時反向斷言必須失敗。
+
 ## 108. CLI 狀態 JSON 契約
 
 依 D144。`status` 與 `autoupdate status` 增加給腳本使用的 `--json`，不改變未指定旗標時的人類可讀輸出、行順序、文字或退出碼語意。JSON 只在 stdout 輸出一個完整文件，不混入「索引位置」等前導文字；錯誤時也使用同一 schemaVersion 的固定錯誤物件，不把 SQLite 原文當成腳本契約。
@@ -3238,7 +3271,7 @@ docsearch doctor
 
 ### 108.2 `autoupdate status --json`
 
-- 此命令沿用既有 `LiveStatus` 欄位，以頂層 `schemaVersion: 1` 輸出 `instanceId`、`pid`、`mode`、時間、`phase`、`settings`、`startupCatchup`、`ready`、根目錄、計數、工作佇列、最後事件／更新／校正、`recentErrors` 及其他既有可選診斷欄位，另固定提供 `stale` 布林值。
+- 此命令沿用既有 `LiveStatus` 欄位，以頂層 `schemaVersion: 1` 輸出 `instanceId`、`pid`、`mode`、時間、`phase`、`settings`、`startupCatchup`、`ready`、根目錄、計數、工作佇列、最後事件／更新／校正、`recentErrors` 及其他既有可選診斷欄位，包含 `roots[*].lastTimings` 與頂層 `watcherErrorCounts`（daemon 提供時直接轉發），另固定提供 `stale` 布林值。既有事件／局部更新／根掃描／子樹掃描與不確定訊號計數已在 `LiveStatus`，不另建立重複的 `diagnose` JSON 物件。
 - 健康 live 狀態的 `stale` 為 `false`；控制通道無回應但程序仍存在時，回傳退出碼 3、可用的狀態快照與 `stale: true`。沒有狀態檔或程序已不存在時回傳固定 JSON 錯誤物件。背景程序由測試或使用者明確停止，不由 status 查詢暗中終止。
 - `autoupdate status --json` 只改輸出編碼，不改既有控制通道、工作佇列或監看行為；人類格式仍由原本的 `formatLiveStatus` 產生。
 

@@ -104,6 +104,7 @@ export function buildHelpText(): string {
     "  docsearch watch [root] [--debounce <毫秒>] [--rescan <毫秒>] [--verbose]",
     "  docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>] # 初次索引後的日常變更",
     "  docsearch autoupdate status [--json] [--data-dir <資料目錄>]",
+    "  docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]",
     "  docsearch autoupdate stop [--data-dir <資料目錄>]",
     "  docsearch autoupdate startup enable|disable|status",
     "  docsearch tui",
