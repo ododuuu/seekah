@@ -19,7 +19,7 @@
   - 不為舊索引新增第二套索引、不以固定 block 上限或 timeout 丟棄候選；查詢詞分散於幾乎所有 chunks 時可自然退化為接近完整讀取。
 - 驗證：
   - `test/m88.test.ts` 以完整讀取 subclass 與候選讀取逐欄比較結果，並要求候選路徑的 `indexVerifiedChunks`／`indexVerifiedBytes` 較少；移除 terms 傳遞或回到完整讀取時，該斷言失敗。
-  - `test/m76.test.ts` 與新增 `test/m87.test.ts` 聚焦合計 6 pass；`scripts/search-diff.mjs` 小型 650/650、大型 30/30 均為 0 mismatch、0 error；完整 `npm test` 為 490 項，487 pass、0 fail、3 skip。
+  - `test/m76.test.ts` 與新增 `test/m87.test.ts` 聚焦合計 6 pass；`scripts/search-diff.mjs` 小型 650/650、大型 30/30 均為 0 mismatch、0 error；合併後完整 `npm test` 為 498 項，495 pass、0 fail、3 skip。
 
 ## D123：背景寫入搜尋慢先保留現況並記錄未重現
 
