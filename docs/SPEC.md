@@ -3134,3 +3134,40 @@ docsearch doctor
 - 共用狀態只保存 path、stable reference、檔名與臨時文件數；不得保存 snippet、query、answer、Codex 原文、對話、附件或文件內容。Codex page 不得因此取得任意 path 讀取能力，仍只能使用既有文件庫操作。
 - `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
 - `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。
+
+## 101. `compact` 的 SQLite client 錯誤分類
+
+依 D137。`compact` 與 `main` 其餘操作一樣，必須在 CLI 邊界將可分類的索引鎖競爭與回復狀態轉成固定 client message；不得因命令分支位於既有主流程 `try`／`catch` 外而把 SQLite 原文輸出給使用者。
+
+### 101.1 固定錯誤邊界
+
+- `compact` 在開啟 `IndexStore`、取得 writer lock、執行壓縮或其相關索引寫入時遇到 `IndexBusyError`／SQLite busy／locked，必須使用共用 `classifyIndexClientError`／`describeIndexClientError` 分類，回傳退出碼 3，並輸出「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」。
+- `compact` 遇到既有索引回復類 extended code 776、1288 或 1294 時，沿用共用 `INDEX_RECOVERY_REQUIRED` 固定訊息與退出碼 3；不得刪除 journal、WAL 或 SHM。
+- busy／recovery 的輸出不得包含 `database is locked`、SQLite extended code 或其他 SQLite 原文。非 busy／recovery 錯誤不得被誤分類為 `INDEX_BUSY`，也不得因本節新增的 catch 被靜默吞掉。
+
+### 101.2 驗收
+
+- `test/m97.test.ts` 使用暫存 `LOCALDOCSEARCH_DATA_DIR`、合成索引與另一個 SQLite 連線持有主庫鎖，執行編譯後 CLI `compact`；必須得到退出碼 3、固定 `INDEX_BUSY` 且無 SQLite 原文。
+- 反向驗證移除 compact 的分類接線時，m97 必須回到未處理例外／非固定訊息；還原後測試通過。測試不得讀取真實使用者資料或真實索引。
+
+## 102. 背景更新錯誤記錄與工作狀態清理降級
+
+依 D138。背景更新的 SQLite 回復／鎖競爭錯誤必須在 live status 邊界使用既有固定分類；工作狀態孤兒清理是 best-effort 整理，不能讓工作引擎因清理庫暫時鎖住或損壞而無法啟動。
+
+### 102.1 錯誤記錄分類
+
+- `LiveUpdateEngine.rememberError` 收到索引錯誤物件時，必須先使用共用 `classifyIndexClientError`／`describeIndexClientError`；recovery 類記為固定 `INDEX_RECOVERY_REQUIRED` 訊息，busy／locked 類記為固定 `INDEX_BUSY` 訊息。
+- 固定分類的 recent error、log 與 status 不得包含 SQLite 原文。非索引分類錯誤保留原有錯誤碼與診斷語意，不得被改成 busy 或 recovery。
+- 主索引同步／校正失敗仍須保留 `syncFailed`、待辦或校正狀態的既有失敗語意；固定訊息只改顯示邊界，不得把失敗報成成功。
+
+### 102.2 啟動時孤兒清理失敗
+
+- `LiveUpdateEngine` 建立時先取得目前 `store.roots()`，再嘗試 `cleanupOrphanRoots`。清理失敗時必須記錄可操作的錯誤、將 engine 降級但繼續建立 watcher／consumer；log 與 recent error 必須說明孤兒工作狀態可能仍保留、待辦／最舊時間可能暫時受污染，下一次 engine 啟動會再試。
+- 清理失敗不得刪除來源檔案、索引文件或工作狀態庫中未確認的列；不得以清空 work DB 或把孤兒 root 改掛到現有 root 來假裝完成清理。
+- catch 只涵蓋 `cleanupOrphanRoots` 的 best-effort 整理；取得現有 roots、主索引開啟／完整性與後續同步的資料完整性錯誤不得被這個降級路徑吞掉。
+
+### 102.3 驗收
+
+- `test/m98.test.ts` 使用暫存合成索引，注入 recovery 錯誤驗證 live recent error 不含 SQLite 原文且使用固定 `INDEX_RECOVERY_REQUIRED`；另注入 work DB cleanup failure，驗證 engine 仍可建立、log 說明孤兒狀態後果，且固定分類不洩漏原文。
+- 反向驗證移除 `rememberError` 分類或 cleanup startup catch 時，m98 對應斷言必須失敗；還原後通過。測試不得讀取真實使用者資料或真實索引。
+- 執行 `npm run build`、m97／m98 聚焦測試與完整 `npm test`；本節不改搜尋語意、前端介面、package 版本或資料目錄相容性。
