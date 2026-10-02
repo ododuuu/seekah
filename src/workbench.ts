@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { IndexStore, dataDirectory, type TrashedRoot } from "./store.js";
 import { indexStatus, prepareContextTool } from "./mcp-tools.js";
+import { LibraryStore, indexedLibraryDocument, type LibraryAction, type SavedSearchInput } from "./library.js";
 import { explainPathSync, previewExclusionPolicy, readExclusionPolicies } from "./exclusion-visibility.js";
 import { formatExclusionExplanation, formatExclusionPolicySummary } from "./describe-exclusion.js";
 import { emptySearchTrace } from "./search-trace.js";
@@ -122,6 +123,69 @@ function explainPathInput(body: Record<string, unknown>): string {
   }
   return body.path;
 }
+function libraryDocumentBody(body: Record<string, unknown>): { path: string; reference: string; name: string } {
+  if (typeof body.path !== "string" || !body.path.trim() || body.path.length > 32_768 || !path.isAbsolute(body.path)) {
+    throw Object.assign(new Error("文件庫文件路徑必須是絕對路徑。"), { statusCode: 400 });
+  }
+  if (typeof body.reference !== "string" || !/^[1-9]\d*-[0-9a-f]{16}$/u.test(body.reference)) {
+    throw Object.assign(new Error("文件庫文件代碼無效。"), { statusCode: 400 });
+  }
+  const name = typeof body.name === "string" && body.name.trim() ? body.name : path.basename(body.path);
+  return { path: body.path, reference: body.reference, name };
+}
+function libraryIdentityBody(body: Record<string, unknown>): { path?: string; reference?: string } {
+  const rawPath = body.path;
+  const rawReference = body.reference;
+  if (rawPath !== undefined && (typeof rawPath !== "string" || !rawPath.trim() || rawPath.length > 32_768 || !path.isAbsolute(rawPath))) {
+    throw Object.assign(new Error("文件庫文件路徑必須是絕對路徑。"), { statusCode: 400 });
+  }
+  if (rawReference !== undefined && (typeof rawReference !== "string" || !/^[1-9]\d*-[0-9a-f]{16}$/u.test(rawReference))) {
+    throw Object.assign(new Error("文件庫文件代碼無效。"), { statusCode: 400 });
+  }
+  if (rawPath === undefined && rawReference === undefined) throw Object.assign(new Error("文件庫刪除需要 path 或 reference。"), { statusCode: 400 });
+  return { ...(typeof rawPath === "string" ? { path: rawPath } : {}), ...(typeof rawReference === "string" ? { reference: rawReference } : {}) };
+}
+
+
+function libraryAction(body: Record<string, unknown>): LibraryAction {
+  if (body.action !== "open" && body.action !== "select" && body.action !== "context" && body.action !== "mcp") {
+    throw Object.assign(new Error("文件庫最近事件無效。"), { statusCode: 400 });
+  }
+  return body.action;
+}
+
+function libraryId(value: string): number {
+  const id = Number(decodeURIComponent(value));
+  if (!Number.isSafeInteger(id) || id < 1) throw Object.assign(new Error("文件庫 id 無效。"), { statusCode: 400 });
+  return id;
+}
+
+function savedSearchBody(body: Record<string, unknown>, fallback?: SavedSearchInput): SavedSearchInput {
+  const rawName = body.name === undefined ? fallback?.name : body.name;
+  const rawQuery = body.query === undefined ? fallback?.query : body.query;
+  if (typeof rawName !== "string" || typeof rawQuery !== "string") throw new Error("已存搜尋需要名稱與關鍵字。");
+  const rawRoot = body.root === undefined ? fallback?.root : body.root;
+  if (rawRoot !== undefined && rawRoot !== null && typeof rawRoot !== "string") throw new Error("已存搜尋根目錄條件無效。");
+  const rawTypes = body.types === undefined ? fallback?.types : body.types;
+  let types: string[] | undefined;
+  if (rawTypes !== undefined) {
+    if (!Array.isArray(rawTypes)) throw new Error("已存搜尋格式條件無效。");
+    types = rawTypes.map(value => {
+      if (typeof value !== "string") throw new Error("已存搜尋格式條件無效。");
+      return value;
+    });
+  }
+  const rawSort = body.sort === undefined ? fallback?.sort : body.sort;
+  const rawField = body.field === undefined ? fallback?.field : body.field;
+  const rawMode = body.mode === undefined ? fallback?.mode : body.mode;
+  if (rawSort !== undefined && rawSort !== "relevance" && rawSort !== "filename" && rawSort !== "modified") throw new Error("已存搜尋排序條件無效。");
+  if (rawField !== undefined && rawField !== "all" && rawField !== "filename" && rawField !== "content") throw new Error("已存搜尋欄位條件無效。");
+  if (rawMode !== undefined && rawMode !== "phrase" && rawMode !== "all-terms") throw new Error("已存搜尋模式無效。");
+  return { name: rawName, query: rawQuery, ...(rawRoot === undefined ? {} : { root: rawRoot }),
+    ...(types === undefined ? {} : { types }), ...(rawSort === undefined ? {} : { sort: rawSort }),
+    ...(rawField === undefined ? {} : { field: rawField }), ...(rawMode === undefined ? {} : { mode: rawMode }) };
+}
+
 
 function contextRequest(body: Record<string, unknown>): ContextRequest {
   const provider = validateProviderSelection(body.provider);
@@ -419,6 +483,15 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   let latestAnswerTrace: AnswerTrace | null = null;
   const traceLog = createTraceLog(dataDirectory(options.databasePath));
   const searchManager = new WorkbenchSearchManager(options.databasePath, options.searchDelayMs, options.searchWorkerIdleMs);
+  let library: LibraryStore | undefined;
+  function getLibrary(): LibraryStore {
+    return library ??= new LibraryStore(options.databasePath);
+  }
+  async function resolveLibraryDocument(body: Record<string, unknown>) {
+    const input = libraryDocumentBody(body);
+    return openStore(options.databasePath, store => indexedLibraryDocument(store, input.reference, input.path), options.createIndexStore);
+  }
+
 
   function persistIndexing(force = false): void {
     const now = Date.now();
@@ -649,14 +722,19 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   const buildContext = async (input: ContextRequest) => {
     let indexedText = "";
     if (input.selections.length) {
-      const prepared = await openStore(options.databasePath, store => prepareContextTool(store, {
-        selections: input.selections,
-        mode: input.mode,
-        passages: 3,
-        createdAt: sessionCreatedAt,
-        includeTimestamps: false,
-      }));
-      indexedText = prepared.text;
+      const prepared = await openStore(options.databasePath, async store => {
+        const result = await prepareContextTool(store, {
+          selections: input.selections,
+          mode: input.mode,
+          passages: 3,
+          createdAt: sessionCreatedAt,
+          includeTimestamps: false,
+        });
+        const libraryDocuments = input.selections.map(selection => indexedLibraryDocument(store, selection.reference));
+        return { result, libraryDocuments };
+      }, options.createIndexStore);
+      for (const document of prepared.libraryDocuments) getLibrary().recordRecent({ ...document, action: "context" });
+      indexedText = prepared.result.text;
     }
     const imported = input.fileIds.map(id => {
       const document = documents.get(id);
@@ -665,6 +743,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     });
     return combineWorkbenchContext(indexedText, imported);
   };
+
 
   const server = createServer(async (request, response) => {
     let activeAnswerTrace: AnswerTraceRecorder | undefined;
@@ -725,6 +804,76 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         return;
       }
       if (request.method !== "GET" && request.headers.origin !== origin) { json(response, 403, { error: "跨來源要求已拒絕。" }); return; }
+      if (url.pathname.startsWith("/api/library/")) {
+        const libraryPathname = url.pathname;
+        if (request.method === "GET" && libraryPathname === "/api/library/recent") {
+          json(response, 200, { items: getLibrary().listRecent() }); return;
+        }
+        if (request.method === "POST" && libraryPathname === "/api/library/recent") {
+          const body = await readJson(request);
+          const input = await resolveLibraryDocument(body);
+          const item = getLibrary().recordRecent({ ...input, action: libraryAction(body) });
+          json(response, 200, { item }); return;
+        }
+        if (request.method === "GET" && libraryPathname === "/api/library/pinned") {
+          json(response, 200, { items: getLibrary().listPinned() }); return;
+        }
+        if (request.method === "PUT" && libraryPathname === "/api/library/pinned") {
+          const input = await resolveLibraryDocument(await readJson(request));
+          json(response, 200, { item: getLibrary().upsertPinned(input) }); return;
+        }
+        if (request.method === "DELETE" && libraryPathname === "/api/library/pinned") {
+          const removed = getLibrary().removePinned(libraryIdentityBody(await readJson(request)));
+          json(response, 200, { removed }); return;
+        }
+        if (libraryPathname === "/api/library/groups") {
+          if (request.method === "GET") { json(response, 200, { groups: getLibrary().listGroups() }); return; }
+          if (request.method === "POST") {
+            const body = await readJson(request);
+            if (typeof body.name !== "string") throw new Error("分類需要名稱。");
+            json(response, 201, { group: getLibrary().createGroup(body.name) }); return;
+          }
+        }
+        const groupMatch = /^\/api\/library\/groups\/([^/]+)(?:\/(items))?$/u.exec(libraryPathname);
+        if (groupMatch) {
+          const id = libraryId(groupMatch[1]!);
+          if (!groupMatch[2] && request.method === "PATCH") {
+            const body = await readJson(request);
+            if (typeof body.name !== "string") throw new Error("分類需要名稱。");
+            json(response, 200, { group: getLibrary().renameGroup(id, body.name) }); return;
+          }
+          if (!groupMatch[2] && request.method === "DELETE") {
+            json(response, 200, { removed: getLibrary().deleteGroup(id) }); return;
+          }
+          if (groupMatch[2] && request.method === "POST") {
+            const input = await resolveLibraryDocument(await readJson(request));
+            json(response, 200, { group: getLibrary().addGroupItem(id, input) }); return;
+          }
+          if (groupMatch[2] && request.method === "DELETE") {
+            json(response, 200, { removed: getLibrary().removeGroupItem(id, libraryIdentityBody(await readJson(request))) }); return;
+          }
+        }
+        if (libraryPathname === "/api/library/saved-searches") {
+          if (request.method === "GET") { json(response, 200, { items: getLibrary().listSavedSearches() }); return; }
+          if (request.method === "POST") {
+            json(response, 201, { item: getLibrary().createSavedSearch(savedSearchBody(await readJson(request))) }); return;
+          }
+        }
+        const savedMatch = /^\/api\/library\/saved-searches\/([^/]+)$/u.exec(libraryPathname);
+        if (savedMatch) {
+          const id = libraryId(savedMatch[1]!);
+          if (request.method === "PATCH") {
+            const body = await readJson(request);
+            const current = getLibrary().getSavedSearch(id);
+            json(response, 200, { item: getLibrary().updateSavedSearch(id, savedSearchBody(body, current)) }); return;
+          }
+          if (request.method === "DELETE") {
+            json(response, 200, { removed: getLibrary().deleteSavedSearch(id) }); return;
+          }
+        }
+        json(response, 404, { error: "找不到文件庫 API。" }); return;
+      }
+
 
       if (request.method === "GET" && url.pathname === "/api/state") {
         json(response, 200, {
@@ -1071,8 +1220,13 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         }
         const reference = body.reference;
         const action: DocumentAction = body.action;
-        const target = await openStore(options.databasePath, store => actOnDocument(store, reference, action));
-        json(response, 200, { action, ...target }); return;
+        const result = await openStore(options.databasePath, async store => {
+          const target = await actOnDocument(store, reference, action);
+          const libraryDocument = action === "open" ? indexedLibraryDocument(store, reference, target.path) : undefined;
+          return { target, libraryDocument };
+        }, options.createIndexStore);
+        if (result.libraryDocument) getLibrary().recordRecent({ ...result.libraryDocument, action: "open" });
+        json(response, 200, { action, ...result.target }); return;
       }
       if (request.method === "POST" && url.pathname === "/api/preview") {
         const input = contextRequest(await readJson(request));
@@ -1165,6 +1319,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     });
   } catch (error) {
     await searchManager.close();
+    library?.close();
     keys.destroy();
     await rm(tempRoot, { recursive: true, force: true });
     throw error;
@@ -1194,6 +1349,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       }
       await indexingTask;
       await searchManager.close();
+      library?.close();
       keys.destroy();
       documents.clear();
       consumedPreviews.clear();

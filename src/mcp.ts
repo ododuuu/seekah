@@ -5,6 +5,7 @@ import * as z from "zod/v4";
 import { IndexStore } from "./store.js";
 import { explainPath, indexStatus, McpToolError, prepareContextTool, searchDocuments } from "./mcp-tools.js";
 import { describeIndexClientError } from "./index-errors.js";
+import { LibraryStore, indexedLibraryDocument } from "./library.js";
 import { MCP_APP_HTML, MCP_APP_MIME_TYPE, MCP_APP_RESOURCE_URI } from "./mcp-app.js";
 import { productVersion } from "./version.js";
 
@@ -150,6 +151,13 @@ export function createMcpServer(databasePath: string, options: { createIndexStor
         ...(input.types ? { types: input.types } : {}),
         ...(input.root ? { root: input.root } : {}),
       });
+      const library = new LibraryStore(databasePath);
+      try {
+        for (const selection of input.selections) {
+          const document = indexedLibraryDocument(store, selection.reference);
+          library.recordRecent({ ...document, action: "mcp" });
+        }
+      } finally { library.close(); }
       return {
         content: [{ type: "text", text: result.text }],
         structuredContent: result.data,

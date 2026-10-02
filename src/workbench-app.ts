@@ -974,6 +974,29 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   color: var(--ink);
 }
 
+.library-page { display: grid; gap: 16px; }
+.library-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.library-toolbar input { min-width: 220px; min-height: 34px; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); }
+.library-list, .library-groups { display: grid; gap: 9px; }
+.library-item, .library-group { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); box-shadow: var(--shadow); }
+.library-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; align-items: center; }
+.library-item-main, .library-group-head { min-width: 0; }
+.library-item-name, .library-group-name { color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+.library-item-path { margin-top: 3px; color: var(--muted); font: 12px/1.4 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.library-item-meta { margin-top: 5px; color: var(--muted); font-size: 11px; }
+.library-item-actions, .library-group-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.library-item-actions select { min-height: 30px; max-width: 170px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 4px 7px; background: var(--paper); color: var(--ink); }
+.library-group-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.library-group-items { display: grid; gap: 7px; margin-top: 10px; }
+.library-group-items .library-item { padding: 9px 10px; box-shadow: none; }
+.library-group-items .library-item-actions select, .library-group-items .library-item-actions button { display: none; }
+.library-saved-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; align-items: center; }
+.library-saved-conditions { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .library-item, .library-saved-row { grid-template-columns: 1fr; }
+  .library-item-actions, .library-group-actions { justify-content: flex-start; }
+}
+
 /* desktop width adjustments */
 @media (max-width: 1320px) {
   :root { --sidebar-width: 220px; }
@@ -1007,6 +1030,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     searchField: "all",
     rootFilter: "",
     typeFilter: "",
+    sortMode: "relevance",
     statusFilter: "",
     queryDraft: "",
     submittedQuery: "",
@@ -1070,6 +1094,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     focusRoot: "",
     focusAfterDrawer: null,
     dialogTrigger: null,
+    library: { recent: [], pinned: [], groups: [], savedSearches: [], busy: false },
   };
 
   const $ = id => document.getElementById(id);
@@ -1441,6 +1466,245 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (global && global.value !== state.queryDraft) global.value = state.queryDraft;
     if (page && page.value !== state.queryDraft) page.value = state.queryDraft;
   }
+  function libraryDocumentPayload(item) {
+    if (!item || typeof item.reference !== "string" || !item.reference) return null;
+    const pathValue = typeof item.path === "string" ? item.path : "";
+    if (!pathValue) return null;
+    const name = typeof item.name === "string" && item.name ? item.name
+      : typeof item.filename === "string" && item.filename ? item.filename : documentFilenameValue(item);
+    return { path: pathValue, reference: item.reference, name };
+  }
+  function libraryRoute(route) {
+    return route === "library-recent" || route === "library-pinned"
+      || route === "library-groups" || route === "library-saved-searches";
+  }
+  async function refreshLibrary() {
+    if (state.library.busy) return;
+    state.library.busy = true;
+    try {
+      const [recent, pinned, groups, savedSearches] = await Promise.all([
+        api("/api/library/recent"), api("/api/library/pinned"),
+        api("/api/library/groups"), api("/api/library/saved-searches"),
+      ]);
+      state.library.recent = Array.isArray(recent && recent.items) ? recent.items : [];
+      state.library.pinned = Array.isArray(pinned && pinned.items) ? pinned.items : [];
+      state.library.groups = Array.isArray(groups && groups.groups) ? groups.groups : [];
+      state.library.savedSearches = Array.isArray(savedSearches && savedSearches.items) ? savedSearches.items : [];
+      renderSidebar();
+      if (libraryRoute(state.route)) renderLibraryPage();
+    } catch (error) {
+      if (libraryRoute(state.route)) setStatus("library-status", error.message || "文件庫讀取失敗。", "error");
+    } finally {
+      state.library.busy = false;
+    }
+  }
+  async function recordLibraryAction(item, action) {
+    const body = libraryDocumentPayload(item);
+    if (!body) return;
+    try {
+      await api("/api/library/recent", { method: "POST", body: { ...body, action } });
+      await refreshLibrary();
+    } catch (error) {
+      showToast(error.message || "最近文件記錄失敗。");
+    }
+  }
+  async function setLibraryPinned(item, pinned) {
+    const body = libraryDocumentPayload(item);
+    if (!body) return;
+    try {
+      await api("/api/library/pinned", { method: pinned ? "PUT" : "DELETE", body });
+      await refreshLibrary();
+      showToast(pinned ? "已釘選文件。" : "已取消釘選文件。");
+    } catch (error) {
+      showToast(error.message || "釘選操作失敗。");
+    }
+  }
+  async function addLibraryGroupItem(groupId, item) {
+    const body = libraryDocumentPayload(item);
+    if (!body) return;
+    try {
+      await api("/api/library/groups/" + encodeURIComponent(String(groupId)) + "/items", { method: "POST", body });
+      await refreshLibrary();
+      showToast("已加入分類。");
+    } catch (error) {
+      showToast(error.message || "加入分類失敗。");
+    }
+  }
+  async function removeLibraryGroupItem(groupId, item) {
+    const body = libraryDocumentPayload(item);
+    if (!body) return;
+    try {
+      await api("/api/library/groups/" + encodeURIComponent(String(groupId)) + "/items", { method: "DELETE", body });
+      await refreshLibrary();
+    } catch (error) {
+      showToast(error.message || "移除分類文件失敗。");
+    }
+  }
+  async function createLibraryGroup() {
+    const input = $("library-group-name");
+    const name = input && input.value.trim();
+    if (!name) {
+      setStatus("library-status", "請輸入分類名稱。", "error");
+      return;
+    }
+    try {
+      await api("/api/library/groups", { method: "POST", body: { name } });
+      input.value = "";
+      await refreshLibrary();
+      setStatus("library-status", "分類已建立。", "ok");
+    } catch (error) {
+      setStatus("library-status", error.message || "分類建立失敗。", "error");
+    }
+  }
+  async function renameLibraryGroup(group) {
+    const name = window.prompt("分類名稱", group.name);
+    if (name === null || !name.trim()) return;
+    try {
+      await api("/api/library/groups/" + encodeURIComponent(String(group.id)), { method: "PATCH", body: { name: name.trim() } });
+      await refreshLibrary();
+    } catch (error) {
+      showToast(error.message || "分類重新命名失敗。");
+    }
+  }
+  async function deleteLibraryGroup(group) {
+    if (!window.confirm("刪除分類「" + group.name + "」？文件本身不會被刪除。")) return;
+    try {
+      await api("/api/library/groups/" + encodeURIComponent(String(group.id)), { method: "DELETE" });
+      await refreshLibrary();
+    } catch (error) {
+      showToast(error.message || "分類刪除失敗。");
+    }
+  }
+  async function saveCurrentSearch() {
+    const input = $("library-saved-search-name");
+    const name = input && input.value.trim();
+    const query = (state.submittedQuery || state.queryDraft).trim();
+    if (!name || !query) {
+      setStatus("library-status", "已存搜尋需要名稱與查詢詞。", "error");
+      return;
+    }
+    try {
+      await api("/api/library/saved-searches", {
+        method: "POST",
+        body: {
+          name, query, root: state.rootFilter || undefined, types: state.typeFilter ? [state.typeFilter] : [],
+          sort: state.sortMode || "relevance", field: state.searchField, mode: state.mode,
+        },
+      });
+      input.value = "";
+      await refreshLibrary();
+      setStatus("library-status", "已存搜尋已建立。", "ok");
+    } catch (error) {
+      setStatus("library-status", error.message || "已存搜尋建立失敗。", "error");
+    }
+  }
+  async function deleteSavedSearch(item) {
+    try {
+      await api("/api/library/saved-searches/" + encodeURIComponent(String(item.id)), { method: "DELETE" });
+      await refreshLibrary();
+    } catch (error) {
+      showToast(error.message || "已存搜尋刪除失敗。");
+    }
+  }
+  function runSavedSearch(item) {
+    state.mode = item.mode === "all-terms" ? "all-terms" : "phrase";
+    state.searchField = item.field === "filename" || item.field === "content" ? item.field : "all";
+    state.rootFilter = typeof item.root === "string" ? item.root : "";
+    state.typeFilter = Array.isArray(item.types) && typeof item.types[0] === "string" ? item.types[0] : "";
+    state.statusFilter = "";
+    state.sortMode = item.sort === "filename" || item.sort === "modified" ? item.sort : "relevance";
+    state.queryDraft = typeof item.query === "string" ? item.query : "";
+    state.submittedQuery = "";
+    state.data = null;
+    syncQueryInputs();
+    renderScopeSummaries();
+    navigate("documents");
+    void search(1);
+  }
+  function renderLibraryDocumentList(container, items, options) {
+    container.replaceChildren();
+    if (!items.length) {
+      container.append(make("div", "empty-state", options.empty || "尚無文件。"));
+      return;
+    }
+    for (const item of items) {
+      const row = make("article", "library-item");
+      const main = make("div", "library-item-main", "");
+      main.append(make("div", "library-item-name", item.name || documentFilenameValue(item)));
+      main.append(make("div", "library-item-path", item.path || ""));
+      if (item.lastUsedAt || item.updatedAt) {
+        main.append(make("div", "library-item-meta", options.compact ? "" : "最近使用：" + formatLocalDateTime(item.lastUsedAt || item.updatedAt)));
+      }
+      const actions = make("div", "library-item-actions", "");
+      if (item.reference) actions.append(button("開啟", "small primary", () => void documentAction(item, "open")));
+      if (options.groupId) {
+        actions.append(button("移除", "small", () => void removeLibraryGroupItem(options.groupId, item)));
+      } else {
+        actions.append(button(options.pinned ? "取消釘選" : "釘選", "small", () => void setLibraryPinned(item, !options.pinned)));
+        if (state.library.groups.length) {
+          const groupSelect = document.createElement("select");
+          groupSelect.setAttribute("aria-label", "選擇分類");
+          groupSelect.append(new Option("加入分類…", ""));
+          for (const group of state.library.groups) groupSelect.append(new Option(group.name, String(group.id)));
+          const add = button("加入", "small", () => {
+            if (groupSelect.value) void addLibraryGroupItem(Number(groupSelect.value), item);
+          });
+          actions.append(groupSelect, add);
+        }
+      }
+      row.append(main, actions);
+      container.append(row);
+    }
+  }
+  function renderLibraryPage() {
+    const status = $("library-status");
+    if (status && !state.library.busy) status.textContent = "";
+    const recent = $("library-recent-list");
+    const pinned = $("library-pinned-list");
+    if (state.route === "library-recent" && recent) {
+      renderLibraryDocumentList(recent, state.library.recent, { empty: "尚無最近使用文件。" });
+    }
+    if (state.route === "library-pinned" && pinned) {
+      renderLibraryDocumentList(pinned, state.library.pinned, { pinned: true, empty: "尚無釘選文件。" });
+    }
+    const groups = $("library-groups-list");
+    if (state.route === "library-groups" && groups) {
+      groups.replaceChildren();
+      if (!state.library.groups.length) groups.append(make("div", "empty-state", "尚未建立分類。"));
+      for (const group of state.library.groups) {
+        const card = make("section", "library-group");
+        const head = make("div", "library-group-head");
+        head.append(make("h2", "library-group-name", group.name));
+        const groupActions = make("div", "library-group-actions");
+        groupActions.append(button("重新命名", "small", () => void renameLibraryGroup(group)));
+        groupActions.append(button("刪除分類", "small danger", () => void deleteLibraryGroup(group)));
+        head.append(groupActions);
+        const itemList = make("div", "library-group-items");
+        renderLibraryDocumentList(itemList, Array.isArray(group.items) ? group.items : [], {
+          groupId: group.id, compact: true, empty: "此分類尚無文件。",
+        });
+        card.append(head, itemList);
+        groups.append(card);
+      }
+    }
+    const saved = $("library-saved-searches-list");
+    if (state.route === "library-saved-searches" && saved) {
+      saved.replaceChildren();
+      if (!state.library.savedSearches.length) saved.append(make("div", "empty-state", "尚無已存搜尋。"));
+      for (const item of state.library.savedSearches) {
+        const row = make("article", "library-item library-saved-row");
+        const main = make("div", "library-item-main");
+        main.append(make("div", "library-item-name", item.name));
+        main.append(make("div", "library-saved-conditions", "查詢：" + item.query + " · 根目錄：" + (item.root || "全部") + " · 排序：" + item.sort));
+        const actions = make("div", "library-item-actions");
+        actions.append(button("重新搜尋", "small primary", () => runSavedSearch(item)));
+        actions.append(button("刪除", "small danger", () => void deleteSavedSearch(item)));
+        row.append(main, actions);
+        saved.append(row);
+      }
+    }
+  }
+
   function updateNav() {
     const currentRoute = state.route;
     document.querySelectorAll("[data-route]").forEach(node => {
@@ -1454,7 +1718,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       }
     });
     const title = $("main-title");
-    if (title) title.textContent = state.route === "documents" ? "文件" : state.route === "temporary" ? "臨時文件" : state.route === "roots" ? "根目錄" : state.route === "trash" ? "垃圾桶" : "";
+    if (title) title.textContent = state.route === "documents" ? "文件" : state.route === "temporary" ? "臨時文件" : state.route === "roots" ? "根目錄" : state.route === "trash" ? "垃圾桶" : state.route === "library-recent" ? "最近使用" : state.route === "library-pinned" ? "已釘選" : state.route === "library-groups" ? "分類" : state.route === "library-saved-searches" ? "已存搜尋" : "";
   }
   function switchPageVisibility() {
     document.querySelectorAll("[data-page]").forEach(node => { node.hidden = node.dataset.page !== state.route; });
@@ -1467,7 +1731,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     if (route === "documents") renderDocuments();
     if (route === "temporary") renderTemporary();
     if (route === "roots") { renderRoots(); void refreshStatus(); }
-    if (route === "trash") { renderTrash(); void refreshStatus(); }
+    if (route === "library-recent" || route === "library-pinned" || route === "library-groups" || route === "library-saved-searches") {
+      renderLibraryPage();
+      void refreshLibrary();
+    }
     if (route === "documents") {
       setTimeout(() => { if (state.route === "documents") $("document-query")?.focus(); }, 0);
     }
@@ -1502,12 +1769,18 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const temp = $("nav-temp-count");
     const rootCount = $("nav-root-count");
     const trash = $("nav-trash-count");
-    const context = $("nav-context-count");
+    const libraryRecent = $("nav-library-recent-count");
+    const libraryPinned = $("nav-library-pinned-count");
+    const libraryGroups = $("nav-library-groups-count");
+    const librarySaved = $("nav-library-saved-count");
     if (total) total.textContent = documentTotal() === null ? "" : String(documentTotal());
     if (temp) temp.textContent = String(state.imported.size);
     if (rootCount) rootCount.textContent = state.indexStatus && Array.isArray(state.indexStatus.roots) ? String(state.indexStatus.roots.length) : "";
     if (trash) trash.textContent = state.indexStatus && Array.isArray(state.indexStatus.trash) ? String(state.indexStatus.trash.length) : "";
-    if (context) context.textContent = String(selectedCount());
+    if (libraryRecent) libraryRecent.textContent = String(state.library.recent.length);
+    if (libraryPinned) libraryPinned.textContent = String(state.library.pinned.length);
+    if (libraryGroups) libraryGroups.textContent = String(state.library.groups.length);
+    if (librarySaved) librarySaved.textContent = String(state.library.savedSearches.length);
     const rootList = $("sidebar-roots");
     rootList.replaceChildren();
     const roots = state.indexStatus && Array.isArray(state.indexStatus.roots) ? state.indexStatus.roots : [];
@@ -1908,6 +2181,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         return;
       }
       state.selected.set(item.reference, { query: state.submittedQuery, reference: item.reference, item });
+      void recordLibraryAction(item, "select");
     } else state.selected.delete(item.reference);
     invalidatePreview("選取已變更；請重新產生精確預覽。", true);
   }
@@ -1945,6 +2219,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
           return;
         }
         state.selected.set(item.reference, { query: data.query, reference: item.reference, item });
+        void recordLibraryAction(item, "select");
         added++;
       }
     }
@@ -2066,6 +2341,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const data = await api("/api/document-action", { method: "POST", body: { reference: item.reference, action } });
       const changed = data && data.changed ? "索引可能已過期，請重新搜尋。" : "";
       showToast((action === "open" ? "已送出開啟檔案請求。" : "已送出顯示位置請求。") + (changed ? " " + changed : ""));
+      if (action === "open") void refreshLibrary();
     } catch (error) { showToast(error.message || "文件操作失敗。"); }
   }
   function renderTemporary() {
@@ -3238,6 +3514,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const allDocs = navButton(() => navigate("documents")); allDocs.dataset.route = "documents"; allDocs.append(make("span", "nav-icon", "▤"), make("span", "", "所有文件"), make("span", "nav-count", "")); allDocs.lastChild.id = "nav-doc-count";
     const temp = navButton(() => navigate("temporary")); temp.dataset.route = "temporary"; temp.append(make("span", "nav-icon", "＋"), make("span", "", "臨時文件"), make("span", "nav-count", "0")); temp.lastChild.id = "nav-temp-count";
     nav.append(allDocs, temp); sidebar.append(nav);
+    sidebar.append(make("div", "nav-group", "文件庫"));
+    const libraryNav = make("nav", "nav-list");
+    libraryNav.setAttribute("aria-label", "文件庫導覽");
+    const recentNav = navButton(() => navigate("library-recent")); recentNav.dataset.route = "library-recent"; recentNav.id = "nav-library-recent"; recentNav.append(make("span", "nav-icon", "◷"), make("span", "", "最近"), make("span", "nav-count", "0")); recentNav.lastChild.id = "nav-library-recent-count";
+    const pinnedNav = navButton(() => navigate("library-pinned")); pinnedNav.dataset.route = "library-pinned"; pinnedNav.id = "nav-library-pinned"; pinnedNav.append(make("span", "nav-icon", "★"), make("span", "", "已釘選"), make("span", "nav-count", "0")); pinnedNav.lastChild.id = "nav-library-pinned-count";
+    const groupsNav = navButton(() => navigate("library-groups")); groupsNav.dataset.route = "library-groups"; groupsNav.id = "nav-library-groups"; groupsNav.append(make("span", "nav-icon", "▦"), make("span", "", "分類"), make("span", "nav-count", "0")); groupsNav.lastChild.id = "nav-library-groups-count";
+    const savedNav = navButton(() => navigate("library-saved-searches")); savedNav.dataset.route = "library-saved-searches"; savedNav.id = "nav-library-saved-searches"; savedNav.append(make("span", "nav-icon", "⌑"), make("span", "", "已存搜尋"), make("span", "nav-count", "0")); savedNav.lastChild.id = "nav-library-saved-count";
+    libraryNav.append(recentNav, pinnedNav, groupsNav, savedNav); sidebar.append(libraryNav);
     sidebar.append(make("div", "nav-group", "常用範圍")); const rootList = make("div", "root-nav-list", ""); rootList.id = "sidebar-roots"; sidebar.append(rootList);
     sidebar.append(make("div", "nav-group", "索引管理"));
     const manage = make("nav", "nav-list");
@@ -3342,6 +3626,27 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     addPanel.insertBefore(rootExclusionPreview, addBody);
 
     const trashPage = make("section", "page", ""); trashPage.dataset.page = "trash"; trashPage.id = "trash-page"; const trashHeader = makePageHeader("垃圾桶", "這裡只保存被移除的索引記錄；來源資料仍在原位置。"); const purgeSelected = button("永久刪除所選", "danger", () => requestDelete("trash")); purgeSelected.id = "trash-purge-selected"; trashHeader.actions.append(purgeSelected); trashPage.append(trashHeader); const trashStatus = make("div", "status", ""); trashStatus.id = "trash-status-message"; trashStatus.setAttribute("role", "status"); trashStatus.setAttribute("aria-live", "polite"); trashPage.append(trashStatus); const trashPanel = make("section", "trash-list-panel", ""); const trashToolbar = make("div", "trash-toolbar", ""); const trashSelectAll = document.createElement("input"); trashSelectAll.type = "checkbox"; trashSelectAll.className = "table-check"; trashSelectAll.id = "trash-select-all"; trashSelectAll.setAttribute("aria-label", "全選垃圾桶項目"); trashSelectAll.addEventListener("change", () => { state.selectedTrash.clear(); if (trashSelectAll.checked && state.indexStatus?.trash) for (const item of state.indexStatus.trash) state.selectedTrash.add(item.path); renderTrash(); }); const trashSelectLabel = make("label", "", ""); trashSelectLabel.htmlFor = "trash-select-all"; trashSelectLabel.append(trashSelectAll, make("span", "", "全選垃圾桶項目")); const trashToolbarActions = make("div", "button-row", ""); const restoreSelected = button("還原選取並重新索引", "primary", () => void restoreTrash(Array.from(state.selectedTrash))); restoreSelected.id = "trash-restore-selected"; trashToolbarActions.append(restoreSelected); trashToolbar.append(trashSelectLabel, trashToolbarActions); trashPanel.append(trashToolbar); const trashTable = document.createElement("table"); trashTable.className = "trash-table"; const trashHead = document.createElement("thead"); const trashHeadRow = document.createElement("tr"); for (const label of ["", "根目錄", "操作"]) trashHeadRow.append(make("th", "", label)); trashHead.append(trashHeadRow); const trashBody = document.createElement("tbody"); trashBody.id = "trash-body"; trashTable.append(trashHead, trashBody); trashPanel.append(trashTable); trashPage.append(trashPanel); main.append(trashPage);
+    const libraryStatus = make("div", "status", ""); libraryStatus.id = "library-status"; libraryStatus.setAttribute("role", "status"); libraryStatus.setAttribute("aria-live", "polite"); main.append(libraryStatus);
+    const libraryRecentPage = make("section", "page library-page", ""); libraryRecentPage.dataset.page = "library-recent"; libraryRecentPage.id = "library-recent-page";
+    const recentHeader = makePageHeader("最近使用", "最近開啟、選取、加入上下文或由 MCP 使用的本機文件。");
+    recentHeader.actions.append(button("重新整理", "", () => void refreshLibrary()));
+    const recentList = make("div", "library-list"); recentList.id = "library-recent-list"; libraryRecentPage.append(recentHeader, recentList); main.append(libraryRecentPage);
+    const libraryPinnedPage = make("section", "page library-page", ""); libraryPinnedPage.dataset.page = "library-pinned"; libraryPinnedPage.id = "library-pinned-page";
+    const pinnedHeader = makePageHeader("已釘選", "保留常用文件的穩定路徑；釘選不會保存文件內容。");
+    pinnedHeader.actions.append(button("重新整理", "", () => void refreshLibrary()));
+    const pinnedList = make("div", "library-list"); pinnedList.id = "library-pinned-list"; libraryPinnedPage.append(pinnedHeader, pinnedList); main.append(libraryPinnedPage);
+    const libraryGroupsPage = make("section", "page library-page", ""); libraryGroupsPage.dataset.page = "library-groups"; libraryGroupsPage.id = "library-groups-page";
+    const groupsHeader = makePageHeader("分類", "建立自訂分類，並從最近或已釘選文件加入多個文件。");
+    const groupName = document.createElement("input"); groupName.id = "library-group-name"; groupName.type = "text"; groupName.maxLength = 80; groupName.placeholder = "新分類名稱"; groupName.setAttribute("aria-label", "新分類名稱");
+    const groupCreate = button("建立分類", "primary", () => void createLibraryGroup()); groupCreate.id = "library-create-group";
+    const groupToolbar = make("div", "library-toolbar"); groupToolbar.append(groupName, groupCreate); groupsHeader.actions.append(groupToolbar);
+    const groupsList = make("div", "library-groups"); groupsList.id = "library-groups-list"; libraryGroupsPage.append(groupsHeader, groupsList); main.append(libraryGroupsPage);
+    const librarySavedPage = make("section", "page library-page", ""); librarySavedPage.dataset.page = "library-saved-searches"; librarySavedPage.id = "library-saved-searches-page";
+    const savedHeader = makePageHeader("已存搜尋", "保存目前搜尋條件，之後使用既有搜尋 API 重新執行。");
+    const savedName = document.createElement("input"); savedName.id = "library-saved-search-name"; savedName.type = "text"; savedName.maxLength = 80; savedName.placeholder = "已存搜尋名稱"; savedName.setAttribute("aria-label", "已存搜尋名稱");
+    const savedCreate = button("儲存目前搜尋", "primary", () => void saveCurrentSearch()); savedCreate.id = "library-save-search";
+    const savedToolbar = make("div", "library-toolbar"); savedToolbar.append(savedName, savedCreate); savedHeader.actions.append(savedToolbar);
+    const savedList = make("div", "library-list"); savedList.id = "library-saved-searches-list"; librarySavedPage.append(savedHeader, savedList); main.append(librarySavedPage);
     shell.append(main); app.append(shell);
 
     const scrim = make("button", "scrim", ""); scrim.id = "scrim"; scrim.type = "button"; scrim.setAttribute("aria-label", "關閉上下文抽屜"); scrim.hidden = true; scrim.addEventListener("click", closeContext); app.append(scrim);
@@ -3413,7 +3718,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 
     state.viewMode = "list";
     switchPageVisibility();
-    renderDocuments(); renderTemporary(); renderRoots(); renderTrash(); renderContextDrawer();
+    renderDocuments(); renderTemporary(); renderRoots(); renderTrash(); renderContextDrawer(); renderLibraryPage();
     for (const dialog of [previewDialog, settingsDialog, deleteDialog]) dialog.addEventListener("close", restoreDialogFocus);
     globalQuery.addEventListener("input", () => { state.queryDraft = globalQuery.value; pageQuery.value = state.queryDraft; });
     pageQuery.addEventListener("input", () => { state.queryDraft = pageQuery.value; globalQuery.value = state.queryDraft; });
@@ -3472,6 +3777,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   async function initialize() {
     await loadState();
     await refreshStatus();
+    await refreshLibrary();
   }
   buildApp();
   applyTheme(readThemeMode(), false);

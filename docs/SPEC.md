@@ -2994,3 +2994,41 @@ docsearch doctor
 - `test/m91.test.ts` 覆蓋隔離 `LOCALDOCSEARCH_DATA_DIR` 的原子 transaction、重開持久化、路徑去重、上限淘汰、分類／釘選／已存搜尋 CRUD，以及損壞檔案隔離；移除 transaction、去重或損壞隔離時，反向斷言必須失敗。
 - `test/m92.test.ts` 以 synthetic index 驗證 loopback token／Origin、四種最近事件、MCP `prepare_context` 記錄、錯誤狀態碼與禁止任意 path；移除任一事件接線或 path 驗證時，反向斷言必須失敗。
 - `test/m93.test.ts` 驗證工作台左側「最近／已釘選／分類／已存搜尋」區塊可載入、釘選／分類／儲存與重新搜尋；`node scripts/ui-smoke.mjs` 必須涵蓋新區塊。所有搜尋相關變更仍須執行 `scripts/search-diff.mjs` 且差異為 0。
+
+## 96. 工作台文件庫導覽與操作介面
+
+工作台左側導覽必須提供四個文件庫入口：「最近」、「已釘選」、「分類」與「已存搜尋」。四個入口都是目前工作台內的頁面，不另開外部服務或瀏覽器儲存區。
+
+### 96.1 文件項目與導覽
+
+- 「最近」依 `/api/library/recent` 顯示最近使用文件；「已釘選」依 `/api/library/pinned` 顯示釘選文件；「分類」依 `/api/library/groups` 顯示分類及其文件；「已存搜尋」依 `/api/library/saved-searches` 顯示保存的條件。
+- 文件庫清單只顯示名稱與正規化絕對路徑，以及必要的時間／條件摘要；不得顯示文件正文、snippet、passage 或 AI 輸出。空清單、載入失敗與操作失敗都必須有可理解的狀態文字。
+- 文件項目的「開啟」只提交既有 `document-action` 穩定 reference；伺服器成功完成開啟後才記錄 `open`。釘選、取消釘選、加入分類與移除分類都只能操作目前索引可辨識的文件識別。
+- 搜尋結果第一次成功勾選索引文件時記錄 `select`；取消勾選不得新增最近事件。批次選取的每份文件都依相同契約記錄，不能把未成功取得的任意路徑寫入文件庫。
+
+### 96.2 分類與已存搜尋
+
+- 使用者可建立、重新命名、刪除分類，並從最近／已釘選清單將多份文件加入同一分類；刪除分類只刪除關聯，不刪除來源文件、索引文件或其他分類。
+- 已存搜尋表單保存目前搜尋的 `query`、`root`、`types`、`sort`、`field` 與 `mode`。重新執行必須把保存條件帶回現有 `/api/search`，不得在前端複製或另立搜尋排序、分詞或權限語意。
+- 保存或重新執行失敗時保留使用者可見的原狀態；不得假裝成功、清除既有清單或改寫文件庫中的其他項目。
+- 四個頁面都沿用工作台既有 loopback token、Origin、CSP、鍵盤焦點與 `no-store` API 規則；不得使用 `localStorage`、`sessionStorage`、cookie、IndexedDB 或外部網路。
+
+### 96.3 驗收
+
+- `test/m93.test.ts` 必須檢查四個導覽入口、頁面、文件庫 API、選取事件接線及已存搜尋沿用既有 `/api/search`；移除任一入口或選取接線時，反向斷言必須失敗。
+- `node scripts/ui-smoke.mjs` 必須在合成索引與暫存資料目錄中實際開啟四個頁面，完成釘選、建立分類、加入分類、保存搜尋及重新搜尋，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 與任何測試啟動的 daemon。
+
+## 97. 文件庫相容性、隔離與回歸邊界
+
+### 97.1 相容性
+
+- 文件庫只新增獨立 `library.sqlite` 及其必要的 SQLite 暫存／損壞隔離檔；主索引 schema、文件 id、搜尋結果、排序、根目錄設定、`LOCALDOCSEARCH_DATA_DIR`、LocalDocSearch 相容資料目錄、IPC／MCP／`docsearch` 識別與 package 版本不變。
+- `library.sqlite`、WAL／SHM／journal 及 `library.sqlite.corrupt-*` 都必須被索引 artifact 邊界排除，不得出現在搜尋結果、同步佇列或文件庫自身項目中。文件庫不得讀取或保存來源文件內容。
+- 文件庫開啟、讀取或損壞隔離失敗只能以既有 JSON 錯誤狀態回報；不得阻斷主索引啟動、搜尋或 MCP 未使用文件庫的功能，也不得把 SQLite 原始錯誤或文件內容回傳給客戶端。
+
+### 97.2 合成驗證與反向驗證
+
+- `test/m91.test.ts`、`test/m92.test.ts` 與 `test/m93.test.ts` 都只能使用暫存 `LOCALDOCSEARCH_DATA_DIR`、合成索引與合成來源檔案，不得讀取真實使用者資料或執行真實索引操作。
+- 每項文件庫行為都必須有正向斷言及可移除實作接線後失敗的反向斷言：持久化 transaction／去重／損壞隔離、loopback path 驗證／四種事件、以及四個 UI 導覽／選取／重新搜尋。
+- 文件庫相關變更完成後必須執行 `npm run build`、三個聚焦測試、`node scripts/ui-smoke.mjs`、`npm test` 及 `scripts/search-diff.mjs`；搜尋差異必須為 0。所有命令都必須在本 worktree 執行，測試程序與 Chrome 結束後不得殘留指向暫存資料的程序。
+- 不得因文件庫功能順手加入 OCR、embedding、LAN 暴露、外部內容服務、未規格化檔案格式或 browser storage；任何新產品行為須另立規格與設計決策。
