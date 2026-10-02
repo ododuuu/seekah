@@ -2957,3 +2957,40 @@ docsearch doctor
 - `test/m88.test.ts` 必須以同一合成長文件分別走完整讀取與候選讀取，逐欄比較當頁結果，並證明候選路徑驗證的 chunks／bytes 較少；拿掉候選 terms 傳遞或退回完整讀取時，該讀取量斷言必須失敗。
 - 必須執行 `test/m76.test.ts` 的既有三種索引形狀回歸與 `scripts/search-diff.mjs`；搜尋差分的結果集合、欄位、排序、rank、total、`totalRelation` 必須為 0 差異。
 - 效能數字只作本機觀察；長文件查詢詞若分散於幾乎所有 chunks，收益可接近零，不得宣稱所有文件固定加速。
+ 
+## 95. 本機文件庫：最近、釘選、分類與已存搜尋
+
+文件庫是工作台與 MCP 共用的本機檔案中繼資料層，提供最近使用、釘選、使用者分類及已存搜尋。它只保存檔案識別與搜尋條件，不保存文件內容、snippet、passage、對話或 AI 輸出。
+
+### 95.1 儲存與資料模型
+
+- 文件庫使用與主索引分離的 SQLite 檔案：`dataDirectory(databasePath)/library.sqlite`。不得把資料表加入既有索引 schema，也不得使用 browser storage 或外部服務。`LOCALDOCSEARCH_DATA_DIR` 與既有資料目錄規則不變。
+- 所有寫入都在 SQLite transaction 中完成，使用 `synchronous=FULL` 與有界 busy timeout；單次 upsert、刪除、分類異動及已存搜尋異動都是原子操作。主索引重建、搜尋與文件內容讀取不得依賴文件庫 transaction。
+- `LibraryDocument` 至少包含 `path`（正規化絕對路徑）、`reference`（目前可取得時的 stable reference，可為 `null`）、`name`（顯示名稱），以及必要的 `createdAt`、`updatedAt`、`lastUsedAt`、`lastAction` 時間／事件欄位。不得寫入文件 bytes、文字、摘要、snippet 或 passage。
+- Windows 路徑以正規化絕對路徑作為去重 key，大小寫不敏感；其他平台依平台路徑規則正規化。回應仍保留可供使用者辨識的絕對路徑。相同路徑重新索引後，後續成功事件應更新既有列的 `reference` 與 `name`，不得產生第二列。
+- 最近清單上限 100 筆，依 `lastUsedAt` 新到舊排列；超過上限時只淘汰最舊列。釘選上限 100 筆；分類上限 50 個，每分類最多 200 個文件；已存搜尋上限 100 筆。釘選、分類或已存搜尋達上限時回傳錯誤，不得靜默淘汰使用者資料。
+- 分類名稱去除首尾空白後長度為 1–80 個字元，大小寫不敏感且不可重複；分類文件依路徑去重。已存搜尋名稱長度為 1–80 個字元，允許同名但以 id 區分。搜尋 `query` 長度上限為 1,000；root、檔案類型、sort、field、mode 僅保存既有搜尋 API 可接受的值。
+- 開啟文件庫時必須執行 schema／完整性檢查。若 SQLite 檔案損壞，先關閉並以不覆蓋原檔的方式改名為 `library.sqlite.corrupt-<timestamp>-<random>`，再建立空文件庫繼續服務；隔離失敗時不得覆寫原檔，相關寫入回傳 503。既有資料損壞不得讓工作台或主索引啟動失敗。
+
+### 95.2 Loopback API
+
+`/api/library/*` 只在既有 loopback Workbench server 提供，沿用既有 token、Origin、CSP、JSON body 上限及 `Cache-Control: no-store` 規則。讀取使用 GET；所有新增、更新、刪除使用相同 token 且要求合法 Origin。API 不回傳文件內容。
+
+- `GET /api/library/recent` 回傳 `{ "items": LibraryDocument[] }`；`POST /api/library/recent` 接受 `{ action: "open" | "select" | "context" | "mcp", path, reference, name }`，驗證 path／reference 為目前索引可辨識的同一文件後 upsert 最近列。
+- `GET /api/library/pinned` 回傳 `{ "items": LibraryDocument[] }`；`PUT /api/library/pinned` 以 `{ path, reference, name }` upsert 釘選；`DELETE /api/library/pinned` 以 `{ path, reference }` 刪除。
+- `GET /api/library/groups` 回傳 `{ "groups": [{ id, name, items: LibraryDocument[] }] }`；`POST /api/library/groups` 以 `{ name }` 建立；`PATCH /api/library/groups/:id` 更新名稱；`DELETE /api/library/groups/:id` 刪除分類及其關聯文件。`POST /api/library/groups/:id/items` 以 `{ path, reference, name }` 加入或更新文件，`DELETE /api/library/groups/:id/items` 以 `{ path, reference }` 移除文件。
+- `GET /api/library/saved-searches` 回傳 `{ "items": SavedSearch[] }`；`POST /api/library/saved-searches` 建立，`PATCH /api/library/saved-searches/:id` 更新，`DELETE /api/library/saved-searches/:id` 刪除。`SavedSearch` 至少包含 `id`、`name`、`query`、`root`、`types`、`sort`、`field`、`mode`、`createdAt`、`updatedAt`。重新執行由前端以保存的條件呼叫既有 `/api/search`，不得建立第二套搜尋語意。
+- 成功回應以現有 API 的 JSON 錯誤／狀態碼慣例為準：輸入不合法為 400、未知 id 為 404、重複名稱或容量衝突為 409、文件庫隔離失敗為 503。所有回應不得夾帶資料庫原始錯誤或文件內容。
+- 新增文件庫列時不得信任瀏覽器任意傳入的絕對路徑；server 必須以 stable reference 與目前索引／合法根目錄解析並確認 path 相符。既有列可因索引更新而暫時保留舊 reference，直到使用者刪除或再次成功使用。
+
+### 95.3 使用事件
+
+- 文件成功開啟後記錄 `open`；結果列或上下文清單成功選取後記錄 `select`；文件成功加入 AI context 後記錄 `context`。
+- MCP `prepare_context` 成功準備所選文件後，對實際使用的每一列記錄 `mcp`。單純 `search_documents` 回傳候選結果不算使用，不得把整頁搜尋結果灌入最近清單。
+- 所有事件都按文件路徑去重並更新最近時間與最近事件；失敗的開啟、選取、context 或 MCP 請求不得留下成功使用事件。讀取最近、釘選、分類或已存搜尋不會改變最近順序。
+
+### 95.4 驗收
+
+- `test/m91.test.ts` 覆蓋隔離 `LOCALDOCSEARCH_DATA_DIR` 的原子 transaction、重開持久化、路徑去重、上限淘汰、分類／釘選／已存搜尋 CRUD，以及損壞檔案隔離；移除 transaction、去重或損壞隔離時，反向斷言必須失敗。
+- `test/m92.test.ts` 以 synthetic index 驗證 loopback token／Origin、四種最近事件、MCP `prepare_context` 記錄、錯誤狀態碼與禁止任意 path；移除任一事件接線或 path 驗證時，反向斷言必須失敗。
+- `test/m93.test.ts` 驗證工作台左側「最近／已釘選／分類／已存搜尋」區塊可載入、釘選／分類／儲存與重新搜尋；`node scripts/ui-smoke.mjs` 必須涵蓋新區塊。所有搜尋相關變更仍須執行 `scripts/search-diff.mjs` 且差異為 0。

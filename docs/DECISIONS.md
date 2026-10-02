@@ -1,4 +1,19 @@
 # 設計決策紀錄
+## D127：文件庫採獨立 SQLite 並以路徑去重
+
+- 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 決定：
+  - 文件庫使用 `dataDirectory(databasePath)/library.sqlite`，與主索引完全分離；SQLite transaction、`synchronous=FULL` 與有界 busy timeout 提供單次異動的原子性及多程序邊界。資料列只保存正規化絕對路徑、stable reference、顯示名稱、時間、事件及已存搜尋條件，永不保存文件內容。
+  - 最近、釘選、分類文件以正規化路徑去重；最近超過 100 筆淘汰最舊列，釘選 100、分類 50 個且每個 200 筆、已存搜尋 100 筆達上限時拒絕新增，避免靜默刪除使用者資料。分類名稱採不分大小寫唯一，已存搜尋用 id 區分同名項目。
+  - 所有 loopback library mutation 沿用既有 token／Origin；新增文件列必須由 stable reference 與目前索引／合法根目錄交叉驗證，不能接受瀏覽器任意絕對路徑。索引更新造成的舊列只保留中繼資料，不自動刪除。
+  - 開啟時做 SQLite schema／完整性檢查；損壞檔案先以唯一副檔名隔離、保留原檔，再建立空文件庫。隔離失敗時不覆寫原檔並回傳 503，不能讓主索引或工作台啟動失敗。
+  - 最近事件只在成功開啟、選取、加入 context 或 MCP `prepare_context` 後記錄；單純 `search_documents` 候選結果不算使用。所有事件合併回同一路徑列，避免搜尋結果數量污染最近清單。
+- 理由：
+  - 獨立 SQLite 比 JSON 需要較少的手動鎖與整體重寫，能在 Workbench 與 MCP 同時寫入時保留 transaction 邊界，也不會讓主索引 schema 承擔使用者 metadata。
+  - 路徑是跨重建仍穩定的文件身份；stable reference 供目前索引驗證與快速更新，兩者同存可避免重建後產生重複釘選／分類項目。
+  - 以隔離而非刪除處理損壞，保留診斷來源且讓產品可恢復為空文件庫；bounded caps 防止無界 metadata 成長。
+- 否決：
+  - 不使用 browser localStorage、外部資料庫、外部 API、文件內容快取或第二套搜尋執行器；不把每次 `search_documents` 的所有結果視為最近使用。
 
 ## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
 
