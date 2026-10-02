@@ -50,7 +50,7 @@ Seekah 只在 `127.0.0.1` 啟動本機工作台。若瀏覽器沒有自動開啟
 
 ### 工作台版面
 
-- 頂列：全域搜尋、完整校正、同步中的停止按鈕、主題切換、設定與本機索引狀態。
+- 頂列：全域搜尋、完整校正、同步中的停止按鈕、Trace、Codex 工作階段、主題切換、設定與本機索引狀態。
 - 左側導覽：所有文件、臨時文件、文件庫（最近、已釘選、分類、已存搜尋）、實際索引根目錄、根目錄管理、垃圾桶與「已選上下文」入口。上下文不是永久第三欄；按「已選 N」才開啟固定抽屜，Esc、遮罩或 × 可關閉。
 - 文件頁：可選「檔名與內容／只搜尋檔名／只搜尋內容」，並以根目錄、格式、解析狀態篩選。排序只重排目前已取得的結果，不會再次搜尋；規則為相關性、檔名 A→Z 或最近修改。相關性固定依檔名完全符合、檔名包含、標題、內容，同級較新者優先。
 - 搜尋結果（0.40.0 起）：像搜尋引擎的列表，每筆有檔名、路徑列（根目錄名稱 › 子資料夾 › 檔名 · 格式）與約兩行命中片段；`phrase` 同一文件有第二個 heading／內容命中時會再列出第二段。`all-terms` 若不同詞落在不同位置，檔名／路徑下會依序列出各段位置、命中詞與片段；列表與表格檢視都會顯示，片段可單獨框選複製。檔名、路徑與片段可用滑鼠拖曳選取，沒有獨立的明細頁。
@@ -242,6 +242,56 @@ macOS／Linux 把反斜線改成 `/`。Windows 也可用 `.\seekah.cmd setup cod
 
 ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 
+### Codex 工作階段與 Reference Set
+
+工作台頂列按「Codex 工作階段」會開啟唯讀的本機 metadata 頁面。它只整理 Codex rollout 中的工作階段摘要與 Reference Set（從工作階段事件辨識出的路徑集合），不執行 Codex、不開啟附件，也不提供修改或送出功能。
+
+#### 讀取位置與唯讀邊界
+
+- 預設遞迴讀取 `~/.codex/sessions/` 下名稱符合 `rollout-*.jsonl` 的 rollout。工作台優先使用 `SEEKAH_CODEX_HOME`，其次使用 `CODEX_HOME`，兩者都設定時前者優先；都沒有時才回退到目前使用者 home 的 `.codex`。
+- 只讀取 `sessions/` 內的 rollout；不讀取 `history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔或 SQLite 狀態檔。所有列舉與讀取都留在本機。
+- Codex home 與 rollout 永遠是唯讀來源，不會被 Seekah 修改。從引用按「釘選」或「加入分類」時，寫入的是 Seekah 自己的 `library.sqlite` 文件庫 metadata，不會回寫 Codex 資料。
+- 頁面只顯示工作階段 metadata、事件類型統計、絕對路徑、來源、信心與索引狀態；不顯示對話內容、prompt、reasoning、query、command、tool arguments、tool result 或附件內容。
+
+#### 查看工作階段
+
+1. 按頂列「Codex 工作階段」；左側「工作階段清單」會列出工作階段代碼、`cwd`、可見 reference 數、低信心／待檢查數與最後事件時間。
+2. 點選工作階段後，右側顯示開始時間、最後事件、事件數、無效行數、事件類型統計與 Reference Set。按「重新整理」重新列舉 rollout；未變更的檔案可重用快取。
+3. Reference 列顯示完整路徑、來源、confidence、檔案／資料夾種類、磁碟與索引狀態、出現次數；若已在索引，也會顯示 Seekah stable reference。
+
+#### 四種引用來源
+
+| 來源標籤 | 意義 |
+| --- | --- |
+| `seekah-prompt` | 使用者輸入中的明確 Seekah context：`# Seekah 上下文` Markdown 之 `## N. <絕對路徑>` 標題，或 context sidebar 的「每行一個絕對路徑」清單；不從 snippet、查詢詞或一般說明文字猜測。 |
+| `user-provided` | 使用者自己的 `input_text`／`input_image` 中明確出現的絕對路徑。無法辨識結構但只在明確 `message`／`text` 欄位找到路徑時，也會以此來源標為低信心 fallback。 |
+| `seekah-mcp` | 確認是 `localdocsearch`（相容 `seekah`）MCP server／namespace 的工具呼叫，並從其參數抽取路徑；不是看到任意文字含 `seekah` 就算。 |
+| `codex-tool` | Codex 工具實際操作中的路徑，例如 `shell_command`、`apply_patch`、`FileChange`、`exec` 或 `CommandExecution`；不從 stdout、tool result、URL、cwd 或 query 抽取。 |
+
+同一路徑會在 Reference Set 合併計數與來源集合；來源優先級與最高 confidence 可重現，因此同一路徑可能同時顯示多個來源。
+
+#### 存在、索引與 unknown 標示
+
+- **磁碟存在**：detail API 檢查到路徑目前是檔案或資料夾；旁邊會顯示「檔案」或「資料夾」。
+- **磁碟不存在**：檢查收到 `ENOENT`／`ENOTDIR`；若也未在 Seekah 索引，通常會放入低信心摺疊區。
+- **磁碟未知（network）**：UNC／network path，或 Windows 上無法確認為本機磁碟的 drive。Seekah 不對這類路徑執行 `stat`，所以 `exists` 保持 unknown；這不是「已確認不存在」。
+- **已在 Seekah 索引**：以正規化路徑做目前索引的 exact／大小寫不敏感比對成功；這只表示已有索引資料，不會在此頁啟動索引。
+- **未在 Seekah 索引**：目前索引找不到該路徑，不能在此頁釘選或加入分類。
+
+工作階段清單只顯示摘要，不會為每個路徑檢查磁碟；點選工作階段進入 detail 才檢查。除了 network，檢查逾時或本機檔案系統暫時無法使用也會顯示「磁碟未知」（原因可能是 `timeout` 或 `unavailable`）。只要路徑已在 Seekah 索引，即使磁碟檢查為 unknown，也仍會保留「已在 Seekah 索引」與文件庫操作。
+
+#### 摺疊區、釘選與加入分類
+
+- Detail 的主要區塊放「磁碟存在」或「已在 Seekah 索引」的 reference。其餘「磁碟不存在／未知」且未索引的 reference 會放在「可能已移動或其他電腦的路徑（N）」摺疊區；展開它是查看低信心路徑，不是刪除或重新解析 Codex session。
+- 只有顯示「已在 Seekah 索引」且有 stable reference 的列才有「釘選」按鈕。按下後會沿用 canonical path 與 stable reference 寫入文件庫。
+- 要加入分類，先在選單選擇既有分類，再按「加入分類」。若顯示「請先在工作台建立分類」，回工作台的「分類」頁建立後再重新整理 Codex 頁面。
+- Codex 頁沒有「加入上下文」按鈕，也沒有跨頁共享的上下文集合；需要上下文時回到工作台，在搜尋結果使用既有選取流程。
+
+#### 64 MB 上限與快取
+
+- 單一 `rollout-*.jsonl` 超過 **64 MiB（64 × 1024 × 1024 bytes）** 時，不讀取其內容；工作階段標為 `skipped`、原因為 `file-too-large`，不會產生該檔案的 Reference Set。
+- parser 以 64 KiB stream chunk 讀取，避免一次配置整個 rollout。工作台程序內的 parser cache 以 canonical rollout path、`mtimeMs` 與檔案大小為 key；檔案時間或大小未變時，重新整理與 detail 會重用解析結果，變更後才重新解析。
+- 路徑存在檢查另有本機程序內快取；detail 最多同時檢查 8 條路徑，每條最多等待 300 ms。network path 不呼叫 `stat`，直接保留 unknown。
 
 ## 常見問題
 
@@ -272,6 +322,9 @@ ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 | 文件庫顯示已達上限 | 「最近」超過 100 筆會淘汰最舊項目；已釘選 100、分類 50、單一分類文件 200、已存搜尋 100 達上限時會拒絕新增，不會靜默刪掉既有資料。先取消釘選、移除分類關聯／分類或刪除已存搜尋。 |
 | 文件庫 SQLite 損壞或內容突然變空 | Seekah 會先把原檔隔離成 `library.sqlite.corrupt-<timestamp>-<random>`，不覆寫原檔，再建立空文件庫。關閉其他 Seekah 程序後確認資料目錄可寫；不要手動刪除隔離檔或 SQLite 附屬檔。 |
 | MCP 搜尋有結果但「最近」沒有記錄 | `search_documents` 只回傳搜尋結果；只有成功的 `prepare_context` 會為實際取用的文件記錄 `mcp`。 |
+| Codex 工作階段看不到某個 session | 工作台只掃描目前 Codex home 的 `sessions/` 遞迴路徑與 `rollout-*.jsonl`，預設最多列出 200 個；確認 `SEEKAH_CODEX_HOME`／`CODEX_HOME` 的有效位置與優先順序、檔名及副檔名後按「重新整理」。`history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/` 不會列出；被刪除或無法讀取的 rollout 也會略過。超過 64 MiB 的 rollout 通常仍會列出，但標為 `skipped`。 |
+| Codex reference 顯示「磁碟未知（network）」 | 這通常是 UNC／network path 或 Windows 上無法確認為本機的 drive。為避免對網路位置做檔案探測，Seekah 不呼叫 `stat`，unknown 不代表路徑不存在；若它也未在 Seekah 索引，就會放在摺疊區。 |
+| Codex reference 沒有「釘選」或「加入分類」 | 只有目前已在 Seekah 索引、且有 stable reference 的路徑提供這兩個操作。先把目前來源檔案加入並完成索引，再重新整理並重新開啟該 session；Codex 頁不會替你啟動索引。 |
 | 沒有 AI 送出功能 | 工作台只複製到剪貼簿。要給 Codex 用 MCP：`setup codex` 後請它搜尋並選定文件代碼。 |
 | 關閉工作台後臨時文件消失 | 這是預期行為：臨時文件只保留在本次程序。 |
 | 搜尋正常但看到 `database is locked` | 這是 0.42.0 及更早、rollback journal 加零等待時的症狀：搜尋仍 200，背景更新寫入失敗並把 SQLite 原文寫進健康摘要。0.43.0 改為固定「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」WAL 下讀不擋寫，此訊息應少見；仍可能在兩個寫入者互斥、checkpoint 邊界或 1500 ms 寫入等待用盡時出現。請稍後重試，不要刪 `-wal`／`-shm`。 |
@@ -283,4 +336,5 @@ ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 - 工作台不傳送文件、問題或 API Key 到外部 AI Provider。
 - Seekah 不開放 LAN，不讀取瀏覽器 cookie；開啟工作台不會自動完整掃描既有根目錄。「完整校正」只同步已登錄根；先按「加入資料夾」、再按「確認並建立索引」才登錄新路徑。臨時文件仍只留在本次工作階段。
 - 文件庫是獨立的本機 `library.sqlite`，只保存文件路徑、顯示名稱、stable reference、時間、最近事件與已存搜尋條件；不保存文件正文、bytes、snippet、passage、對話或 AI 輸出，也不使用 localStorage、sessionStorage、cookie、IndexedDB 或外部網路。
+- Codex 工作階段頁不把 Codex 對話內容、工具輸入／輸出或附件送到外部，也不寫入瀏覽器 storage；只有你明確按下釘選／加入分類時，才會把對應路徑、名稱與 stable reference 寫入 Seekah 本機文件庫 metadata。
 - 公司 Windows 與 Linux 外部開檔的正式驗收仍未完成；請先依公司政策用非機密測試資料驗證。
