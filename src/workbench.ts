@@ -285,7 +285,7 @@ async function readWorkbenchIndexStatus(
   const readAt = new Date().toISOString();
   const defaultAutoupdateSettings = { debounceMs: resolveWatchDebounce(undefined), reconcileMs: resolveAutoupdateReconcile(undefined) };
   if (!existsSync(databasePath)) return {
-    state: "missing" as const, readAt, trash: [] as TrashedRoot[], deleteConfirmation: true,
+    state: "missing" as const, readAt, storage: null, trash: [] as TrashedRoot[], deleteConfirmation: true,
     totalMode: "fast" as const, autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
   };
   try {
@@ -295,6 +295,7 @@ async function readWorkbenchIndexStatus(
         state: "available" as const,
         readAt,
         ...status,
+        storage: store.storageFootprint(),
         trash: store.trashRoots(),
         deleteConfirmation: store.deleteConfirmationEnabled(),
         totalMode: store.searchTotalMode(),
@@ -305,7 +306,7 @@ async function readWorkbenchIndexStatus(
     if (isRecoveryRequired(error) || (error instanceof Error && error.message === INDEX_RECOVERY_REQUIRED_MESSAGE)) {
       return {
         state: "unavailable" as const, readAt, errorCode: "INDEX_RECOVERY_REQUIRED",
-        message: INDEX_RECOVERY_REQUIRED_MESSAGE,
+        message: INDEX_RECOVERY_REQUIRED_MESSAGE, storage: null,
         trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
         autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
       };
@@ -313,7 +314,7 @@ async function readWorkbenchIndexStatus(
     const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "INDEX_READ_FAILED";
     return {
       state: "unavailable" as const, readAt, errorCode: code, message: "索引目前無法唯讀讀取，請稍後重試。",
-      trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
+      storage: null, trash: [] as TrashedRoot[], deleteConfirmation: true, totalMode: "fast" as const,
       autoupdateSettings: defaultAutoupdateSettings, startupCatchupMode: "auto" as const, workbenchOpenMode: "ask" as const,
     };
   }

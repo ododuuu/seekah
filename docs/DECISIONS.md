@@ -1,4 +1,89 @@
 # 設計決策紀錄
+
+## D143：autoupdate diagnose 只回報有界匿名 live watcher 摘要（2026-10-02）
+
+- **背景**：`autoupdate status` 已有單一根目錄的 `lastTiming` 與不確定事件計數，但難以直接提供最近多批次、事件到可搜尋延遲分布及 watcher 錯誤，又不能把完整來源路徑貼到外部診斷內容。
+- **決定**：新增唯讀 `autoupdate diagnose`。命令只查詢正在執行 daemon 的 live control snapshot，不啟動、停止或重啟程序；沒有 live daemon 沿用 `AUTOUPDATE_NOT_RUNNING`。每根保留最多 32 筆最近局部批次 timing；命令預設輸出最近 20 筆，接受 1～32 的上限。延遲樣本為該批第一個事件到局部提交完成，輸出 count、p50、p95、max。
+- **匿名化**：摘要只輸出模式／階段、計數、時間、根目錄序號標籤（`R1`、`R2`……依登錄順序）、相對深度、降級數量與固定 watcher error code 計數；不輸出任何根目錄或降級子目錄雜湊、文件內容、檔名、完整路徑、路徑參數、session／prompt 或 control token。一般 `autoupdate status` 的既有詳細輸出契約不因診斷摘要而放寬。
+- **驗證**：`test/m103.test.ts` 覆蓋命令解析、live-only、最近批次上限、延遲統計與匿名化；移除序號／深度匿名化、上限或 live-only 邊界時反向斷言必須失敗。
+
+## D142：以真實 fs.watch 合成壓力驗證漏事件，不先改 watcher 演算法（2026-10-02）
+
+- **背景**：0.46 的有界補掃與 0.47 的 `lastTiming` 已增加防護／觀測，但使用者偶爾漏事件的根因仍未證實；目前沒有可用的真實背景更新數據。本批先在隔離暫存根目錄以真正 `fs.watch` 壓測，避免把合成 watcher callback 或事件數相等誤當成資料正確性。
+- **決定**：`test/m102.test.ts` 覆蓋高頻建立／修改／改名／移動／刪除、深層與接近長路徑、Office 暫存檔、原子替換、safe-write、資料夾批次移入／移出與局部更新忙碌時事件湧入。每個情境以 synthetic token 比對「應被索引」與 `search()` 實際可搜尋集合，記錄遺失數／遺失率及既有 watcher 計數。
+- **取捨**：若未得到穩定且可縮小的遺失重現，不修改 watcher 排程、reconcile 排序或近期檔案延後策略，也不宣稱漏事件已解決；不得重試已否決的 mtime 排序與近期延後局部佇列實驗。若測試發現可重現遺失，才另以最小回歸測試與新決策修正。
+- **邊界**：測試只建立暫存 synthetic fixture，`LOCALDOCSEARCH_DATA_DIR` 指向同一暫存樹；測試結束停止 engine、關閉 store 並清理，不讀取真實 LocalDocSearch 資料或索引。
+- **本次結果**：m102 在一輪 Windows `win32` 真實 `fs.watch` 壓力矩陣中共核對 626 份 synthetic token，`search()` 可搜尋 626、遺失 0、stale 0；另觀測 `eventCount=446`、空檔名事件 2、補掃 1、降級子目錄 0，保留 timing sample 20 筆（上限 32）。這只證明該輪沒有重現遺失，不改變根因未證實的判定。
+
+## D141：Windows 8.3 與 subst alias 先正規化再套用預設排除
+
+- 日期：2026-10-03。依 SPEC §105；本分支只處理 `src/default-exclusions.ts`、`test/m101.test.ts` 與對應規格／決策，不執行真實 `subst`，不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：Windows 8.3 `PROGRA~1` 與 subst 磁碟機的字串 parse 仍會得到一般 drive root／短檔名；若直接以字串元件判斷，`Program Files/**` 可能漏掉，subst target 又可能被誤當整顆 volume。
+- 決定：Windows 預設排除比對使用 `realpathSync.native` 的實際長路徑；leaf 不存在時退回最近存在祖先並保留剩餘段。volume root 依正規化後 root 判斷，subst target 若帶有 `Mounted\\Docs` 等路徑段即不套用 system／volume-default。保留可注入 resolver 供 synthetic 測試，不改登錄 root 或索引 path。
+- 取捨：正常長路徑不重寫；POSIX 維持既有行為；這不是 OCR、資料遷移或新的路徑授權。真實 Windows 驗證仍待使用者在公司電腦完成，不在本分支宣稱。
+- 驗證：`test/m101.test.ts` 以 synthetic resolver 驗證 8.3 命中、subst 不列 volume rules 及移除正規化後的反向失敗；不建立 subst 磁碟機。
+
+## D140：stdio MCP explain_path 沿用啟動端信任，不加入 Workbench token
+
+- 日期：2026-10-03。依 SPEC §104；本分支只記錄 stdio 信任邊界並以 `test/m100.test.ts` 回歸，不修改既有 MCP tool 的 JSON-RPC 介面，不修改 package 版本、lockfile、STATUS、NEXT-TODO 或 handoff。
+- 事實：Workbench token 屬 loopback HTTP／瀏覽器 session；stdio server 是 MCP client 啟動、持有 stdin／stdout 的本機子程序，沒有可共用的 Workbench session。要求 stdio 呼叫再帶 HTTP token 會破壞既有 `mcp` 啟動契約，並不會增加同一使用者啟動端以外的隔離。
+- 決定：`explain_path` 維持 tokenless stdio tool，僅針對一個輸入 path 計算目前最具體 root 的 state／排除理由／文件狀態；不列出 roots、其他 root 內容、文件正文、snippet、解析原文或 arbitrary read。根外結果維持不提供 exists。
+- 取捨：這是最小且不破壞相容性的方案；未來若需不受信任遠端 client，必須另立 HTTP／認證／資料邊界規格，不把 stdio 信任模型延伸成 LAN。
+- 驗證：`test/m100.test.ts` 以兩個 synthetic roots 從無 Workbench token 的 stdio 呼叫 `explain_path`，驗證只回傳被查詢 root／path，且不洩漏另一 root 或正文；若加入 token gate 或 root list，測試必須失敗。
+
+## D139：Workbench index-status 沿用 CLI 儲存容量計算並顯示 SQLite sidecar
+
+- 日期：2026-10-03。依 SPEC §103；本分支只處理 `src/workbench.ts` 的 `/api/index-status` storage metadata、`src/workbench-app.ts` 設定頁呈現、`test/m99.test.ts` 與規格／決策，不修改 CLI 計算、MCP `index_status` 欄位、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：CLI 已由 `IndexStore.storageFootprint()` 共用 `collectIndexStorage()`，且檔案清單已包含主庫 `-wal`／`-shm`、journal 及 writer／live／work sidecar；Workbench API 目前只把 `indexStatus()` 回傳給前端，沒有容量欄位。
+- 決定：可用的 Workbench `/api/index-status` 直接使用同一 `IndexStore.storageFootprint()`，新增 `storage.files`、`totalBytes`、`incomplete`、`approximate`；缺少或不可讀索引回傳 `storage: null`。設定頁只讀列出目前存在的索引檔案 bytes／MiB、總計及 sidecar 變動／不完整提示。MCP `index_status` 不跟著新增欄位，以維持其既有物件契約。
+- 取捨：bytes 是檔案長度，不是假裝成配置容量或 quota；WAL／SHM／journal 存在時總量只代表當下 footprint。前端不重複掃描、不讀正文、不另建檔案清單。
+- 驗證：`test/m99.test.ts` 以 synthetic stat fixture 驗證 API 與設定頁的主庫、`-wal`、`-shm`、總量及提示；移除 API 或 UI 接線時正向／反向斷言失敗。
+
+## D136：表格結果操作採精簡主列與更多選單
+
+- 日期：2026-10-02。依 SPEC §94。本次只調整工作台結果列的呈現、勾選欄 CSS、`test/m90.test.ts` 與 `scripts/ui-smoke.mjs`；不新增 API、資料欄位、持久化資料或搜尋結果邏輯。
+- 決定：
+  - 清單維持完整操作群組；表格沿用同一個 `resultActions` 與 action handler，但以 `compact: true` 顯示「開啟」、「加入上下文／移出上下文」與「更多」，複製、所在位置、釘選／取消釘選及分類控制收在同一個可收合選單。選單開啟時仍使用原本的按鈕、select、stable reference 與 library payload。
+  - 表格勾選 input 明確使用 block 排列並由儲存格置中；smoke 同時檢查儲存格 `innerText`／`textContent`、`::before`／`::after` content、`list-style-type` 與 input display，避免把截圖中的裝飾誤判成產品文字。
+  - smoke 在選單收合與展開兩種狀態收集可見控制的 `getBoundingClientRect()`，要求任兩個控制不重疊且操作群組 `scrollWidth <= clientWidth`；這是實際 DOM 版面契約，不以 source text 代替。
+- 理由：
+  - 固定表格操作欄同時放七項控制會在窄視窗或字型差異下互相覆蓋；共用 handler 加更多選單可縮短主列而不改行為。
+  - 句點來源未必是文字節點，直接驗證 DOM 文字、偽元素與列表樣式可區分產品內容與繪製裝飾。
+- 驗證：`test/m90.test.ts` 包含精簡表格呼叫與勾選欄的反向契約；`scripts/ui-smoke.mjs` 實際切換表格、展開更多選單並驗證 bounding rect、溢出及勾選欄內容。
+
+## D135：Codex 與工作台上下文採 token session 共用索引集合
+
+- 日期：2026-10-02。依 SPEC §100。本分支只處理 `src/workbench.ts`、`src/workbench-app.ts`、`src/codex-session-app.ts`、`test/m96.test.ts` 與 `scripts/ui-smoke.mjs`；不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - D125 的上下文選取原本只存在工作台頁面的 `state.selected`；Codex 頁使用同一個 loopback token 但另有 JavaScript execution context，導覽後無法看到或修改右側欄，因此 §99 刻意沒有虛構「加入上下文」。
+  - 以 URL fragment 傳送 selected reference 會把完整絕對路徑暴露在 history、referrer 或畫面 URL；browser storage 又違反本產品的本機偏好與安全邊界。文件庫 SQLite 是持久化資料，不適合保存這個 session-only 選取狀態。
+- 決定：
+  - 在單一 `createWorkbench` handle 內保存受 token 保護的 `contextSelection`：索引文件只保留經 `indexedLibraryDocument` 驗證後的 canonical `path`、stable `reference`、`name`，另保留工作台臨時文件計數供 20 份上限判斷。工作台關閉時由程序清除，不寫 SQLite、檔案、URL 或 browser storage。
+  - 新增 `GET`／`POST`／`DELETE`／`PUT /api/context-selection`。`POST` 只加入已索引文件；`DELETE` 移除一份或清除索引集合；`PUT` 只同步工作台的臨時文件數。所有變更沿用既有 token、Origin／Referer 與 same-origin API 檢查；API 回傳的只有 selection metadata。
+  - Codex reference row 的「加入上下文／移出上下文」直接呼叫共用 API；工作台啟動、結果操作、側欄移除／清除與有限輪詢均讀寫同一集合。輪詢只合併索引文件，保留臨時文件的 session-local 狀態；前端以遞增 mutation version 丟棄較舊的 optimistic response，避免快速移除後重新加入時被舊回應覆寫。optimistic mutation 失敗時回復並顯示錯誤。
+  - 不採 `window.opener`、`postMessage` 或 `BroadcastChannel` 作唯一來源：它們依賴分頁開啟方式，不能涵蓋同一分頁導覽、reload 或沒有 opener 的 Codex route；server memory session 同時覆蓋這些情況而不增加持久化資料。
+- 取捨：
+  - 同一個 Workbench process／token 的頁面共用，重啟 Workbench 後選取清除；這符合上下文「目前工作階段」語意，不把使用者選取變成文件庫資料。
+  - Codex 頁只可加入已索引 reference，不能加入低信心、未索引或 arbitrary path；臨時文件仍只屬工作台頁面，故 `temporaryCount` 只作上限協調，不把暫存內容跨頁傳出。
+- 驗證：
+  - `test/m96.test.ts` 使用暫存資料目錄與合成文件，覆蓋 API 邊界、stable reference、跨頁讀取、上限與反向契約；`scripts/ui-smoke.mjs` 實際操作工作台／Codex route 的加入、移除、reload 與右側欄同步。
+
+## D134：Codex reference existence 檢查延後至 detail API
+
+- 日期：2026-10-02。監工以真實 57 個 rollout 逐檔計時回報總計 88.5 秒；其中 31.5 MB 單檔 73.5 秒，另有小檔約 2,717～5,448 ms。未在本工作區重讀真實 rollout；依程式證據，原 parser 在每個 finalized reference 以同步 `statSync` 檢查候選 path，UNC／不存在磁碟機可阻塞約數秒，與量測形狀一致。
+- parser 現在只建立字串 Reference Set，`exists` 未檢查時為 `null`、`kind` 為 `unknown`，不對候選 path 執行檔案系統 I/O。工作台 list 只解析與摘要，不做 reference existence check；detail API 只對被選取的 session 做檢查。
+- detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
+- synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
+- M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。
+
+## D133：Codex path recall 以逐行 token 掃描保留完整 reference
+
+- 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
+- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。掃描器不再對每個 regex match 重掃剩餘全文，而是以單調 cursor、每個 token 最多 401 字元、每段文字最多 2,000,000 字元的確定性狀態機前進，避免連續反斜線／未閉合引號形成 O(n²)。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
+- 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
+- m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。
+- M96 synthetic 200 KiB 未閉合引號、連續反斜線與空白輸入，修正後抽取約 13 ms；修正前同類 rollout 在 5 秒 watchdog 內未完成。性能門檻固定為單段文字 200 ms 內完成，不以真實使用者資料作測試。
+
 ## D132：Codex 安全邊界、增量解析與文件庫操作
 
 - 日期：2026-10-03。依 SPEC §§98–99；先將本分支 rebase 到 `main`，保留 main 的文件庫 API、工作台導覽與上下文抽屜實作；本次只修改 Codex parser、loopback API、Codex 頁面與 m94／m95 合成測試，不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
@@ -15,49 +100,6 @@
   - 直接復用文件庫 API 可保留 stable reference／Origin／transaction 驗證；沒有跨頁 context contract 時不新增第二套 context state，避免 UI 宣稱已加入但工作台看不到。
 - 驗證：
   - `test/m94.test.ts` 使用暫存 synthetic Codex home 覆蓋 path noise、event type、line／file cap、skip 與 cache；`test/m95.test.ts` 覆蓋 token／Origin、visible／low buckets、exists／indexed 與頁面 library action 接線。未讀取真實 `~/.codex` 或 `%LOCALAPPDATA%\\LocalDocSearch*`，不宣稱公司 Windows 驗收。
-
-## D127：文件庫採獨立 SQLite 並以路徑去重
-
-- 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
-- 決定：
-  - 文件庫使用 `dataDirectory(databasePath)/library.sqlite`，與主索引完全分離；SQLite transaction、`synchronous=FULL` 與有界 busy timeout 提供單次異動的原子性及多程序邊界。資料列只保存正規化絕對路徑、stable reference、顯示名稱、時間、事件及已存搜尋條件，永不保存文件內容。
-  - 最近、釘選、分類文件以正規化路徑去重；最近超過 100 筆淘汰最舊列，釘選 100、分類 50 個且每個 200 筆、已存搜尋 100 筆達上限時拒絕新增，避免靜默刪除使用者資料。分類名稱採不分大小寫唯一，已存搜尋用 id 區分同名項目。
-  - 所有 loopback library mutation 沿用既有 token／Origin；新增文件列必須由 stable reference 與目前索引／合法根目錄交叉驗證，不能接受瀏覽器任意絕對路徑。索引更新造成的舊列只保留中繼資料，不自動刪除。
-  - 開啟時做 SQLite schema／完整性檢查；損壞檔案先以唯一副檔名隔離、保留原檔，再建立空文件庫。隔離失敗時不覆寫原檔並回傳 503，不能讓主索引或工作台啟動失敗。
-  - 最近事件只在成功開啟、選取、加入 context 或 MCP `prepare_context` 後記錄；單純 `search_documents` 候選結果不算使用。所有事件合併回同一路徑列，避免搜尋結果數量污染最近清單。
-- 理由：
-  - 獨立 SQLite 比 JSON 需要較少的手動鎖與整體重寫，能在 Workbench 與 MCP 同時寫入時保留 transaction 邊界，也不會讓主索引 schema 承擔使用者 metadata。
-  - 路徑是跨重建仍穩定的文件身份；stable reference 供目前索引驗證與快速更新，兩者同存可避免重建後產生重複釘選／分類項目。
-  - 以隔離而非刪除處理損壞，保留診斷來源且讓產品可恢復為空文件庫；bounded caps 防止無界 metadata 成長。
-- 否決：
-  - 不使用 browser localStorage、外部資料庫、外部 API、文件內容快取或第二套搜尋執行器；不把每次 `search_documents` 的所有結果視為最近使用。
-
-
-## D128：文件庫 UI 採工作台左側頁面並沿用既有搜尋入口
-
-- 日期：2026-10-03。依 SPEC §§95–96；本分支負責左側最近／已釘選／分類／已存搜尋導覽、文件庫操作與 m93／UI smoke，避免修改既有結果列與上下文抽屜的版面契約。
-- 決定：
-  - 文件庫使用工作台既有單頁路由與 `data-page` 顯示切換；每個頁面只呈現名稱、絕對路徑、時間或搜尋條件摘要，不在瀏覽器保存文件內容。
-  - 釘選與分類操作由最近／釘選清單發起；分類可以持有多份文件。已存搜尋保存目前表單條件，重新執行時回填工作台搜尋狀態並呼叫既有 `/api/search`，不新增前端搜尋執行器。
-  - 文件成功開啟仍由既有 `/api/document-action` 完成；結果勾選由 UI 呼叫文件庫 recent API 記錄 `select`，context／MCP 事件由 server 端成功路徑記錄，避免瀏覽器自行宣稱成功。
-- 理由：
-  - 左側頁面與既有工作台導覽、token、CSP、焦點及 responsive layout 共用，能讓文件庫在同一個 loopback 邊界內完成操作。
-  - 把文件內容排除在 UI 與資料庫之外，符合本機資料最小化，也避免建立第二種文件讀取或搜尋語意。
-- 否決：
-  - 不使用 localStorage、sessionStorage、cookie、IndexedDB 或外部網路；不把最近清單塞進既有搜尋結果頁，不以路徑文字取代 server stable reference 驗證。
-
-## D129：文件庫回歸以 synthetic fixture、正反斷言與既有檢查為準
-
-- 日期：2026-10-03。依 SPEC §97；本分支只在 `feat/library-48` 的暫存資料目錄與合成索引驗證，不宣稱公司 Windows 驗收。
-- 決定：
-  - m91 驗證獨立 SQLite 的 transaction、路徑去重、容量邊界、CRUD、重開持久化及損壞隔離；m92 驗證 loopback token／Origin、stable reference path 驗證、open／select／context／mcp 事件及 MCP `prepare_context`；m93 與 UI smoke 驗證四個頁面及釘選／分類／保存／重新搜尋。
-  - 每個聚焦測試都保留移除核心接線後必須失敗的反向斷言；搜尋相關變更仍執行 `scripts/search-diff.mjs`，要求 0 mismatch、0 error。
-  - UI smoke 與測試只能使用暫存 `LOCALDOCSEARCH_DATA_DIR`；結束時停止 Workbench、Chrome、背景／前景測試程序並檢查沒有程序指向暫存資料。
-- 理由：
-  - synthetic fixture 可驗證資料隔離與事件邊界，不會把真實使用者索引或文件內容帶進測試；正反斷言能防止只保留 UI 字串而遺失行為接線。
-  - 既有完整測試、UI smoke 與 search-diff 分別覆蓋編譯／回歸、實際瀏覽器表面及搜尋結果不變，維持六個月後可診斷性。
-- 否決：
-  - 不讀取 `%LOCALAPPDATA%\\LocalDocSearch*`，不執行真實索引操作，不把一次通過的本機 smoke 宣稱為公司 Windows 驗收；不修改 package version、lockfile、STATUS、NEXT-TODO 或 handoff。
 
 ## D131：Codex 工作階段以 token 保護的 loopback metadata 頁面呈現
 
@@ -100,6 +142,65 @@
   - 不把任意 `server`／`source`／path 字串含 seekah 當作 Seekah MCP，也不把 URL 或不存在的低信心 path 提升為已確認文件。
 - 驗證：
   - `test/m94.test.ts` 覆蓋 schema 正／負欄位、四種來源、MCP false positive、URL 排除、無效行、輸入檔案邊界與 conversation content 不輸出；移除 path collection 時反向契約失敗。
+
+## D129：文件庫回歸以 synthetic fixture、正反斷言與既有檢查為準
+
+- 日期：2026-10-03。依 SPEC §97；本分支只在 `feat/library-48` 的暫存資料目錄與合成索引驗證，不宣稱公司 Windows 驗收。
+- 決定：
+  - m91 驗證獨立 SQLite 的 transaction、路徑去重、容量邊界、CRUD、重開持久化及損壞隔離；m92 驗證 loopback token／Origin、stable reference path 驗證、open／select／context／mcp 事件及 MCP `prepare_context`；m93 與 UI smoke 驗證四個頁面及釘選／分類／保存／重新搜尋。
+  - 每個聚焦測試都保留移除核心接線後必須失敗的反向斷言；搜尋相關變更仍執行 `scripts/search-diff.mjs`，要求 0 mismatch、0 error。
+  - UI smoke 與測試只能使用暫存 `LOCALDOCSEARCH_DATA_DIR`；結束時停止 Workbench、Chrome、背景／前景測試程序並檢查沒有程序指向暫存資料。
+- 理由：
+  - synthetic fixture 可驗證資料隔離與事件邊界，不會把真實使用者索引或文件內容帶進測試；正反斷言能防止只保留 UI 字串而遺失行為接線。
+  - 既有完整測試、UI smoke 與 search-diff 分別覆蓋編譯／回歸、實際瀏覽器表面及搜尋結果不變，維持六個月後可診斷性。
+- 否決：
+  - 不讀取 `%LOCALAPPDATA%\\LocalDocSearch*`，不執行真實索引操作，不把一次通過的本機 smoke 宣稱為公司 Windows 驗收；不修改 package version、lockfile、STATUS、NEXT-TODO 或 handoff。
+
+## D128：文件庫 UI 採工作台左側頁面並沿用既有搜尋入口
+
+- 日期：2026-10-03。依 SPEC §§95–96；本分支負責左側最近／已釘選／分類／已存搜尋導覽、文件庫操作與 m93／UI smoke，避免修改既有結果列與上下文抽屜的版面契約。
+- 決定：
+  - 文件庫使用工作台既有單頁路由與 `data-page` 顯示切換；每個頁面只呈現名稱、絕對路徑、時間或搜尋條件摘要，不在瀏覽器保存文件內容。
+  - 釘選與分類操作由最近／釘選清單發起；分類可以持有多份文件。已存搜尋保存目前表單條件，重新執行時回填工作台搜尋狀態並呼叫既有 `/api/search`，不新增前端搜尋執行器。
+  - 文件成功開啟仍由既有 `/api/document-action` 完成；結果勾選由 UI 呼叫文件庫 recent API 記錄 `select`，context／MCP 事件由 server 端成功路徑記錄，避免瀏覽器自行宣稱成功。
+- 理由：
+  - 左側頁面與既有工作台導覽、token、CSP、焦點及 responsive layout 共用，能讓文件庫在同一個 loopback 邊界內完成操作。
+  - 把文件內容排除在 UI 與資料庫之外，符合本機資料最小化，也避免建立第二種文件讀取或搜尋語意。
+- 否決：
+  - 不使用 localStorage、sessionStorage、cookie、IndexedDB 或外部網路；不把最近清單塞進既有搜尋結果頁，不以路徑文字取代 server stable reference 驗證。
+
+## D127：文件庫採獨立 SQLite 並以路徑去重
+
+- 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 決定：
+  - 文件庫使用 `dataDirectory(databasePath)/library.sqlite`，與主索引完全分離；SQLite transaction、`synchronous=FULL` 與有界 busy timeout 提供單次異動的原子性及多程序邊界。資料列只保存正規化絕對路徑、stable reference、顯示名稱、時間、事件及已存搜尋條件，永不保存文件內容。
+  - 最近、釘選、分類文件以正規化路徑去重；最近超過 100 筆淘汰最舊列，釘選 100、分類 50 個且每個 200 筆、已存搜尋 100 筆達上限時拒絕新增，避免靜默刪除使用者資料。分類名稱採不分大小寫唯一，已存搜尋用 id 區分同名項目。
+  - 所有 loopback library mutation 沿用既有 token／Origin；新增文件列必須由 stable reference 與目前索引／合法根目錄交叉驗證，不能接受瀏覽器任意絕對路徑。索引更新造成的舊列只保留中繼資料，不自動刪除。
+  - 開啟時做 SQLite schema／完整性檢查；損壞檔案先以唯一副檔名隔離、保留原檔，再建立空文件庫。隔離失敗時不覆寫原檔並回傳 503，不能讓主索引或工作台啟動失敗。
+  - 最近事件只在成功開啟、選取、加入 context 或 MCP `prepare_context` 後記錄；單純 `search_documents` 候選結果不算使用。所有事件合併回同一路徑列，避免搜尋結果數量污染最近清單。
+- 理由：
+  - 獨立 SQLite 比 JSON 需要較少的手動鎖與整體重寫，能在 Workbench 與 MCP 同時寫入時保留 transaction 邊界，也不會讓主索引 schema 承擔使用者 metadata。
+  - 路徑是跨重建仍穩定的文件身份；stable reference 供目前索引驗證與快速更新，兩者同存可避免重建後產生重複釘選／分類項目。
+  - 以隔離而非刪除處理損壞，保留診斷來源且讓產品可恢復為空文件庫；bounded caps 防止無界 metadata 成長。
+- 否決：
+  - 不使用 browser localStorage、外部資料庫、外部 API、文件內容快取或第二套搜尋執行器；不把每次 `search_documents` 的所有結果視為最近使用。
+
+
+## D126：結果列操作沿用文件庫 API 並以失敗回復（2026-10-02）
+
+- **背景**：§94 的列表與表格結果列需要提供釘選、分類及上下文等一致操作；§95 已定義文件庫的實際持久化模型與 loopback API，前端不得另建一套狀態或使用瀏覽器儲存。
+- **決策**：`src/workbench-app.ts` 的 `resultActions(item)` 同時供列表與表格使用；釘選使用目前 `state.library.pinned` 判斷文案，新增／取消分別呼叫 `PUT`／`DELETE /api/library/pinned`，取消只送 `path` 與 `reference`；分類呼叫 `POST /api/library/groups/:id/items`。所有 payload 只使用完整絕對路徑、stable reference 與顯示名稱。
+- **一致性**：釘選操作先以 session-local 暫存狀態更新按鈕，並以 `libraryActionChain` 依序送出釘選／分類請求；成功後重新讀取文件庫並清除暫存，失敗則回復原本釘選集合、重新讀取並顯示本機錯誤。成功 toast 只在 API 成功後顯示，不把失敗假稱為已保存。
+- **取捨**：不修改搜尋結果、排序、索引 schema 或文件內容，不使用 browser storage、外部服務或新 endpoint；後續 API 行為以 SPEC §95 為準。
+- **驗證**：`test/m90.test.ts` 驗證列表／表格操作與 API 呼叫點及反向斷言；`scripts/ui-smoke.mjs` 在 1920×1080、1440×900、1180×800 以隔離合成資料實際驗證釘選／取消釘選／分類請求。
+
+## D125：工作台上下文採常駐側欄，Codex prompt 只複製絕對路徑（2026-10-02）
+
+- **背景**：工作台原本以遮罩抽屜承載上下文預覽，無法在瀏覽結果、臨時文件與頁面操作間保持可見；使用者要把選取文件交給 Codex 時，只需要可貼上的本機路徑，不需要文件內容或自動送出。
+- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 320 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
+- **路徑規則**：前端只收集已選索引結果中的完整絕對路徑，以穩定順序去重後用 `join("\n")` 產生剪貼簿文字；不加標題、標記、檔名、正文或尾端說明，也不自動送出。上傳臨時文件若沒有原始絕對路徑，側欄可以顯示其 session 項目，但排除於 prompt，禁止用檔名冒充路徑。
+- **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
+- **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
 
 ## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
 
@@ -1071,6 +1172,30 @@
 - 新程序若讀到前一程序 `running`／`stopping` 但 PID 已死亡，改顯示「已中斷」而不偽造完成；普通索引會依既有 metadata 略過已提交文件、繼續檢查未完成部分。狀態檔只作診斷／恢復提示，寫入失敗不能讓索引本身失敗。
 - Workbench 頁面在索引中每 750 ms 讀取狀態，保留最後成功狀態以避免暫時 SQLite busy／locked 變成「未知」；停止先送取消，兩秒仍未離開安全點才終止 worker。這不能中斷單次不可取消的 parser 內部運算，但能恢復 HTTP 控制面，下一次索引依已提交交易接續。
 
+## D078：Trace 必須有獨立 UI 與有界 JSONL 持久化
+
+- 日期：2026-09-26。僅把 trace 放在 response、stderr 或程序記憶體不足以追查長時間／間歇性問題；新增獨立 Workbench `/traces#<token>` 頁面與 token-protected `GET /api/traces`，可查看最近 search／answer、篩選類型／狀態、phase bars、counts、bottleneck、錯誤碼與 raw JSON。
+- 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
+- logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
+- 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
+
+## D077：每次搜尋使用同一份 structured Diagnostics／Performance Trace
+
+- 日期：2026-09-26。搜尋問題需要知道總耗時、實際 phase、候選來源、文件／payload 數量、exact verification、結果數與瓶頸；trace 另外以 `bottleneck` 指出 phase 中耗時最高者。沿用既有 `performance.now()` profile／phase timing pattern，新增單一 `SearchTraceRecorder`，不引入第二套 logging framework。
+- trace 在 query normalization、FTS postings／restricted ids、document enumeration、document／payload Bloom、payload lookup／Brotli decompression、exact verification、ranking 與 snippet materialization 的實際 code path 累計量測。Bloom 已排除的文件在 trace 中可見，但不得進 exact verification；`candidateStrategy` 由實際來源推導。
+- 無 index 的 Workbench 搜尋仍回 schema-complete trace，以空 `candidateSources`／`candidateStrategy=none` 表示沒有候選管線；這與已建立索引但零命中的 `postings` trace 分開，避免診斷混淆。
+- 可見性同時提供程序內與有界持久化：`SearchResultSet.trace`、`SearchSession.trace`、`IndexStore.lastSearchTrace()`、MCP／Workbench `trace` 欄位、CLI `--verbose` 的 `SEARCH_TRACE <JSON>` 與 `/traces` UI。trace 不寫 SQLite／profile；完成事件寫入本機 `trace.log` JSONL，保留 query／question 但不保存文件內容。
+- `/api/ask` 另用同一 instrumentation pattern 的 `AnswerTraceRecorder` 記錄 context build、preview validation、provider request、response parsing 與 fallback attempt；response、`WorkbenchHandle.lastAnswerTrace()` 與本機 JSONL log 提供 schema version 2。只記 question、route、phase、bytes／counts，不記 key、context 或 answer 正文。
+- SearchSession 會暫停 recorder 以排除使用者停留時間；page／passage 物化仍記錄實際 payload reread、decompression 與 snippet，讓長期診斷能區分候選、I/O、解壓與展示階段。traceId 與 status/errorCode 讓 UI／log 可把成功、失敗與同一事件對回。
+
+## D076：以 FTS5 unigram／trigram postings 取代全文件候選掃描
+
+- 日期：2026-09-26。依新搜尋需求加入兩個 contentless FTS5 虛擬表：`search_unigrams` 將正規化 Unicode code point 編成 token，供一、二字查詢；`search_trigrams` 保存正規化全文，供三字以上查詢。每個文件各有一列，`rowid` 綁定 `documents.id`，正文仍只存在既有 64 KiB Brotli payload。
+- FTS postings 是候選文件的第一來源；phrase 與 all-terms 先在 postings 取交集，再沿既有 Bloom／payload pruning 讀取必要 payload，最後保留原有全文核對、檔名層、排序、snippet、reference。FTS 只可排除不可能文件，不能直接作最終命中判定。
+- `ngram_index_version=1` 與每文件 `ngram_1` marker 使遷移可中斷後接續；每份文件的 postings、marker 單一交易提交，payload bytes 不重壓縮。舊 content payload 遷移同樣逐文件提交並檢查取消訊號。唯讀 CLI、status、MCP 只回報未完成並使用保守 fallback，不建表、不遷移、不寫 marker。
+- upsert、remove、root cleanup 在同一寫入交易清掉舊 postings；replace 不改文件 ID，避免 stable reference 變動。FTS5 需要 `contentless_delete=1`，以支援明確 rowid 清理。
+- Workbench 遇到 `format.needsUpgrade` 回 `202 pendingUpgrade`，背景 writer 執行 upgrade；前端輪詢狀態後重新送出原查詢。新增 benchmark 比較停用 FTS fallback 與 FTS postings 的 index time、SQLite bytes、RSS 及 rare/common/two-character/three-character/long-phrase 查詢。
+
 ## D075：工作台搜尋、更新與拖曳失敗皆使用真實可控狀態
 
 - 日期：2026-09-26。工作台搜尋欄位、根目錄、格式、解析狀態與排序皆由 server 搜尋契約套用，不保留只改文字的假控制項。相關性固定為檔名完全符合、檔名包含、標題、內容，同級以修改時間再路徑排序。
@@ -1096,17 +1221,17 @@
 - Windows 工作台由 loopback server 透過目前使用者的 PowerShell `FolderBrowserDialog` 取得選取路徑；瀏覽器先顯示唯讀選取結果，只有「確認並建立索引」才呼叫既有索引入口。
 - 取消選擇或未確認不送出索引；非 Windows 若沒有原生選擇器則清楚提示並保留 CLI `index <資料夾路徑>` 入口。臨時文件的瀏覽器選取仍是另一個只留工作階段的流程。
 
-## D070：0.37.0 登入啟動採目前使用者 Startup 捷徑
-
-- 日期：2026-09-25。`autoupdate startup enable|disable|status` 僅在 Windows 實作；預設關閉，enable 不立即啟動 daemon，disable 不影響現存 daemon。
-- enable 在目前使用者 Startup 資料夾建立產品專屬 `.lnk`，固定指向目前 `node.exe` 與編譯 CLI，透過 `--data-dir` 綁定實際索引資料目錄。使用 PowerShell COM 並以 encoded command／環境變數傳遞路徑，不拼接未跳脫 shell 命令。
-- 以旁邊的產品擁有權 marker 驗證可更新或刪除的捷徑；同名非本產品檔案拒絕覆寫，disable 不刪除。政策拒絕、路徑搬移與非 Windows 平台明確回報，手動 `autoupdate start` 保留。
-
 ## D071：0.37.0 all-terms 以必要長詞 Bloom 做文件候選縮減
 
 - 日期：2026-09-25。all-terms 的文件級 Bloom 判定改為所有不在檔名中的必要長詞都必須可能存在；缺任一長詞即可安全排除，全部短詞仍完整精確掃描。
 - payload 級仍只在沒有短詞時縮小候選 payload；混合長短詞必須讀取完整文件 payload，避免長詞與短詞分散時 false negative。缺少或舊版 Bloom 一律保守放行。
 - filename-only 命中不受正文 Bloom 排除；排序、精確判定、snippet、passages 與 phrase 模式不變。測試涵蓋中文／英文、檔名命中、跨 payload、短詞與缺詞。
+
+## D070：0.37.0 登入啟動採目前使用者 Startup 捷徑
+
+- 日期：2026-09-25。`autoupdate startup enable|disable|status` 僅在 Windows 實作；預設關閉，enable 不立即啟動 daemon，disable 不影響現存 daemon。
+- enable 在目前使用者 Startup 資料夾建立產品專屬 `.lnk`，固定指向目前 `node.exe` 與編譯 CLI，透過 `--data-dir` 綁定實際索引資料目錄。使用 PowerShell COM 並以 encoded command／環境變數傳遞路徑，不拼接未跳脫 shell 命令。
+- 以旁邊的產品擁有權 marker 驗證可更新或刪除的捷徑；同名非本產品檔案拒絕覆寫，disable 不刪除。政策拒絕、路徑搬移與非 Windows 平台明確回報，手動 `autoupdate start` 保留。
 
 ## D069：0.37.0 背景校正採可接續批次並釋放 writer lock
 
@@ -1152,13 +1277,6 @@
 - `docs/design/seekah-tui.html` 只使用明示的示範資料，供 120×40／80×24 外觀審閱；不把 agent activity、AI 回答、daemon 或假索引統計列為產品需求。
 
 
-## D059：核准 GUI 稿落為 0.36.2 規格，優先於 0.37.0
-
-- 日期：2026-09-24。使用者要求照 D058 設計稿寫 SPEC，再由 Luna Max 實作。以 SPEC §47 定義 0.36.2 相容 GUI 改版；0.37.0 既有規劃暫緩，不混入本批。
-- 正式工作台保留全部現有能力，尤其原型缺少的 Key／model 設定與 AI 回答；補受保護的唯讀索引狀態 API，其餘重用既有搜尋、上傳、預覽與 Provider。
-- 原型的假 bytes／事件／文件計數不能成為實作。容量只接受 server 預覽 bytes，未知如實顯示；命中預覽不是全文。只複製不要求 Key，外傳仍需 HMAC、來源重驗與明確同意。
-- 固定交接入口改為 0.36.2，提供指定給 Luna Max 的實作 prompt。本工具介面無模型切換功能，沒有宣稱已切換或已啟動；規格提交不改 package、程式或發佈包。
-
 ## D062：0.36.2 正式 GUI 只補狀態讀取，維持本機安全邊界
 
 - 日期：2026-09-24。依 SPEC §47 完成正式三區工作台；外觀原型不作資料來源，搜尋／parser／context／Provider 服務維持單一契約。
@@ -1166,6 +1284,13 @@
 - 精確 bytes 只採 server context 預覽，選取／Provider／model／問題／目的地改變即失效；AI preview HMAC 單次消費，`auto` 只在 quota／rate limit fallback 一次。Key、文件與查詢不持久化。
 - 本批不修改 TUI、不實作 0.37.0，不改既有資料路徑、schema、parser selection、MCP／IPC 識別或 LAN 邊界。
 
+
+## D059：核准 GUI 稿落為 0.36.2 規格，優先於 0.37.0
+
+- 日期：2026-09-24。使用者要求照 D058 設計稿寫 SPEC，再由 Luna Max 實作。以 SPEC §47 定義 0.36.2 相容 GUI 改版；0.37.0 既有規劃暫緩，不混入本批。
+- 正式工作台保留全部現有能力，尤其原型缺少的 Key／model 設定與 AI 回答；補受保護的唯讀索引狀態 API，其餘重用既有搜尋、上傳、預覽與 Provider。
+- 原型的假 bytes／事件／文件計數不能成為實作。容量只接受 server 預覽 bytes，未知如實顯示；命中預覽不是全文。只複製不要求 Key，外傳仍需 HMAC、來源重驗與明確同意。
+- 固定交接入口改為 0.36.2，提供指定給 Luna Max 的實作 prompt。本工具介面無模型切換功能，沒有宣稱已切換或已啟動；規格提交不改 package、程式或發佈包。
 
 ## D058：本機工作台 GUI 採三區工作流設計，先交互動稿
 
@@ -1282,111 +1407,237 @@
 - 文件處理進度固定兩位小數，分母包含全部已發現文件，修正未變更分支計數；預設節流與彙總，詳細錯誤由 status --issues 查詢。status --types 統計 metadata，容量顯示檔案長度合計，全部唯讀。
 - 1113.18 MiB 已獲使用者接受，先觀測新格式影響；不自動 VACUUM，不改系統目錄排除範圍。當時另列的背景自動更新管理現已進入 0.31.0／D047；具體 PDF／PPTX 修復仍為後續待辦。0.29.1 人工成功不等於同步完整或所有文件解析成功。
 
-## D001 — 使用 Node.js 與 TypeScript
+## D045：擴大根目錄以原子歸屬轉移整併既有子根
 
-- 狀態：已確認
-- 決策：以 Node.js 22.17.0 x64 為目標環境，應用程式碼採用嚴格模式 TypeScript。
-- 原因：公司電腦可以執行 Node.js，已技術驗證 npm 套件可用，而且沒有可用的 .NET SDK。
+- 日期：2026-09-22。使用者要求把 `D:\備份` 擴大到 `D:\` 的支援架構加入 SPEC。§37 取代父子根一律拒絕的預定行為；0.29.0 已依規格實作。
+- 保留單一文件歸屬，新增根目錄操作計畫及短交易轉移，不以刪除原根再重新索引實作合併。文件 ID、payload 與既有搜尋代碼均保留；長掃描在合併提交後進行，中斷仍有可讀的舊成果。
+- 排除作用域存於 `root_ignore_scopes`，合併歷史存於 `root_merge_history`，schema 標記 `root_merge_version=1`。上層規則與適用子根規則共同約束。已涵蓋子樹可單獨增量同步，但不得宣稱上層已完整同步。
+- 同步、搜尋篩選、監看與根移除共同理解合併後的歸屬；不得呼叫會刪文件的 removeRoot 來合併。
+- 2026-09-22 補：Windows 命令列把 `"D:\"` 的尾端反斜線當成跳脫，argv 變成 `D:`；全形 `＼` 也不是路徑分隔符。輸入層將僅磁碟代號或全形分隔符正規化為 `D:\`，涵蓋判斷仍以路徑元件進行，不以字串 `D:` 當前綴。磁碟根目錄請優先寫 `D:/`。
 
-## D002 — 文件僅在本機處理
+## D044：以文件級 AND 逐層縮小完整搜尋結果
 
-- 狀態：已確認
-- 決策：文件解析、建立索引與搜尋都留在使用者電腦。
-- 原因：不得假設公司文件可以傳送給外部 AI 或 embedding 服務。
+- 日期：2026-09-22。使用者回報 0.27.0 人工驗收成功後，確認需要結果內搜尋，並要求加入規劃；0.28.0 已依 SPEC §36 實作。
+- `/ 關鍵字` 只在目前完整候選集合追加條件，各層為文件級 AND；必須核對完整已索引內容，包含未顯示頁面與片段以外的內容。原查詢模式、格式與根目錄限制延續。
+- back／reset 讓縮小過程可逆；顯示條件鏈與目前／最初總數，單頁或零結果仍可操作。保留最初相對排序，片段展示最新條件的命中，幫助使用者理解文件為何留下。
+- 實作依 SPEC §36 先建立搜尋工作階段及候選範圍，再接 CLI 與回歸；維持純本機唯讀，索引變更時要求重搜。
 
-## D003 — 可用 MVP 必須支援多種格式
+## D043：搜尋採穩定結果集分頁，XML 採安全原文解碼
 
-- 狀態：已確認
-- 決策：可用 MVP 包含 Markdown、純文字、DOCX、PPTX、XLSX 與文字型 PDF。
-- 原因：只支援 Markdown 無法解決使用者真正的文件搜尋需求。
+- 日期：2026-09-22。使用者實測常見字 `APPLICATION` 時，前 20 筆高順位檔名命中遮住後方正文，且舊輸出沒有總數，容易被誤認為只有 20 筆。搜尋因此改成一次收集排序 metadata、按頁回讀片段；互動 TTY 翻頁，非互動以明確頁碼操作，舊 `--limit` 僅作相容單次輸出。
+- 不採資料庫 offset 重新執行每一頁，因現有排名需全文精確核對且翻頁期間索引可能改變。工作階段保留輕量命中 metadata，不保留 SQLite iterator；以 `PRAGMA data_version` 偵測外部提交，變更時要求重搜。
+- `.xml` 不套用 HTML 的文字抽取，也不建立 XML DOM。產品需求包含 `<User>dbla</User>`、設定標籤與屬性，因此保存逐行原文最符合可預期搜尋；只做本機字元解碼，不處理 DTD／entity，避免外部資源與實體展開風險。
+- XML 解碼以標準訊號決定編碼並採嚴格失敗；無法解碼時保留錯誤 metadata，不能以替代字元靜默污染索引。既有 unsupported XML 沿用增量同步的「新支援格式重試」機制，一次普通 index 即可升級。
 
-## D004 — 透過統一模型逐步交付各格式
+## D042：以固定 SQL 參數傳遞候選集合
 
-- 狀態：已確認
-- 決策：先以 Markdown／純文字打通完整掃描到搜尋流程，再加入 Office 與 PDF 解析器，且不改寫搜尋核心。
-- 原因：這能控制實作風險，同時不會把最終產品縮減成只支援 Markdown。
+- 日期：2026-09-22。公司搜尋與本機 40,000 區塊回歸均證實 SQL 綁定參數超限。以 json_each(?) 展開候選 payload／block 數字陣列，兩階段查詢分別固定為 2／3 個參數；維持唯讀、不建立暫存表、不修改索引格式。
+- 公司獨立測試通過而全套並行逾時，預設測試改為逐檔，保留內部真正的跨程序鎖競爭及原期限。watch 靜態引用 sync 會連帶載入所有 parser，改為 runWatch 時才動態載入。
 
-## D005 — 優先使用已在公司環境測試的套件
+## D041：Windows 鎖等待必須在 DatabaseSync 開庫時設為零
 
-- 狀態：已確認，但保留公司政策限制
-- 決策：規劃使用 `fflate`、`fast-xml-parser` 與 `pdfjs-dist`；可行時採用 Node.js 內建 SQLite。
-- 原因：這些套件已在公司電腦成功載入，但技術上能執行不等於公司已正式核准。
+2026-09-22 更正：當時將開庫 timeout 當作逾時根因的推論未獲證實。公司 0.26.2 逐檔測試通過、並行全套仍逾時；保留零等待設定，但不能稱為已驗證的效能修正。
 
-## D006 — 專案文件統一使用繁體中文
+- 日期：2026-09-21。公司 Windows／Node.js 22.17.0 執行 0.26.1 全套測試得到 142 通過、4 失敗、2 略過；M13 一項及 M24 兩項都在 CLI 子程序的五秒期限耗盡，M9 則在含空白與括號的下載路徑經 `cmd.exe /c` 呼叫失敗。
+- Node.js 22.16.0 已加入 `DatabaseSync` 的 `timeout` 建構選項，目標 22.17.0 可用。主索引唯讀／寫入連線與 writer 協調連線均在建構時傳入 `timeout: 0`，再保留分開的 PRAGMA；這讓 busy handler 在任何 schema／狀態查詢或 `BEGIN IMMEDIATE` 前生效。
+- 不放寬產品或測試的五秒期限。M9 測試改由暫存批次檔呼叫含特殊字元的 launcher 路徑，避開 Node argv 到 `cmd /c` 的額外引號解析，同時保留不同 cwd 的驗證目的。
+- GitHub 原始碼壓縮檔不含編譯產物；加入 npm `prepare`，使 `npm ci` 直接建立 `dist`。這是安裝流程修正，不改搜尋、索引資料或文件內容。
 
-- 狀態：已確認
-- 決策：所有說明文件、SPEC、狀態、交接與決策紀錄使用繁體中文；程式識別字、命令與通用技術名稱保留英文。
-- 原因：使用者需要直接審閱、驗收並將文件整理成書審與面試材料。
+## D040：M23 修正版將遷移移出開庫，逐文件接續且不重壓縮
 
-## D007 — M1 索引位置與搜尋新鮮度
+- 日期：2026-09-21；0.26.1 已依 SPEC §34 實作。取代 D039 的全庫單一遷移交易及 D036 在共用開庫時自動遷移的做法；單份文件更新的原子性仍保留。
+- 公司診斷副本顯示 610 文件、219,518 區塊且缺 payload_bloom_version；共用初始化因此對 index／status 都執行全庫遷移。已定位路徑，尚未量測各熱點成本，不能歸因於解析逾時。
+- 唯讀操作不建表、不遷移、不回復 hot journal；明確回報需要升級、忙碌或 INDEX_RECOVERY_REQUIRED。回復與遷移放在持有跨程序寫入鎖的明確寫入流程，先顯示階段。
+- 已是內容格式 2 的資料只逐 payload 建立摘要及對應，保留原壓縮 bytes；使用 ID／Map 查找，消除 O(B²) 掃描。每文件的衍生資料及完成標記原子提交，全部完成才寫全庫版本，中斷後接續。
+- 搜尋對未完成摘要採完整核對；即時進度及取消能力涵蓋升級與索引各階段。610 文件／219,518 區塊合成量測在目前 Mac 的 Node 26.7.0／22.13.1 均約一秒且 payload bytes 不變；仍需公司 Windows／Node 22.17.0 複驗。本次不調整解析期限、不改產品搜尋語意。
 
-- 狀態：已確認
-- 決策：Windows 預設將 SQLite 索引放在 `%LOCALAPPDATA%\LocalDocSearch`；`search` 只查既有索引，文件變更後由使用者再次執行 `index`。
-- 原因：使用者選定此行為；索引不會混入可攜式程式目錄，搜尋延遲也不包含掃描時間。
+## D039：M23 以 payload 級 Bloom 縮小解壓範圍
 
-## D008 — 單檔大小上限
+- 日期：2026-09-21。M22 已能略過整份不可能文件，但常見詞仍使大型文件的全部 payload 解壓。保留文件級 Bloom 作第一層，再為每個 Brotli payload 保存固定 1 KiB 摘要及 payload／block 對應。
+- payload Bloom 只尋找「至少一個可能 trigram」，不能要求整條長片語的全部 trigram 都在同一 payload；否則跨 payload 文字會被錯誤排除。選中的 payload 會回讀其完整 block fragments，最後仍由原精確核對決定命中。沒有 payload 候選但文件級摘要可能命中時回退整份文件，優先避免邊界漏搜。
+- 代表片段回讀改依 block mapping 限縮至目標 block，避免排序後又解壓無關 payload。新 mapping／摘要遷移受單一 transaction 保護；缺資料一律走既有完整讀取，而非靜默省略。
 
-- 狀態：已確認
-- 決策：M1 單檔大小上限為 100 MB；超限文件保留基本資訊與可搜尋檔名，狀態為 `too_large`。
-- 原因：限制大型文件讀取造成的記憶體負擔，並保留基本查找能力。
+## D038：M22 以文件級 trigram Bloom 作純排除候選
 
-## D009 — M2 Office 格式透過 ZIP／XML 解析器接入
+- 日期：2026-09-20。M21 仍對每份文件解壓與正規化；採固定大小 Bloom 可用極小空間跳過罕見三字以上查詢的不可能文件。
+- Bloom 不儲存正文、不能作搜尋結果依據，且可能誤判為候選；只有「缺少某個必要 trigram」才能跳過文件。短詞與舊資料庫一律回退完整核對，正確性優先。
 
-- 狀態：已隨 M4 由使用者於 2026-09-16 回報驗收完成
-- 決策：使用 `fflate@0.8.3` 讀取 Office ZIP，使用 `fast-xml-parser@5.11.1` 擷取 XML，將 DOCX、PPTX、XLSX 內容轉成既有文字區塊模型；不將文件內容傳出本機。
-- 原因：沿用已技術驗證的純 JavaScript 套件與 M1 搜尋核心。ZIP 中需要解壓的 XML／關聯資料合計限制為 200 MB，以降低異常壓縮檔造成的記憶體風險。
-- 限制：XLSX 的常見數字與日期格式可轉成可讀文字；複雜自訂格式可能與 Excel 畫面不同，需以實際文件驗收與後續修正。
-- 超連結：DOCX 解析正文的一般 hyperlink、欄位型 HYPERLINK，以及 `word/` 下各部件的 hyperlink relationship；圖形或頁首頁尾等無法對應正文位置的網址另存文字區塊並標示來源部件，拆成多個 run 的欄位指令合併解析。XLSX 解析各工作表的 relationship、hyperlink 節點、文件內位置與提示。沿用既有搜尋核心。
+## D037：M21 搜尋從文件批次 payload 逐段產生 block
 
-## D010 — M3 PDF 文字層解析
+- 日期：2026-09-19。M20 已壓縮正文，但若 `streamCandidates()` 先解壓並建成整份文件 blocks 陣列，仍會放大大型文件搜尋的短暫記憶體。搜尋主路徑改接 generator。
+- payload 中的 `[blockId, contentFragment]` 保持原始 block 順序；讀取器只暫存當前 block 的跨 payload fragment，遇到下一 block 即交給搜尋。這保證跨 payload 的同 block 查詢不漏，而不同段落不會因串接誤命中。
 
-- 狀態：已完成並通過公司 Windows 實際文件驗收
-- 決策：使用 `pdfjs-dist@6.3.289` 從本機 PDF 位元組擷取每頁文字；CMap 與標準字型資料從安裝在本機的套件目錄載入。加密 PDF 記錄為 `encrypted`，沒有文字層記錄為 `no_text`，損壞 PDF 記錄為 `error`。
-- 原因：沿用先前技術驗證的套件，保留頁碼並支援中文文字層；不發送文件內容至外部服務。掃描影像的 OCR 不屬於 MVP。
-- Windows 修正：PDF.js 要求 `cMapUrl` 與 `standardFontDataUrl` 以正斜線結尾；資源路徑統一轉為可供 Windows `fs` 讀取的正斜線形式，避免原生反斜線觸發 `Invalid factory url`。
-- 重試政策：增量索引會重新解析狀態為 `error` 的未變更文件，使解析器修正生效時不必由使用者刪除索引；已成功、`no_text`、`encrypted` 與 `too_large` 的未變更文件仍會略過。
-- 驗收：使用者於 2026-09-15 回報 PDF Windows 資源路徑修正版成功解析實際文件。
+## D036：M20 以 SQLite 關聯的獨立 Brotli payload 保存正文
 
-## D011 — M4 重建、排除與同步狀態
+- 日期：2026-09-19。M19 證實片段暫存不是 RAM 的唯一來源，且原始實驗顯示 64 KiB Brotli 分塊的總儲存量顯著低於現況。因此先改內容層，不先加入可能膨脹索引的 FTS 或 Bloom。
+- 區塊 metadata 保留在 `blocks`；正文存入外鍵相連、每塊可獨立解壓的 payload 表。這讓更新與刪除能受既有 SQLite transaction 和 cascade 保護，也讓未來候選索引可只指向 payload，而不複製正文。
+- 遷移採「先寫 payload，再確認寫入，最後清除舊正文」的單一 transaction。讀取時暫容忍舊正文，以利從舊版資料庫無中斷升級；任何資料不完整都視為索引錯誤，不靜默回傳漏字結果。
+- 初步先由讀取層重組單一 text block，優先保住精確搜尋結果；後續再將搜尋核對下推至 payload 串流並加入候選過濾。不可將完成壓縮儲存誤稱為已完成最終 RAM 最佳化。
+- 實作量測修正：真實資料有 115,618 個小文字區塊；每 block 一個 Brotli blob 使 SQLite 列與 frame 開銷反而將資料庫推至 19.31 MiB，較 17.70 MiB 現況更大。因此正式 payload 必須至少以文件為單位合併小 block 至約 64 KiB，並另存 block 對 payload 的範圍；不得交付一 blob 一 block 的中間設計。
 
-- 狀態：已完成；使用者於 2026-09-16 回報 M4 驗收完成
-- 決策：單一根目錄使用 `.localdocsearchignore` 保存排除規則，採用不依賴額外套件的有限 glob 語法；`rebuild` 使用資料庫 transaction 清空衍生文件資料後，重新索引目前根目錄。
-- 決策：同步紀錄分為「最後嘗試」與「最後完整同步」。掃描或讀檔不完整時保留既有索引中的未確認路徑，並在 `status` 保存最近錯誤；文件解析錯誤則保存文件基本資訊並於後續索引重試。
-- 原因：排除設定需跟著來源目錄並供重建沿用；保守刪除可避免權限或暫時讀取錯誤被誤判成來源文件刪除。所有清除操作只作用於明確開啟的 SQLite 索引，不刪除來源文件或寬泛路徑。
-- 限制：初版 glob 不支援 `!` 重新納入；多根目錄與全機模式留待單一根目錄可靠性驗收後擴充。
+## D035：M19 片段採區段定位與有界前後文
 
-## D012 — M5 借鑑開源專案完善品質與交付
+- 日期：2026-09-19。M18 移除 SQLite 整庫載入後，正式連續搜尋仍出現高 RSS；量測定位到 `makeSnippet()` 對超大命中區塊建立完整 Unicode 來源範圍與前後文陣列。這是顯示層暫存，而非索引或 SQLite 快取。
+- 正常路徑以 code point 邊界分段核對完整 NFKC／小寫結果，並逐 code point 直接定位命中來源；前後文以有限收集器產生。組合字或語境大小寫無法逐點證明等價時，才只為命中小區段建立保留 grapheme 的來源範圍。避免把 `Intl.Segmenter` 套用於整份多 MB 原文，讓一般文字的額外配置量受片段上限約束。
+- Unicode 的跨區段正規化或大小寫語境若使分段結果與完整結果不一致，立即使用既有完整映射作保守回退。回退罕見但可能耗用較多記憶體；不可為了節省記憶體而犧牲命中位置正確性。
+- 本版只消除已量測的摘要熱點，不開始 Brotli schema 遷移。壓縮塊仍是下一個資料儲存里程碑，需另行處理遷移、transaction、一致性與實測。
+
+## D034：M18 先以 SQLite 串流讀取移除整庫 JavaScript 載入
+
+- 日期：2026-09-19。依使用者要求開始改動，先實作 D033 風險最低的一步。SQLite schema、內容、查詢語意與 CLI 均維持不變；只替換讀取迴圈。
+- Store 提供文件列與單一文件區塊的 iterator。搜尋掃完目前文件再前進，檔名命中不讀 blocks；context passages 直接定位單一文件。
+- 搜尋結果仍需要保存命中的文件以排序和套用 limit，這是有界於文件數的必要資料；不得保存所有文字區塊或所有正規化全文。
+
+## D033：索引瘦身先拆成串流、壓縮與候選三階段
+
+- 日期：2026-09-19。使用「測試用資料」比較現況、逐列串流、每文件 Brotli、64 KiB Brotli、FTS5 trigram 與 Bloom trigram；12 組完整命中集合全部一致。
+- 現況資料表只改逐列搜尋，峰值 RSS 即由 477.6 MiB 降至 104.7 MiB，證明 RAM 問題主要來自 `candidates()` 一次具體化整庫。下一版先修這個讀取路徑，不等待 schema 遷移。
+- 儲存方向選 64 KiB 左右的獨立 Brotli 塊：4.46 MiB，為現況 25.2%；不採更小的每文件單塊，因為大型文件需整份解壓。這是原型方向，正式 chunk 邊界仍須保證片段、位置與更新原子性。
+- FTS5 方案為 12.16 MiB，候選效果與 6.02 MiB 的 Bloom 接近，因此不列為首選。Bloom 保留為壓縮後的第二階段實驗，不能先於精確串流核對器；一、二字仍必須退回掃描。
+- 原型沒有取代產品後端；正式行為變更必須另開里程碑、更新 SPEC 並補增量、崩潰恢復、排序、片段與遷移測試。
+
+## D032：M17 將掃描範圍升級為完整檔案清冊
+
+- 日期：2026-09-19。使用者指出遞迴掃描即使遇到尚未支援的格式，也應知道檔案存在；因此所有未被排除的一般檔案都進 `documents`，而不是只保留內容解析器支援的格式。
+- 支援格式維持全文解析。其他副檔名與無副檔名檔案採 metadata-only：只 `stat` 並保存路徑、檔名、類型、大小和修改時間，狀態為 `unsupported`，不讀正文、不建立 blocks，也不製造逐檔錯誤訊息。
+- `--type` 改為接受安全的任意副檔名，open／reveal 以「已索引且仍位於所屬根目錄」作安全邊界，不再以解析器格式白名單拒絕。排除規則與連結政策不變。
+- 未來加入新解析器時，既有同格式 `unsupported` 文件必須在下一次增量索引重試。這一版只修清冊完整性；壓縮內容與候選索引仍依獨立實驗決定，避免把正確性修正和儲存後端改造混在同一版。
+
+## D031：M16 以顯式 all-terms 補足片語搜尋缺口
+
+- 日期：2026-09-18。使用者要求略過 M15 人工測試並繼續下一版。現有搜尋將整段查詢視為連續子字串，對日常用數個記得的詞找文件不方便；新增 `--all-terms`，不改預設語意。
+- 詞以 Unicode 空白切分，不加入引號、布林、模糊、同義詞或中文斷詞語法。全部詞可分散於同一文件的檔名、標題和內容區塊，避免要求使用者記得原句與詞序。
+- 仍使用線性掃描既有本機索引與可解釋排序，不新增 FTS schema、embedding 或外部服務。代表片段依詞涵蓋數、標題優先及 ordinal 決定；context 的重搜驗證必須保留相同模式。
+- context JSON 升 schemaVersion 4 並記錄 `matchMode`，Markdown 同樣標示，避免相同查詢文字在日後無法分辨是片語或全部關鍵字。
+
+## D030：M15 以明確選用的本機剪貼簿降低交付摩擦
+
+- 日期：2026-09-18。使用者回報 0.17.1 公司 Windows 驗證通過並詢問下一步；依 STATUS 已排定的方向，先縮短已選上下文帶入討論的操作，不直接連接特定 AI、IDE 或聊天帳號。
+- `--clipboard` 與 `--out` 二選一，完整預覽和逐字 `yes` 不變。剪貼簿模式預設 Markdown，適合貼入討論；不提供非互動同意或自動傳送。
+- 文件內容只經子程序 stdin 傳給 macOS `pbcopy` 或固定 Windows PowerShell `Set-Clipboard`，不放入 argv、環境變數、stderr 或 shell。仍受作業系統剪貼簿歷程、同步設定及其他本機程式影響，因此預覽時明示此界線。
+- 測試以注入寫入器驗證內容、時序、取消與錯誤，不碰真實剪貼簿；平台啟動計畫另測 Unicode 輸入設定與無 shell 插值。
+
+## D029：M14 Windows 實測失敗以 0.17.1 修正
+
+- 日期：2026-09-18。使用者在公司 Windows 執行 0.17.0 `npm test`，M13 寫入鎖競爭案例在 10 秒後逾時且整體約 65 秒，M9 從任意工作目錄啟動 `docsearch.cmd` 時被 `cmd.exe` 錯誤解析；OEM code page 錯誤文字又被測試當作 UTF-8 顯示成亂碼。
+- 寫入協調仍採獨立 SQLite 交易。將 `PRAGMA busy_timeout = 0` 與 `BEGIN IMMEDIATE` 分為兩次呼叫，確保先安裝零等待 busy handler；同時辨識 SQLite extended BUSY／LOCKED code。測試直接斷言競爭在一秒內回報，CLI 子程序各有五秒期限，避免同步 API 卡住後掩蓋真正位置。
+- cmd 測試不再自行組合首尾巢狀引號。批次檔絕對路徑放入測試專用環境變數，再以 `cmd.exe /d /c call` 啟動；失敗訊息只列結束碼、signal 與 Node error，不顯示可能採 OEM code page 的 cmd 錯誤位元組。
+- 這些變更修正 Windows 入口與鎖競爭契約，不改產品索引資料、搜尋或 context schema。macOS Node.js 22.17.0／26.7.0 回歸通過；Windows 必須以 0.17.1 再跑後才可標示通過。
+
+## D028：M14 跨查詢累積人選上下文
+
+- 使用者將目前 macOS 電腦改為優先執行環境，Windows 驗收延後且不再阻擋版本迭代；仍維持 Node.js／TypeScript、純本機與不自動外傳。
+- `context` 工作階段可用 `s <查詢>` 切換候選並保留已選文件；用 `b` 檢視跨查詢清單、`r <編號>` 移除。最多仍為 20 份文件，同一路徑只出現一次並保留首次選取時的查詢依據。
+- JSON 升為 schemaVersion 3，頂層列出 `queries`，每份文件與每段命中記錄所屬 `query`。保留頂層 `query` 與文件既有欄位，讓既有讀取端有明確主要查詢可用。
+- 切換查詢不呼叫模型、不改寫關鍵字、不掃描來源；只查本機索引。匯出前後分別以各文件的選取查詢重新驗證索引與來源。
+
+## D027：M13 獨立 SQLite 交易作寫入互斥
+
+- 用主索引實際路徑旁的 .writer.sqlite 協調檔，以 BEGIN IMMEDIATE 持有跨程序單一寫入交易；不把漫長解析包在主索引交易，不用移除過期 PID 檔。檔案保留，關閉交易即釋放鎖。
+- [SQLite 交易文件](https://www.sqlite.org/lang_transaction.html) 說明 IMMEDIATE 的互斥與 SQLITE_BUSY。本版另用獨立程序被終止測試恢復；不冒稱 Windows 已驗收。
+- 忙碌不改主索引報告；watch 防抖後重試。鎖內再驗證登錄範圍，避免移除與掃描交錯復活資料。
+
+### M13 證據補充（2026-09-17）
+
+逐項盤點目標與現況，新增 GOAL-AUDIT.md；用現版重跑既有合成基準，另存 benchmark-m13-node22.json／M13-PERFORMANCE.md，保留 M5 歷史結果。不同 Node 版本不作速度優劣對比，macOS 數據不代替 Windows 驗收。不因持續開發授權而自動擴大 GUI／AI 範圍。
+
+## D026：M12 以定期增量校正補償監看遺漏
+
+- 依使用者持續開發授權，補足 FR-11 的事件僅作提示原則。預設每次同步完成後 5 分鐘再校正，可用 --rescan 調整或以 0 關閉。
+- 沿用純 Node、增量比對與原索引範圍。監看失效降級為定期掃描並重試；離線保留索引，恢復重新同步。非背景服務。
+- 測試注入計時器和監看器，使用真實暫存文件驗證漏事件修改／刪除、離線恢復與退出清理。
+
+## D025：M11 監看生命週期修正（0.14.1）
+
+- 先建立監看再初次同步，避免初始化期間的事件空窗；同步中的事件僅標髒，完成後再防抖補跑。
+- 停止時先關閉事件來源與計時器，再等待進行中的同步，最後由 CLI 關閉 SQLite。失效監看器不可繼續宣稱監看中；全部失效自動退出 3。
+- 沿用 M11 範圍，不新增服務或外部依賴。更正套件版本與既有 M10／M11 文件不一致。
+
+## D024：M11 用 Node fs.watch 做可選前台監看，不做系統服務
+
+- 日期：2026-09-17。使用者選擇「監看目錄自動增量 index」。
+- 決策：新增前台 `watch` 命令，依賴 Node 內建 `fs.watch({ recursive: true })` 與既有 `sync` 增量，不引入 chokidar／原生模組，不安裝 Windows 服務。
+- 決策：防抖合併事件，避免存檔連打造成重複全量掃描壓力；啟動時先 sync 一次以對齊現況。
+- 決策：只能監看已登錄根目錄，避免 watch 偷偷擴大索引範圍。
+
+## D023：M10 以多段命中與 Markdown 服務「可貼上的精準上下文」
+
+- 日期：2026-09-17。使用者明確要求繼續開發，不要把時間花在代理人自行驗收。
+- 決策：在不接模型的前提下，讓 `context` 匯出更適合手動貼進允許通道：每份文件可帶多個命中區塊，並提供 Markdown 格式。
+- 決策：JSON 升 schemaVersion 2，保留 M9 欄位以相容；新增 `passages`。預設 passages=3，上限 10，避免一次貼上過長。
+- 決策：仍禁止自動外傳／自動同意／覆寫；OCR／GUI／向量 RAG 不在本版。
+
+## D022：M9 先提供人選上下文檔，不自動接模型
+
+- 日期：2026-09-17。沿用使用者要求的精準上下文方向，透過 CLI 互動清單實作模式 A 的預選代碼與模式 B 的查詢輸入，共用分頁、選取、完整預覽及確認。
+- 僅匯出已選結果的原文命中片段與來源資訊，JSON 方便手動帶入或未來整合；不讀取整份正文、不匯出未選結果，不操作剪貼簿或任何 AI／聊天連線。檔名命中保留明確標示。
+- 確認不接受管線或 --yes，避免非互動批次把整批結果自動帶走；產品中的人選是本功能本身，不影響使用者已授權持續開發。
+- 預覽後核對原結果與當前索引，並檢查來源可讀性、大小與修改時間；偵測改變就拒絕，不靜默更換內容。這不是來源文件內容雜湊驗證，不承諾偵測刻意保持大小與 mtime 的變更。
+- 輸出採 exclusive create 防止覆寫，最多 256 KiB。控制字元在終端跳脫顯示，JSON 正確保存原始值；來源文字標註為資料而非操作指令。選取功能不代表外傳公司文件已獲許可。
+- 附加 docsearch.cmd，使用相對於腳本的 CLI 入口並傳回結束碼，不安裝服務或修改 PATH。Windows 實際批次檔測試在 macOS 明確略過，保留集中驗收。
+
+## D022：M9 先提供人選上下文檔，不自動接模型
+
+- 日期：2026-09-17。沿用使用者要求的精準上下文方向，透過 CLI 互動清單實作模式 A 的預選代碼與模式 B 的查詢輸入，共用分頁、選取、完整預覽及確認。
+- 僅匯出已選結果的原文命中片段與來源資訊，JSON 方便手動帶入或未來整合；不讀取整份正文、不匯出未選結果，不操作剪貼簿或任何 AI／聊天連線。檔名命中保留明確標示。
+- 確認不接受管線或 --yes，避免非互動批次把整批結果自動帶走；產品中的人選是本功能本身，不影響使用者已授權持續開發。
+- 預覽後核對原結果與當前索引，並檢查來源可讀性、大小與修改時間；偵測改變就拒絕，不靜默更換內容。這不是來源文件內容雜湊驗證，不承諾偵測刻意保持大小與 mtime 的變更。
+- 輸出採 exclusive create 防止覆寫，最多 256 KiB。控制字元在終端跳脫顯示，JSON 正確保存原始值；來源文字標註為資料而非操作指令。選取功能不代表外傳公司文件已獲許可。
+- 附加 docsearch.cmd，使用相對於腳本的 CLI 入口並傳回結束碼，不安裝服務或修改 PATH。Windows 實際批次檔測試在 macOS 明確略過，保留集中驗收。
+
+## D021：M8 多根目錄隔離與集中驗收
+
+- 日期：2026-09-17。使用者明確表示無時間逐版確認，授權持續開發；各版保留本機證據，整合後提供一份 Windows 清單，不以未回報驗收冒稱成功。
+- 新增 roots 與 document_roots，歸屬及文件更新在同一 transaction；舊 root metadata 與全部文件一次原子遷移，保留文件 ID、文字及原同步時間。不依賴來源可讀，離線也可完成資料庫升級。
+- 新增 index 位置不再清空其他位置。刪除、排除、重建均以歸屬限制；根目錄移除只刪衍生資料。根目錄各自保存同步摘要與最後完整時間，CLI 不以最新一次同步代表整體。
+- 父子重疊先明確拒絕，避免同份文件兩套排除政策；實際相同位置的別名沿用既有根目錄。搜尋 --root 依已登錄路徑查索引，不重新存取來源。
+- 批次同步根目錄失敗仍繼續其他位置，保存失敗紀錄並回傳 3。掃描不完整的重建保留未確認舊資料，已可讀的文件仍強制重解析。M7 開啟動作驗證文件自己的歸屬。
+
+
+## D020：M7 以固定文件代碼連接搜尋與開啟
+
+- 日期：2026-09-17。依 ROADMAP 進入 M7，版本 0.10.0；M5～M6 Windows 驗收仍保留。
+- 選擇 ID＋路徑雜湊代碼而非上一輪搜尋排名，無需保存全域「最後搜尋」，不同終端互不覆寫；重用 ID 到不同路徑不能誤開舊結果。代碼只是選擇工具，不是授權憑證。
+- 開啟前查目前索引、根目錄與來源檔案；拒絕子路徑連結、已刪除、非一般檔案及非支援格式。大小／mtime 改變時提示但不強迫重新解析。
+- Windows 以固定 PowerShell 程式呼叫 ProcessStartInfo.UseShellExecute（open）或 Explorer /select（reveal）。文件路徑透過環境變數，不拼接 PowerShell 程式；不使用 cmd/start，不變更 ExecutionPolicy。10 秒期限並將啟動問題轉成固定代碼。
+- 參考：https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.processstartinfo.useshellexecute ；此機制只送出作業系統開啟請求，應用程式顯示及公司政策需要 Windows 實測。
+- macOS 的 open／-R 僅供本機開發；自動測試使用 dry-run 或注入啟動函式，不自動開啟桌面應用程式。Windows 命令組裝測試不能冒稱 Windows UI 驗證。
+
+## D019：以日常找檔閉環排序後續開發
+
+- 日期：2026-09-17。依使用者收斂目標，成功標準為無管理員、有權限目錄中的本機內文搜尋與開啟。作品集為加值，不追開源星數或參考專案功能清單。
+- M6-C 本批後，新增格式依真實失敗案例設停損，下一階段先規格化開啟文件／顯示資料夾，再多根目錄。完整順序、驗證缺口與可選 AI 人選上下文模式見 ROADMAP.md；不自動啟用 OCR、GUI 或整庫 RAG。
+
+## D018：M6-C 以 TypeScript 解析 VSD v11 的直接圖形文字
+
+- 日期：2026-09-17；使用者要求繼續 VSD 實作，本決策擴充 D017 的檔名限定。
+- `visio-viewer-extension` 現行純 JS 版明列不支援二進位 VSD；未採用。改以 LibreOffice/libvisio 的 MPL-2.0 指標、chunk 及解壓邏輯為參考，移植所需部分至 TypeScript。固定來源 commit、授權及修改範圍見 vendor/README.md；改寫檔案保留 MPL-2.0，原始碼與授權隨包交付。
+- 沿用 SheetJS CFB 容器及既有 worker，不加入 Python、原生模組、Visio 或網路服務。VSD v11 的直接 UTF-16 文字依紀錄邊界擷取，不採字串掃描；不渲染圖形，也不把未使用 master 或附件納入內容。
+- 限制：未展開 master 繼承、動態欄位、頁名、超連結及 OCR。來源位置使用真實頁面／圖形 ID，不冒充畫面頁碼；沒有直接文字的 no_text 不代表圖形視覺上空白。
+- 嚴格檢查長度、Unicode、循環、指標順序及總資源預算。任何解析失敗清空本次區塊，僅保留檔名。未知版本或必要結構回報 unsupported，損壞回報 error。
+- 增量例外：unsupported VSD 即使未變更也重試，使 0.8.0 索引可直接升級並容納後續版本擴充。成功／no_text 仍零解析略過，未修改其他格式的重試規則。
+
+## D017：M6-C 先交付 VSD 檔名搜尋，保留內容解析缺口
 
 - 日期：2026-09-16
-- 狀態：規格已確認；使用者於 2026-09-16 回報 M4 驗收完成並要求開始 M5 實作與測試。
-- 參考：[Paperless-ngx](https://docs.paperless-ngx.com/usage/#searching) 的欄位搜尋與相關性排序、[sist2](https://github.com/sist2app/sist2/blob/master/docs/USAGE.md) 的增量掃描與診斷、[ripgrep](https://github.com/BurntSushi/ripgrep) 的類型篩選與效能比較方法。採用範圍與完整驗收條件見 `SPEC.md` 第 15 節。
-- 決策：新增搜尋 `--type`，先篩選再排序與限制結果數；維持整段子字串查詢，沿用檔名／標題／內容優先序。同分再依修改時間與固定路徑字串順序排列，每份文件一筆結果。
-- 決策：明列 NFKC 與不依系統語系的小寫轉換；命中片段對回原文，來源位置與代表區塊一致。只有檔名命中時清楚標示，不展示無關片段。`--verbose` 解釋排序依據。
-- 決策：補齊索引摘要、略過分類、耗時與歷史摘要保存；新增 `index`／`rebuild` 的 `--verbose`。不自動套用 `.gitignore` 或排除所有隱藏檔，不追蹤掃描中遇到的符號連結／junction。
-- 決策：以固定合成資料集量測端到端 CLI 延遲、首次／增量索引、峰值 RSS 與索引大小，明確區分暖機與正式樣本，並驗證結果正確性及無變更時零解析。Windows 驗收與乾淨目錄交付驗證列為完成條件。
-- 原因：既有 M5 僅概述排序、效能與交付，缺少可實作及可驗收的定義；本次把設計參考轉為符合公司 Windows 使用情境的具體要求。
-- 範圍：保持 Node.js／TypeScript、SQLite、純本機、單根目錄與六種格式；進階查詢、多根目錄、全機模式、watch、OCR、GUI、AI 與外部搜尋服務另行規格化。
+- 使用者要求繼續實作，接續盤點中 143 份 VSD。0.8.0 先納入檔名與格式篩選，使用既有 unsupported 狀態與 VSD_CONTENT_UNSUPPORTED，與未掃描的未知格式區分。不將 unsupported 視為暫時解析故障重試。
+- 審查 npm `@mdgate/visio@0.6.25` 的實際發佈內容：二進位 OLE 分支僅列舉 root streams 並掃描 UTF-16／UTF-8 可列印字串，未解析 VSD 圖形文字結構與壓縮；不採用其字串結果作為可靠內容。未安裝此候選套件。來源：https://github.com/mdgate/converters/tree/main/packages/visio 。
+- LibreOffice libvisio 為原生解析器；本批未完成可攜式 Windows 整合、授權隨附及中文案例驗證，不自行引入 Visio／Python 或外部服務。不是宣稱所有 VSD 本機解析皆不可行。
+- metadata-only 分支只 stat，不 readFile，沒有文件內容解析、損壞或加密判定；沿用單檔大小政策及增量生命週期。未來正式加入內容解析時，需讓原 unsupported 文件重新處理，不能只新增 parser 後沿用未變更略過。
+- M6-C 內容擷取仍未完成；本次交付不代表全文支援或公司 Windows 驗收通過。
 
+## D016 — M6-B 本機 MSG 郵件內容搜尋
 
-## D013 — M5 搜尋定位、診斷與交付實作
+- 日期：2026-09-16；狀態：使用者已授權接續下一版，規格見 SPEC 16.4。
+- 決策：新版本 0.7.0 支援郵件主旨、通訊欄位與一種正文表示（HTML、純文字、RTF 依序）；不展開附件或連線 Outlook。不改動既有排序與 SQLite 結構。
+- 決策：使用純 JavaScript MSG／RTF 套件與既有 HTML 文字擷取，複用 worker 期限機制，避免損壞 OLE 或 RTF 讓整批索引卡住。只把郵件根層及收件者必要欄位交給 MSG 解析器，不遞迴解析附件郵件。
+- 參考：[msgreader](https://github.com/HiraokaHyperTools/msgreader)、[rtf-stream-parser](https://github.com/mazira/rtf-stream-parser)。版本、限制及驗證結果將記錄於本批交付文件。
+- 驗收界線：前版本機通過不等於 Windows 已驗收，本次繼續開發也不把前版驗收自動標記完成。VSD 留待下一里程碑。
 
-- 日期：2026-09-16
-- 狀態：本機實作與測試完成，等待公司 Windows 的 M5 驗收。
-- 決策：保留 SQLite 原文，搜尋時 NFKC／`toLowerCase()` 比對；僅對最後回傳結果建立 grapheme 原文範圍映射，必要時用前綴正規化處理跨 grapheme 組合。片段上限與截短註記由命中原文範圍決定。
-- 決策：格式篩選在 SQLite 候選文件查詢套用；搜尋維持整段子字串與原有四級排序，CLI 僅在索引／重建時載入解析器，避免搜尋啟動時載入 Office／PDF。
-- 決策：同步摘要與診斷沿用 metadata transaction 保存，不要求重建舊索引；根目錄切換時清除上個根目錄的最後完整同步時間。讀檔錯誤使同步不完整，格式解析失敗另列文件狀態。
-- 決策：CLI 使用固定診斷訊息、階段、路徑與代碼，避免解析器原始例外帶出正文。略過目錄只算已遇到的項目，不遍歷其內部來累計數量。
-- 決策：發布 0.5.0 原始碼／編譯產物包，依 package-lock 在目標平台安裝依賴，不打包 macOS 的 node_modules。效能腳本測量獨立 CLI，核對完整結果及增量內容，紀錄來源雜湊與平台；本機數據不推論 Windows 達標。
-- 驗證：34 項自動測試、乾淨目錄安裝／測試／Demo 與 1,000 文件基準通過；詳細證據及資料集限制見 `M5-VALIDATION.md`。
-
-## D014 — 後續格式優先序先依本機盤點決定
-
-- 日期：2026-09-16
-- 狀態：盤點已收到，由 D015 與 SPEC 第 16 節接續；M5 歷史基線不變。
-- 背景：使用者確認公司 Windows 上無法搜尋內容的檔案為舊版 `.doc`；這是目前 SPEC 明列不支援的格式，非 `.docx` 解析缺陷。
-- 決策：將 `.doc` 列為下次優化候選。先用 Windows 內建命令在本機彙總可讀檔案的副檔名與數量，再依盤點結果、格式解析可行性及實際需求決定優先序。
-- 隱私：只需彙總數字，不需收集檔名、完整路徑或文件內容；不將公司文件上傳外部服務。
-
+- 依賴：`@kenjiuno/msgreader@1.28.0`（Apache-2.0）、`@kenjiuno/decompressrtf@0.1.4`（BSD-2-Clause）、`iconv-lite@0.6.3`（MIT）、`rtf-stream-parser@3.8.1`（MIT）。4.0.0 實際下載包缺少 package.json 指定的 dist 入口，故鎖定可載入的 3.8.1；解析前限制 RTF 輸入／解壓／輸出長度與 bin 參數，並在 worker 隔離執行。
+- RTF：驗證 LZFu CRC 及長度。一般 RTF 加入文字模式標記後沿用 Unicode／字碼頁處理；使用版本鎖定的 feature hook 排除 pict／object／info 等非正文資料，並以回歸測試約束此行為。RTF 特殊欄位與版式不保證完整還原。
+- S/MIME：依 [Microsoft 訊息辨識規格](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxosmime/e6f63b02-c679-4752-9302-9c4641749e95)，類別可能代表簽章或加密；不單憑類別回報 encrypted。本版以 MSG_SMIME_UNSUPPORTED 錯誤保留檔名。
+- 驗證：macOS Node.js 26.7.0／22.17.0 全部 53 項測試通過；乾淨目錄 Node.js 22.17.0 的鎖檔安裝、測試與郵件 Demo 通過。92 項發佈內容核對並提供 SHA-256；公司 Windows 及實際 MSG 驗收尚待回報。
 
 ## D015 — 依使用者盤點啟動 M6-A
 
@@ -1402,334 +1653,108 @@
 - 驗證：2026-09-16 macOS／Node.js 26.7.0 的 42 項自動測試通過；新增案例含合成 DOC／XLS、中文與 Big5、MIME、加密、失敗備援、worker 期限及跨程序 CLI。公司 Windows／實際文件尚待驗收。
 
 
-## D016 — M6-B 本機 MSG 郵件內容搜尋
-
-- 日期：2026-09-16；狀態：使用者已授權接續下一版，規格見 SPEC 16.4。
-- 決策：新版本 0.7.0 支援郵件主旨、通訊欄位與一種正文表示（HTML、純文字、RTF 依序）；不展開附件或連線 Outlook。不改動既有排序與 SQLite 結構。
-- 決策：使用純 JavaScript MSG／RTF 套件與既有 HTML 文字擷取，複用 worker 期限機制，避免損壞 OLE 或 RTF 讓整批索引卡住。只把郵件根層及收件者必要欄位交給 MSG 解析器，不遞迴解析附件郵件。
-- 參考：[msgreader](https://github.com/HiraokaHyperTools/msgreader)、[rtf-stream-parser](https://github.com/mazira/rtf-stream-parser)。版本、限制及驗證結果將記錄於本批交付文件。
-- 驗收界線：前版本機通過不等於 Windows 已驗收，本次繼續開發也不把前版驗收自動標記完成。VSD 留待下一里程碑。
-
-- 依賴：`@kenjiuno/msgreader@1.28.0`（Apache-2.0）、`@kenjiuno/decompressrtf@0.1.4`（BSD-2-Clause）、`iconv-lite@0.6.3`（MIT）、`rtf-stream-parser@3.8.1`（MIT）。4.0.0 實際下載包缺少 package.json 指定的 dist 入口，故鎖定可載入的 3.8.1；解析前限制 RTF 輸入／解壓／輸出長度與 bin 參數，並在 worker 隔離執行。
-- RTF：驗證 LZFu CRC 及長度。一般 RTF 加入文字模式標記後沿用 Unicode／字碼頁處理；使用版本鎖定的 feature hook 排除 pict／object／info 等非正文資料，並以回歸測試約束此行為。RTF 特殊欄位與版式不保證完整還原。
-- S/MIME：依 [Microsoft 訊息辨識規格](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-oxosmime/e6f63b02-c679-4752-9302-9c4641749e95)，類別可能代表簽章或加密；不單憑類別回報 encrypted。本版以 MSG_SMIME_UNSUPPORTED 錯誤保留檔名。
-- 驗證：macOS Node.js 26.7.0／22.17.0 全部 53 項測試通過；乾淨目錄 Node.js 22.17.0 的鎖檔安裝、測試與郵件 Demo 通過。92 項發佈內容核對並提供 SHA-256；公司 Windows 及實際 MSG 驗收尚待回報。
-
-## D017：M6-C 先交付 VSD 檔名搜尋，保留內容解析缺口
+## D014 — 後續格式優先序先依本機盤點決定
 
 - 日期：2026-09-16
-- 使用者要求繼續實作，接續盤點中 143 份 VSD。0.8.0 先納入檔名與格式篩選，使用既有 unsupported 狀態與 VSD_CONTENT_UNSUPPORTED，與未掃描的未知格式區分。不將 unsupported 視為暫時解析故障重試。
-- 審查 npm `@mdgate/visio@0.6.25` 的實際發佈內容：二進位 OLE 分支僅列舉 root streams 並掃描 UTF-16／UTF-8 可列印字串，未解析 VSD 圖形文字結構與壓縮；不採用其字串結果作為可靠內容。未安裝此候選套件。來源：https://github.com/mdgate/converters/tree/main/packages/visio 。
-- LibreOffice libvisio 為原生解析器；本批未完成可攜式 Windows 整合、授權隨附及中文案例驗證，不自行引入 Visio／Python 或外部服務。不是宣稱所有 VSD 本機解析皆不可行。
-- metadata-only 分支只 stat，不 readFile，沒有文件內容解析、損壞或加密判定；沿用單檔大小政策及增量生命週期。未來正式加入內容解析時，需讓原 unsupported 文件重新處理，不能只新增 parser 後沿用未變更略過。
-- M6-C 內容擷取仍未完成；本次交付不代表全文支援或公司 Windows 驗收通過。
+- 狀態：盤點已收到，由 D015 與 SPEC 第 16 節接續；M5 歷史基線不變。
+- 背景：使用者確認公司 Windows 上無法搜尋內容的檔案為舊版 `.doc`；這是目前 SPEC 明列不支援的格式，非 `.docx` 解析缺陷。
+- 決策：將 `.doc` 列為下次優化候選。先用 Windows 內建命令在本機彙總可讀檔案的副檔名與數量，再依盤點結果、格式解析可行性及實際需求決定優先序。
+- 隱私：只需彙總數字，不需收集檔名、完整路徑或文件內容；不將公司文件上傳外部服務。
 
-## D018：M6-C 以 TypeScript 解析 VSD v11 的直接圖形文字
 
-- 日期：2026-09-17；使用者要求繼續 VSD 實作，本決策擴充 D017 的檔名限定。
-- `visio-viewer-extension` 現行純 JS 版明列不支援二進位 VSD；未採用。改以 LibreOffice/libvisio 的 MPL-2.0 指標、chunk 及解壓邏輯為參考，移植所需部分至 TypeScript。固定來源 commit、授權及修改範圍見 vendor/README.md；改寫檔案保留 MPL-2.0，原始碼與授權隨包交付。
-- 沿用 SheetJS CFB 容器及既有 worker，不加入 Python、原生模組、Visio 或網路服務。VSD v11 的直接 UTF-16 文字依紀錄邊界擷取，不採字串掃描；不渲染圖形，也不把未使用 master 或附件納入內容。
-- 限制：未展開 master 繼承、動態欄位、頁名、超連結及 OCR。來源位置使用真實頁面／圖形 ID，不冒充畫面頁碼；沒有直接文字的 no_text 不代表圖形視覺上空白。
-- 嚴格檢查長度、Unicode、循環、指標順序及總資源預算。任何解析失敗清空本次區塊，僅保留檔名。未知版本或必要結構回報 unsupported，損壞回報 error。
-- 增量例外：unsupported VSD 即使未變更也重試，使 0.8.0 索引可直接升級並容納後續版本擴充。成功／no_text 仍零解析略過，未修改其他格式的重試規則。
+## D013 — M5 搜尋定位、診斷與交付實作
 
-## D019：以日常找檔閉環排序後續開發
+- 日期：2026-09-16
+- 狀態：本機實作與測試完成，等待公司 Windows 的 M5 驗收。
+- 決策：保留 SQLite 原文，搜尋時 NFKC／`toLowerCase()` 比對；僅對最後回傳結果建立 grapheme 原文範圍映射，必要時用前綴正規化處理跨 grapheme 組合。片段上限與截短註記由命中原文範圍決定。
+- 決策：格式篩選在 SQLite 候選文件查詢套用；搜尋維持整段子字串與原有四級排序，CLI 僅在索引／重建時載入解析器，避免搜尋啟動時載入 Office／PDF。
+- 決策：同步摘要與診斷沿用 metadata transaction 保存，不要求重建舊索引；根目錄切換時清除上個根目錄的最後完整同步時間。讀檔錯誤使同步不完整，格式解析失敗另列文件狀態。
+- 決策：CLI 使用固定診斷訊息、階段、路徑與代碼，避免解析器原始例外帶出正文。略過目錄只算已遇到的項目，不遍歷其內部來累計數量。
+- 決策：發布 0.5.0 原始碼／編譯產物包，依 package-lock 在目標平台安裝依賴，不打包 macOS 的 node_modules。效能腳本測量獨立 CLI，核對完整結果及增量內容，紀錄來源雜湊與平台；本機數據不推論 Windows 達標。
+- 驗證：34 項自動測試、乾淨目錄安裝／測試／Demo 與 1,000 文件基準通過；詳細證據及資料集限制見 `M5-VALIDATION.md`。
 
-- 日期：2026-09-17。依使用者收斂目標，成功標準為無管理員、有權限目錄中的本機內文搜尋與開啟。作品集為加值，不追開源星數或參考專案功能清單。
-- M6-C 本批後，新增格式依真實失敗案例設停損，下一階段先規格化開啟文件／顯示資料夾，再多根目錄。完整順序、驗證缺口與可選 AI 人選上下文模式見 ROADMAP.md；不自動啟用 OCR、GUI 或整庫 RAG。
+## D012 — M5 借鑑開源專案完善品質與交付
 
-## D020：M7 以固定文件代碼連接搜尋與開啟
+- 日期：2026-09-16
+- 狀態：規格已確認；使用者於 2026-09-16 回報 M4 驗收完成並要求開始 M5 實作與測試。
+- 參考：[Paperless-ngx](https://docs.paperless-ngx.com/usage/#searching) 的欄位搜尋與相關性排序、[sist2](https://github.com/sist2app/sist2/blob/master/docs/USAGE.md) 的增量掃描與診斷、[ripgrep](https://github.com/BurntSushi/ripgrep) 的類型篩選與效能比較方法。採用範圍與完整驗收條件見 `SPEC.md` 第 15 節。
+- 決策：新增搜尋 `--type`，先篩選再排序與限制結果數；維持整段子字串查詢，沿用檔名／標題／內容優先序。同分再依修改時間與固定路徑字串順序排列，每份文件一筆結果。
+- 決策：明列 NFKC 與不依系統語系的小寫轉換；命中片段對回原文，來源位置與代表區塊一致。只有檔名命中時清楚標示，不展示無關片段。`--verbose` 解釋排序依據。
+- 決策：補齊索引摘要、略過分類、耗時與歷史摘要保存；新增 `index`／`rebuild` 的 `--verbose`。不自動套用 `.gitignore` 或排除所有隱藏檔，不追蹤掃描中遇到的符號連結／junction。
+- 決策：以固定合成資料集量測端到端 CLI 延遲、首次／增量索引、峰值 RSS 與索引大小，明確區分暖機與正式樣本，並驗證結果正確性及無變更時零解析。Windows 驗收與乾淨目錄交付驗證列為完成條件。
+- 原因：既有 M5 僅概述排序、效能與交付，缺少可實作及可驗收的定義；本次把設計參考轉為符合公司 Windows 使用情境的具體要求。
+- 範圍：保持 Node.js／TypeScript、SQLite、純本機、單根目錄與六種格式；進階查詢、多根目錄、全機模式、watch、OCR、GUI、AI 與外部搜尋服務另行規格化。
 
-- 日期：2026-09-17。依 ROADMAP 進入 M7，版本 0.10.0；M5～M6 Windows 驗收仍保留。
-- 選擇 ID＋路徑雜湊代碼而非上一輪搜尋排名，無需保存全域「最後搜尋」，不同終端互不覆寫；重用 ID 到不同路徑不能誤開舊結果。代碼只是選擇工具，不是授權憑證。
-- 開啟前查目前索引、根目錄與來源檔案；拒絕子路徑連結、已刪除、非一般檔案及非支援格式。大小／mtime 改變時提示但不強迫重新解析。
-- Windows 以固定 PowerShell 程式呼叫 ProcessStartInfo.UseShellExecute（open）或 Explorer /select（reveal）。文件路徑透過環境變數，不拼接 PowerShell 程式；不使用 cmd/start，不變更 ExecutionPolicy。10 秒期限並將啟動問題轉成固定代碼。
-- 參考：https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.processstartinfo.useshellexecute ；此機制只送出作業系統開啟請求，應用程式顯示及公司政策需要 Windows 實測。
-- macOS 的 open／-R 僅供本機開發；自動測試使用 dry-run 或注入啟動函式，不自動開啟桌面應用程式。Windows 命令組裝測試不能冒稱 Windows UI 驗證。
 
-## D021：M8 多根目錄隔離與集中驗收
+## D011 — M4 重建、排除與同步狀態
 
-- 日期：2026-09-17。使用者明確表示無時間逐版確認，授權持續開發；各版保留本機證據，整合後提供一份 Windows 清單，不以未回報驗收冒稱成功。
-- 新增 roots 與 document_roots，歸屬及文件更新在同一 transaction；舊 root metadata 與全部文件一次原子遷移，保留文件 ID、文字及原同步時間。不依賴來源可讀，離線也可完成資料庫升級。
-- 新增 index 位置不再清空其他位置。刪除、排除、重建均以歸屬限制；根目錄移除只刪衍生資料。根目錄各自保存同步摘要與最後完整時間，CLI 不以最新一次同步代表整體。
-- 父子重疊先明確拒絕，避免同份文件兩套排除政策；實際相同位置的別名沿用既有根目錄。搜尋 --root 依已登錄路徑查索引，不重新存取來源。
-- 批次同步根目錄失敗仍繼續其他位置，保存失敗紀錄並回傳 3。掃描不完整的重建保留未確認舊資料，已可讀的文件仍強制重解析。M7 開啟動作驗證文件自己的歸屬。
+- 狀態：已完成；使用者於 2026-09-16 回報 M4 驗收完成
+- 決策：單一根目錄使用 `.localdocsearchignore` 保存排除規則，採用不依賴額外套件的有限 glob 語法；`rebuild` 使用資料庫 transaction 清空衍生文件資料後，重新索引目前根目錄。
+- 決策：同步紀錄分為「最後嘗試」與「最後完整同步」。掃描或讀檔不完整時保留既有索引中的未確認路徑，並在 `status` 保存最近錯誤；文件解析錯誤則保存文件基本資訊並於後續索引重試。
+- 原因：排除設定需跟著來源目錄並供重建沿用；保守刪除可避免權限或暫時讀取錯誤被誤判成來源文件刪除。所有清除操作只作用於明確開啟的 SQLite 索引，不刪除來源文件或寬泛路徑。
+- 限制：初版 glob 不支援 `!` 重新納入；多根目錄與全機模式留待單一根目錄可靠性驗收後擴充。
 
+## D010 — M3 PDF 文字層解析
 
-## D022：M9 先提供人選上下文檔，不自動接模型
+- 狀態：已完成並通過公司 Windows 實際文件驗收
+- 決策：使用 `pdfjs-dist@6.3.289` 從本機 PDF 位元組擷取每頁文字；CMap 與標準字型資料從安裝在本機的套件目錄載入。加密 PDF 記錄為 `encrypted`，沒有文字層記錄為 `no_text`，損壞 PDF 記錄為 `error`。
+- 原因：沿用先前技術驗證的套件，保留頁碼並支援中文文字層；不發送文件內容至外部服務。掃描影像的 OCR 不屬於 MVP。
+- Windows 修正：PDF.js 要求 `cMapUrl` 與 `standardFontDataUrl` 以正斜線結尾；資源路徑統一轉為可供 Windows `fs` 讀取的正斜線形式，避免原生反斜線觸發 `Invalid factory url`。
+- 重試政策：增量索引會重新解析狀態為 `error` 的未變更文件，使解析器修正生效時不必由使用者刪除索引；已成功、`no_text`、`encrypted` 與 `too_large` 的未變更文件仍會略過。
+- 驗收：使用者於 2026-09-15 回報 PDF Windows 資源路徑修正版成功解析實際文件。
 
-- 日期：2026-09-17。沿用使用者要求的精準上下文方向，透過 CLI 互動清單實作模式 A 的預選代碼與模式 B 的查詢輸入，共用分頁、選取、完整預覽及確認。
-- 僅匯出已選結果的原文命中片段與來源資訊，JSON 方便手動帶入或未來整合；不讀取整份正文、不匯出未選結果，不操作剪貼簿或任何 AI／聊天連線。檔名命中保留明確標示。
-- 確認不接受管線或 --yes，避免非互動批次把整批結果自動帶走；產品中的人選是本功能本身，不影響使用者已授權持續開發。
-- 預覽後核對原結果與當前索引，並檢查來源可讀性、大小與修改時間；偵測改變就拒絕，不靜默更換內容。這不是來源文件內容雜湊驗證，不承諾偵測刻意保持大小與 mtime 的變更。
-- 輸出採 exclusive create 防止覆寫，最多 256 KiB。控制字元在終端跳脫顯示，JSON 正確保存原始值；來源文字標註為資料而非操作指令。選取功能不代表外傳公司文件已獲許可。
-- 附加 docsearch.cmd，使用相對於腳本的 CLI 入口並傳回結束碼，不安裝服務或修改 PATH。Windows 實際批次檔測試在 macOS 明確略過，保留集中驗收。
+## D009 — M2 Office 格式透過 ZIP／XML 解析器接入
 
-## D023：M10 以多段命中與 Markdown 服務「可貼上的精準上下文」
+- 狀態：已隨 M4 由使用者於 2026-09-16 回報驗收完成
+- 決策：使用 `fflate@0.8.3` 讀取 Office ZIP，使用 `fast-xml-parser@5.11.1` 擷取 XML，將 DOCX、PPTX、XLSX 內容轉成既有文字區塊模型；不將文件內容傳出本機。
+- 原因：沿用已技術驗證的純 JavaScript 套件與 M1 搜尋核心。ZIP 中需要解壓的 XML／關聯資料合計限制為 200 MB，以降低異常壓縮檔造成的記憶體風險。
+- 限制：XLSX 的常見數字與日期格式可轉成可讀文字；複雜自訂格式可能與 Excel 畫面不同，需以實際文件驗收與後續修正。
+- 超連結：DOCX 解析正文的一般 hyperlink、欄位型 HYPERLINK，以及 `word/` 下各部件的 hyperlink relationship；圖形或頁首頁尾等無法對應正文位置的網址另存文字區塊並標示來源部件，拆成多個 run 的欄位指令合併解析。XLSX 解析各工作表的 relationship、hyperlink 節點、文件內位置與提示。沿用既有搜尋核心。
 
-- 日期：2026-09-17。使用者明確要求繼續開發，不要把時間花在代理人自行驗收。
-- 決策：在不接模型的前提下，讓 `context` 匯出更適合手動貼進允許通道：每份文件可帶多個命中區塊，並提供 Markdown 格式。
-- 決策：JSON 升 schemaVersion 2，保留 M9 欄位以相容；新增 `passages`。預設 passages=3，上限 10，避免一次貼上過長。
-- 決策：仍禁止自動外傳／自動同意／覆寫；OCR／GUI／向量 RAG 不在本版。
+## D008 — 單檔大小上限
 
-## D024：M11 用 Node fs.watch 做可選前台監看，不做系統服務
+- 狀態：已確認
+- 決策：M1 單檔大小上限為 100 MB；超限文件保留基本資訊與可搜尋檔名，狀態為 `too_large`。
+- 原因：限制大型文件讀取造成的記憶體負擔，並保留基本查找能力。
 
-- 日期：2026-09-17。使用者選擇「監看目錄自動增量 index」。
-- 決策：新增前台 `watch` 命令，依賴 Node 內建 `fs.watch({ recursive: true })` 與既有 `sync` 增量，不引入 chokidar／原生模組，不安裝 Windows 服務。
-- 決策：防抖合併事件，避免存檔連打造成重複全量掃描壓力；啟動時先 sync 一次以對齊現況。
-- 決策：只能監看已登錄根目錄，避免 watch 偷偷擴大索引範圍。
+## D007 — M1 索引位置與搜尋新鮮度
 
-## D022：M9 先提供人選上下文檔，不自動接模型
+- 狀態：已確認
+- 決策：Windows 預設將 SQLite 索引放在 `%LOCALAPPDATA%\LocalDocSearch`；`search` 只查既有索引，文件變更後由使用者再次執行 `index`。
+- 原因：使用者選定此行為；索引不會混入可攜式程式目錄，搜尋延遲也不包含掃描時間。
 
-- 日期：2026-09-17。沿用使用者要求的精準上下文方向，透過 CLI 互動清單實作模式 A 的預選代碼與模式 B 的查詢輸入，共用分頁、選取、完整預覽及確認。
-- 僅匯出已選結果的原文命中片段與來源資訊，JSON 方便手動帶入或未來整合；不讀取整份正文、不匯出未選結果，不操作剪貼簿或任何 AI／聊天連線。檔名命中保留明確標示。
-- 確認不接受管線或 --yes，避免非互動批次把整批結果自動帶走；產品中的人選是本功能本身，不影響使用者已授權持續開發。
-- 預覽後核對原結果與當前索引，並檢查來源可讀性、大小與修改時間；偵測改變就拒絕，不靜默更換內容。這不是來源文件內容雜湊驗證，不承諾偵測刻意保持大小與 mtime 的變更。
-- 輸出採 exclusive create 防止覆寫，最多 256 KiB。控制字元在終端跳脫顯示，JSON 正確保存原始值；來源文字標註為資料而非操作指令。選取功能不代表外傳公司文件已獲許可。
-- 附加 docsearch.cmd，使用相對於腳本的 CLI 入口並傳回結束碼，不安裝服務或修改 PATH。Windows 實際批次檔測試在 macOS 明確略過，保留集中驗收。
+## D006 — 專案文件統一使用繁體中文
 
-## D025：M11 監看生命週期修正（0.14.1）
+- 狀態：已確認
+- 決策：所有說明文件、SPEC、狀態、交接與決策紀錄使用繁體中文；程式識別字、命令與通用技術名稱保留英文。
+- 原因：使用者需要直接審閱、驗收並將文件整理成書審與面試材料。
 
-- 先建立監看再初次同步，避免初始化期間的事件空窗；同步中的事件僅標髒，完成後再防抖補跑。
-- 停止時先關閉事件來源與計時器，再等待進行中的同步，最後由 CLI 關閉 SQLite。失效監看器不可繼續宣稱監看中；全部失效自動退出 3。
-- 沿用 M11 範圍，不新增服務或外部依賴。更正套件版本與既有 M10／M11 文件不一致。
+## D005 — 優先使用已在公司環境測試的套件
 
-## D026：M12 以定期增量校正補償監看遺漏
+- 狀態：已確認，但保留公司政策限制
+- 決策：規劃使用 `fflate`、`fast-xml-parser` 與 `pdfjs-dist`；可行時採用 Node.js 內建 SQLite。
+- 原因：這些套件已在公司電腦成功載入，但技術上能執行不等於公司已正式核准。
 
-- 依使用者持續開發授權，補足 FR-11 的事件僅作提示原則。預設每次同步完成後 5 分鐘再校正，可用 --rescan 調整或以 0 關閉。
-- 沿用純 Node、增量比對與原索引範圍。監看失效降級為定期掃描並重試；離線保留索引，恢復重新同步。非背景服務。
-- 測試注入計時器和監看器，使用真實暫存文件驗證漏事件修改／刪除、離線恢復與退出清理。
+## D004 — 透過統一模型逐步交付各格式
 
-## D027：M13 獨立 SQLite 交易作寫入互斥
+- 狀態：已確認
+- 決策：先以 Markdown／純文字打通完整掃描到搜尋流程，再加入 Office 與 PDF 解析器，且不改寫搜尋核心。
+- 原因：這能控制實作風險，同時不會把最終產品縮減成只支援 Markdown。
 
-- 用主索引實際路徑旁的 .writer.sqlite 協調檔，以 BEGIN IMMEDIATE 持有跨程序單一寫入交易；不把漫長解析包在主索引交易，不用移除過期 PID 檔。檔案保留，關閉交易即釋放鎖。
-- [SQLite 交易文件](https://www.sqlite.org/lang_transaction.html) 說明 IMMEDIATE 的互斥與 SQLITE_BUSY。本版另用獨立程序被終止測試恢復；不冒稱 Windows 已驗收。
-- 忙碌不改主索引報告；watch 防抖後重試。鎖內再驗證登錄範圍，避免移除與掃描交錯復活資料。
+## D003 — 可用 MVP 必須支援多種格式
 
-### M13 證據補充（2026-09-17）
+- 狀態：已確認
+- 決策：可用 MVP 包含 Markdown、純文字、DOCX、PPTX、XLSX 與文字型 PDF。
+- 原因：只支援 Markdown 無法解決使用者真正的文件搜尋需求。
 
-逐項盤點目標與現況，新增 GOAL-AUDIT.md；用現版重跑既有合成基準，另存 benchmark-m13-node22.json／M13-PERFORMANCE.md，保留 M5 歷史結果。不同 Node 版本不作速度優劣對比，macOS 數據不代替 Windows 驗收。不因持續開發授權而自動擴大 GUI／AI 範圍。
+## D002 — 文件僅在本機處理
 
-## D028：M14 跨查詢累積人選上下文
+- 狀態：已確認
+- 決策：文件解析、建立索引與搜尋都留在使用者電腦。
+- 原因：不得假設公司文件可以傳送給外部 AI 或 embedding 服務。
 
-- 使用者將目前 macOS 電腦改為優先執行環境，Windows 驗收延後且不再阻擋版本迭代；仍維持 Node.js／TypeScript、純本機與不自動外傳。
-- `context` 工作階段可用 `s <查詢>` 切換候選並保留已選文件；用 `b` 檢視跨查詢清單、`r <編號>` 移除。最多仍為 20 份文件，同一路徑只出現一次並保留首次選取時的查詢依據。
-- JSON 升為 schemaVersion 3，頂層列出 `queries`，每份文件與每段命中記錄所屬 `query`。保留頂層 `query` 與文件既有欄位，讓既有讀取端有明確主要查詢可用。
-- 切換查詢不呼叫模型、不改寫關鍵字、不掃描來源；只查本機索引。匯出前後分別以各文件的選取查詢重新驗證索引與來源。
+## D001 — 使用 Node.js 與 TypeScript
 
-## D029：M14 Windows 實測失敗以 0.17.1 修正
-
-- 日期：2026-09-18。使用者在公司 Windows 執行 0.17.0 `npm test`，M13 寫入鎖競爭案例在 10 秒後逾時且整體約 65 秒，M9 從任意工作目錄啟動 `docsearch.cmd` 時被 `cmd.exe` 錯誤解析；OEM code page 錯誤文字又被測試當作 UTF-8 顯示成亂碼。
-- 寫入協調仍採獨立 SQLite 交易。將 `PRAGMA busy_timeout = 0` 與 `BEGIN IMMEDIATE` 分為兩次呼叫，確保先安裝零等待 busy handler；同時辨識 SQLite extended BUSY／LOCKED code。測試直接斷言競爭在一秒內回報，CLI 子程序各有五秒期限，避免同步 API 卡住後掩蓋真正位置。
-- cmd 測試不再自行組合首尾巢狀引號。批次檔絕對路徑放入測試專用環境變數，再以 `cmd.exe /d /c call` 啟動；失敗訊息只列結束碼、signal 與 Node error，不顯示可能採 OEM code page 的 cmd 錯誤位元組。
-- 這些變更修正 Windows 入口與鎖競爭契約，不改產品索引資料、搜尋或 context schema。macOS Node.js 22.17.0／26.7.0 回歸通過；Windows 必須以 0.17.1 再跑後才可標示通過。
-
-## D030：M15 以明確選用的本機剪貼簿降低交付摩擦
-
-- 日期：2026-09-18。使用者回報 0.17.1 公司 Windows 驗證通過並詢問下一步；依 STATUS 已排定的方向，先縮短已選上下文帶入討論的操作，不直接連接特定 AI、IDE 或聊天帳號。
-- `--clipboard` 與 `--out` 二選一，完整預覽和逐字 `yes` 不變。剪貼簿模式預設 Markdown，適合貼入討論；不提供非互動同意或自動傳送。
-- 文件內容只經子程序 stdin 傳給 macOS `pbcopy` 或固定 Windows PowerShell `Set-Clipboard`，不放入 argv、環境變數、stderr 或 shell。仍受作業系統剪貼簿歷程、同步設定及其他本機程式影響，因此預覽時明示此界線。
-- 測試以注入寫入器驗證內容、時序、取消與錯誤，不碰真實剪貼簿；平台啟動計畫另測 Unicode 輸入設定與無 shell 插值。
-
-## D031：M16 以顯式 all-terms 補足片語搜尋缺口
-
-- 日期：2026-09-18。使用者要求略過 M15 人工測試並繼續下一版。現有搜尋將整段查詢視為連續子字串，對日常用數個記得的詞找文件不方便；新增 `--all-terms`，不改預設語意。
-- 詞以 Unicode 空白切分，不加入引號、布林、模糊、同義詞或中文斷詞語法。全部詞可分散於同一文件的檔名、標題和內容區塊，避免要求使用者記得原句與詞序。
-- 仍使用線性掃描既有本機索引與可解釋排序，不新增 FTS schema、embedding 或外部服務。代表片段依詞涵蓋數、標題優先及 ordinal 決定；context 的重搜驗證必須保留相同模式。
-- context JSON 升 schemaVersion 4 並記錄 `matchMode`，Markdown 同樣標示，避免相同查詢文字在日後無法分辨是片語或全部關鍵字。
-
-## D032：M17 將掃描範圍升級為完整檔案清冊
-
-- 日期：2026-09-19。使用者指出遞迴掃描即使遇到尚未支援的格式，也應知道檔案存在；因此所有未被排除的一般檔案都進 `documents`，而不是只保留內容解析器支援的格式。
-- 支援格式維持全文解析。其他副檔名與無副檔名檔案採 metadata-only：只 `stat` 並保存路徑、檔名、類型、大小和修改時間，狀態為 `unsupported`，不讀正文、不建立 blocks，也不製造逐檔錯誤訊息。
-- `--type` 改為接受安全的任意副檔名，open／reveal 以「已索引且仍位於所屬根目錄」作安全邊界，不再以解析器格式白名單拒絕。排除規則與連結政策不變。
-- 未來加入新解析器時，既有同格式 `unsupported` 文件必須在下一次增量索引重試。這一版只修清冊完整性；壓縮內容與候選索引仍依獨立實驗決定，避免把正確性修正和儲存後端改造混在同一版。
-
-## D033：索引瘦身先拆成串流、壓縮與候選三階段
-
-- 日期：2026-09-19。使用「測試用資料」比較現況、逐列串流、每文件 Brotli、64 KiB Brotli、FTS5 trigram 與 Bloom trigram；12 組完整命中集合全部一致。
-- 現況資料表只改逐列搜尋，峰值 RSS 即由 477.6 MiB 降至 104.7 MiB，證明 RAM 問題主要來自 `candidates()` 一次具體化整庫。下一版先修這個讀取路徑，不等待 schema 遷移。
-- 儲存方向選 64 KiB 左右的獨立 Brotli 塊：4.46 MiB，為現況 25.2%；不採更小的每文件單塊，因為大型文件需整份解壓。這是原型方向，正式 chunk 邊界仍須保證片段、位置與更新原子性。
-- FTS5 方案為 12.16 MiB，候選效果與 6.02 MiB 的 Bloom 接近，因此不列為首選。Bloom 保留為壓縮後的第二階段實驗，不能先於精確串流核對器；一、二字仍必須退回掃描。
-- 原型沒有取代產品後端；正式行為變更必須另開里程碑、更新 SPEC 並補增量、崩潰恢復、排序、片段與遷移測試。
-
-## D034：M18 先以 SQLite 串流讀取移除整庫 JavaScript 載入
-
-- 日期：2026-09-19。依使用者要求開始改動，先實作 D033 風險最低的一步。SQLite schema、內容、查詢語意與 CLI 均維持不變；只替換讀取迴圈。
-- Store 提供文件列與單一文件區塊的 iterator。搜尋掃完目前文件再前進，檔名命中不讀 blocks；context passages 直接定位單一文件。
-- 搜尋結果仍需要保存命中的文件以排序和套用 limit，這是有界於文件數的必要資料；不得保存所有文字區塊或所有正規化全文。
-
-## D035：M19 片段採區段定位與有界前後文
-
-- 日期：2026-09-19。M18 移除 SQLite 整庫載入後，正式連續搜尋仍出現高 RSS；量測定位到 `makeSnippet()` 對超大命中區塊建立完整 Unicode 來源範圍與前後文陣列。這是顯示層暫存，而非索引或 SQLite 快取。
-- 正常路徑以 code point 邊界分段核對完整 NFKC／小寫結果，並逐 code point 直接定位命中來源；前後文以有限收集器產生。組合字或語境大小寫無法逐點證明等價時，才只為命中小區段建立保留 grapheme 的來源範圍。避免把 `Intl.Segmenter` 套用於整份多 MB 原文，讓一般文字的額外配置量受片段上限約束。
-- Unicode 的跨區段正規化或大小寫語境若使分段結果與完整結果不一致，立即使用既有完整映射作保守回退。回退罕見但可能耗用較多記憶體；不可為了節省記憶體而犧牲命中位置正確性。
-- 本版只消除已量測的摘要熱點，不開始 Brotli schema 遷移。壓縮塊仍是下一個資料儲存里程碑，需另行處理遷移、transaction、一致性與實測。
-
-## D036：M20 以 SQLite 關聯的獨立 Brotli payload 保存正文
-
-- 日期：2026-09-19。M19 證實片段暫存不是 RAM 的唯一來源，且原始實驗顯示 64 KiB Brotli 分塊的總儲存量顯著低於現況。因此先改內容層，不先加入可能膨脹索引的 FTS 或 Bloom。
-- 區塊 metadata 保留在 `blocks`；正文存入外鍵相連、每塊可獨立解壓的 payload 表。這讓更新與刪除能受既有 SQLite transaction 和 cascade 保護，也讓未來候選索引可只指向 payload，而不複製正文。
-- 遷移採「先寫 payload，再確認寫入，最後清除舊正文」的單一 transaction。讀取時暫容忍舊正文，以利從舊版資料庫無中斷升級；任何資料不完整都視為索引錯誤，不靜默回傳漏字結果。
-- 初步先由讀取層重組單一 text block，優先保住精確搜尋結果；後續再將搜尋核對下推至 payload 串流並加入候選過濾。不可將完成壓縮儲存誤稱為已完成最終 RAM 最佳化。
-- 實作量測修正：真實資料有 115,618 個小文字區塊；每 block 一個 Brotli blob 使 SQLite 列與 frame 開銷反而將資料庫推至 19.31 MiB，較 17.70 MiB 現況更大。因此正式 payload 必須至少以文件為單位合併小 block 至約 64 KiB，並另存 block 對 payload 的範圍；不得交付一 blob 一 block 的中間設計。
-
-## D037：M21 搜尋從文件批次 payload 逐段產生 block
-
-- 日期：2026-09-19。M20 已壓縮正文，但若 `streamCandidates()` 先解壓並建成整份文件 blocks 陣列，仍會放大大型文件搜尋的短暫記憶體。搜尋主路徑改接 generator。
-- payload 中的 `[blockId, contentFragment]` 保持原始 block 順序；讀取器只暫存當前 block 的跨 payload fragment，遇到下一 block 即交給搜尋。這保證跨 payload 的同 block 查詢不漏，而不同段落不會因串接誤命中。
-
-## D038：M22 以文件級 trigram Bloom 作純排除候選
-
-- 日期：2026-09-20。M21 仍對每份文件解壓與正規化；採固定大小 Bloom 可用極小空間跳過罕見三字以上查詢的不可能文件。
-- Bloom 不儲存正文、不能作搜尋結果依據，且可能誤判為候選；只有「缺少某個必要 trigram」才能跳過文件。短詞與舊資料庫一律回退完整核對，正確性優先。
-
-## D039：M23 以 payload 級 Bloom 縮小解壓範圍
-
-- 日期：2026-09-21。M22 已能略過整份不可能文件，但常見詞仍使大型文件的全部 payload 解壓。保留文件級 Bloom 作第一層，再為每個 Brotli payload 保存固定 1 KiB 摘要及 payload／block 對應。
-- payload Bloom 只尋找「至少一個可能 trigram」，不能要求整條長片語的全部 trigram 都在同一 payload；否則跨 payload 文字會被錯誤排除。選中的 payload 會回讀其完整 block fragments，最後仍由原精確核對決定命中。沒有 payload 候選但文件級摘要可能命中時回退整份文件，優先避免邊界漏搜。
-- 代表片段回讀改依 block mapping 限縮至目標 block，避免排序後又解壓無關 payload。新 mapping／摘要遷移受單一 transaction 保護；缺資料一律走既有完整讀取，而非靜默省略。
-
-## D040：M23 修正版將遷移移出開庫，逐文件接續且不重壓縮
-
-- 日期：2026-09-21；0.26.1 已依 SPEC §34 實作。取代 D039 的全庫單一遷移交易及 D036 在共用開庫時自動遷移的做法；單份文件更新的原子性仍保留。
-- 公司診斷副本顯示 610 文件、219,518 區塊且缺 payload_bloom_version；共用初始化因此對 index／status 都執行全庫遷移。已定位路徑，尚未量測各熱點成本，不能歸因於解析逾時。
-- 唯讀操作不建表、不遷移、不回復 hot journal；明確回報需要升級、忙碌或 INDEX_RECOVERY_REQUIRED。回復與遷移放在持有跨程序寫入鎖的明確寫入流程，先顯示階段。
-- 已是內容格式 2 的資料只逐 payload 建立摘要及對應，保留原壓縮 bytes；使用 ID／Map 查找，消除 O(B²) 掃描。每文件的衍生資料及完成標記原子提交，全部完成才寫全庫版本，中斷後接續。
-- 搜尋對未完成摘要採完整核對；即時進度及取消能力涵蓋升級與索引各階段。610 文件／219,518 區塊合成量測在目前 Mac 的 Node 26.7.0／22.13.1 均約一秒且 payload bytes 不變；仍需公司 Windows／Node 22.17.0 複驗。本次不調整解析期限、不改產品搜尋語意。
-
-## D041：Windows 鎖等待必須在 DatabaseSync 開庫時設為零
-
-2026-09-22 更正：當時將開庫 timeout 當作逾時根因的推論未獲證實。公司 0.26.2 逐檔測試通過、並行全套仍逾時；保留零等待設定，但不能稱為已驗證的效能修正。
-
-- 日期：2026-09-21。公司 Windows／Node.js 22.17.0 執行 0.26.1 全套測試得到 142 通過、4 失敗、2 略過；M13 一項及 M24 兩項都在 CLI 子程序的五秒期限耗盡，M9 則在含空白與括號的下載路徑經 `cmd.exe /c` 呼叫失敗。
-- Node.js 22.16.0 已加入 `DatabaseSync` 的 `timeout` 建構選項，目標 22.17.0 可用。主索引唯讀／寫入連線與 writer 協調連線均在建構時傳入 `timeout: 0`，再保留分開的 PRAGMA；這讓 busy handler 在任何 schema／狀態查詢或 `BEGIN IMMEDIATE` 前生效。
-- 不放寬產品或測試的五秒期限。M9 測試改由暫存批次檔呼叫含特殊字元的 launcher 路徑，避開 Node argv 到 `cmd /c` 的額外引號解析，同時保留不同 cwd 的驗證目的。
-- GitHub 原始碼壓縮檔不含編譯產物；加入 npm `prepare`，使 `npm ci` 直接建立 `dist`。這是安裝流程修正，不改搜尋、索引資料或文件內容。
-
-## D042：以固定 SQL 參數傳遞候選集合
-
-- 日期：2026-09-22。公司搜尋與本機 40,000 區塊回歸均證實 SQL 綁定參數超限。以 json_each(?) 展開候選 payload／block 數字陣列，兩階段查詢分別固定為 2／3 個參數；維持唯讀、不建立暫存表、不修改索引格式。
-- 公司獨立測試通過而全套並行逾時，預設測試改為逐檔，保留內部真正的跨程序鎖競爭及原期限。watch 靜態引用 sync 會連帶載入所有 parser，改為 runWatch 時才動態載入。
-
-## D043：搜尋採穩定結果集分頁，XML 採安全原文解碼
-
-- 日期：2026-09-22。使用者實測常見字 `APPLICATION` 時，前 20 筆高順位檔名命中遮住後方正文，且舊輸出沒有總數，容易被誤認為只有 20 筆。搜尋因此改成一次收集排序 metadata、按頁回讀片段；互動 TTY 翻頁，非互動以明確頁碼操作，舊 `--limit` 僅作相容單次輸出。
-- 不採資料庫 offset 重新執行每一頁，因現有排名需全文精確核對且翻頁期間索引可能改變。工作階段保留輕量命中 metadata，不保留 SQLite iterator；以 `PRAGMA data_version` 偵測外部提交，變更時要求重搜。
-- `.xml` 不套用 HTML 的文字抽取，也不建立 XML DOM。產品需求包含 `<User>dbla</User>`、設定標籤與屬性，因此保存逐行原文最符合可預期搜尋；只做本機字元解碼，不處理 DTD／entity，避免外部資源與實體展開風險。
-- XML 解碼以標準訊號決定編碼並採嚴格失敗；無法解碼時保留錯誤 metadata，不能以替代字元靜默污染索引。既有 unsupported XML 沿用增量同步的「新支援格式重試」機制，一次普通 index 即可升級。
-
-## D044：以文件級 AND 逐層縮小完整搜尋結果
-
-- 日期：2026-09-22。使用者回報 0.27.0 人工驗收成功後，確認需要結果內搜尋，並要求加入規劃；0.28.0 已依 SPEC §36 實作。
-- `/ 關鍵字` 只在目前完整候選集合追加條件，各層為文件級 AND；必須核對完整已索引內容，包含未顯示頁面與片段以外的內容。原查詢模式、格式與根目錄限制延續。
-- back／reset 讓縮小過程可逆；顯示條件鏈與目前／最初總數，單頁或零結果仍可操作。保留最初相對排序，片段展示最新條件的命中，幫助使用者理解文件為何留下。
-- 實作依 SPEC §36 先建立搜尋工作階段及候選範圍，再接 CLI 與回歸；維持純本機唯讀，索引變更時要求重搜。
-
-## D045：擴大根目錄以原子歸屬轉移整併既有子根
-
-- 日期：2026-09-22。使用者要求把 `D:\備份` 擴大到 `D:\` 的支援架構加入 SPEC。§37 取代父子根一律拒絕的預定行為；0.29.0 已依規格實作。
-- 保留單一文件歸屬，新增根目錄操作計畫及短交易轉移，不以刪除原根再重新索引實作合併。文件 ID、payload 與既有搜尋代碼均保留；長掃描在合併提交後進行，中斷仍有可讀的舊成果。
-- 排除作用域存於 `root_ignore_scopes`，合併歷史存於 `root_merge_history`，schema 標記 `root_merge_version=1`。上層規則與適用子根規則共同約束。已涵蓋子樹可單獨增量同步，但不得宣稱上層已完整同步。
-- 同步、搜尋篩選、監看與根移除共同理解合併後的歸屬；不得呼叫會刪文件的 removeRoot 來合併。
-- 2026-09-22 補：Windows 命令列把 `"D:\"` 的尾端反斜線當成跳脫，argv 變成 `D:`；全形 `＼` 也不是路徑分隔符。輸入層將僅磁碟代號或全形分隔符正規化為 `D:\`，涵蓋判斷仍以路徑元件進行，不以字串 `D:` 當前綴。磁碟根目錄請優先寫 `D:/`。
-
-## D076：以 FTS5 unigram／trigram postings 取代全文件候選掃描
-
-- 日期：2026-09-26。依新搜尋需求加入兩個 contentless FTS5 虛擬表：`search_unigrams` 將正規化 Unicode code point 編成 token，供一、二字查詢；`search_trigrams` 保存正規化全文，供三字以上查詢。每個文件各有一列，`rowid` 綁定 `documents.id`，正文仍只存在既有 64 KiB Brotli payload。
-- FTS postings 是候選文件的第一來源；phrase 與 all-terms 先在 postings 取交集，再沿既有 Bloom／payload pruning 讀取必要 payload，最後保留原有全文核對、檔名層、排序、snippet、reference。FTS 只可排除不可能文件，不能直接作最終命中判定。
-- `ngram_index_version=1` 與每文件 `ngram_1` marker 使遷移可中斷後接續；每份文件的 postings、marker 單一交易提交，payload bytes 不重壓縮。舊 content payload 遷移同樣逐文件提交並檢查取消訊號。唯讀 CLI、status、MCP 只回報未完成並使用保守 fallback，不建表、不遷移、不寫 marker。
-- upsert、remove、root cleanup 在同一寫入交易清掉舊 postings；replace 不改文件 ID，避免 stable reference 變動。FTS5 需要 `contentless_delete=1`，以支援明確 rowid 清理。
-- Workbench 遇到 `format.needsUpgrade` 回 `202 pendingUpgrade`，背景 writer 執行 upgrade；前端輪詢狀態後重新送出原查詢。新增 benchmark 比較停用 FTS fallback 與 FTS postings 的 index time、SQLite bytes、RSS 及 rare/common/two-character/three-character/long-phrase 查詢。
-
-## D077：每次搜尋使用同一份 structured Diagnostics／Performance Trace
-
-- 日期：2026-09-26。搜尋問題需要知道總耗時、實際 phase、候選來源、文件／payload 數量、exact verification、結果數與瓶頸；trace 另外以 `bottleneck` 指出 phase 中耗時最高者。沿用既有 `performance.now()` profile／phase timing pattern，新增單一 `SearchTraceRecorder`，不引入第二套 logging framework。
-- trace 在 query normalization、FTS postings／restricted ids、document enumeration、document／payload Bloom、payload lookup／Brotli decompression、exact verification、ranking 與 snippet materialization 的實際 code path 累計量測。Bloom 已排除的文件在 trace 中可見，但不得進 exact verification；`candidateStrategy` 由實際來源推導。
-- 無 index 的 Workbench 搜尋仍回 schema-complete trace，以空 `candidateSources`／`candidateStrategy=none` 表示沒有候選管線；這與已建立索引但零命中的 `postings` trace 分開，避免診斷混淆。
-- 可見性同時提供程序內與有界持久化：`SearchResultSet.trace`、`SearchSession.trace`、`IndexStore.lastSearchTrace()`、MCP／Workbench `trace` 欄位、CLI `--verbose` 的 `SEARCH_TRACE <JSON>` 與 `/traces` UI。trace 不寫 SQLite／profile；完成事件寫入本機 `trace.log` JSONL，保留 query／question 但不保存文件內容。
-- `/api/ask` 另用同一 instrumentation pattern 的 `AnswerTraceRecorder` 記錄 context build、preview validation、provider request、response parsing 與 fallback attempt；response、`WorkbenchHandle.lastAnswerTrace()` 與本機 JSONL log 提供 schema version 2。只記 question、route、phase、bytes／counts，不記 key、context 或 answer 正文。
-- SearchSession 會暫停 recorder 以排除使用者停留時間；page／passage 物化仍記錄實際 payload reread、decompression 與 snippet，讓長期診斷能區分候選、I/O、解壓與展示階段。traceId 與 status/errorCode 讓 UI／log 可把成功、失敗與同一事件對回。
-
-## D078：Trace 必須有獨立 UI 與有界 JSONL 持久化
-
-- 日期：2026-09-26。僅把 trace 放在 response、stderr 或程序記憶體不足以追查長時間／間歇性問題；新增獨立 Workbench `/traces#<token>` 頁面與 token-protected `GET /api/traces`，可查看最近 search／answer、篩選類型／狀態、phase bars、counts、bottleneck、錯誤碼與 raw JSON。
-- 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
-- logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
-- 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
-
-## D125：工作台上下文採常駐側欄，Codex prompt 只複製絕對路徑（2026-10-02）
-
-- **背景**：工作台原本以遮罩抽屜承載上下文預覽，無法在瀏覽結果、臨時文件與頁面操作間保持可見；使用者要把選取文件交給 Codex 時，只需要可貼上的本機路徑，不需要文件內容或自動送出。
-- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 320 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
-- **路徑規則**：前端只收集已選索引結果中的完整絕對路徑，以穩定順序去重後用 `join("\n")` 產生剪貼簿文字；不加標題、標記、檔名、正文或尾端說明，也不自動送出。上傳臨時文件若沒有原始絕對路徑，側欄可以顯示其 session 項目，但排除於 prompt，禁止用檔名冒充路徑。
-- **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
-- **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
-
-## D126：結果列操作沿用文件庫 API 並以失敗回復（2026-10-02）
-
-- **背景**：§94 的列表與表格結果列需要提供釘選、分類及上下文等一致操作；§95 已定義文件庫的實際持久化模型與 loopback API，前端不得另建一套狀態或使用瀏覽器儲存。
-- **決策**：`src/workbench-app.ts` 的 `resultActions(item)` 同時供列表與表格使用；釘選使用目前 `state.library.pinned` 判斷文案，新增／取消分別呼叫 `PUT`／`DELETE /api/library/pinned`，取消只送 `path` 與 `reference`；分類呼叫 `POST /api/library/groups/:id/items`。所有 payload 只使用完整絕對路徑、stable reference 與顯示名稱。
-- **一致性**：釘選操作先以 session-local 暫存狀態更新按鈕，並以 `libraryActionChain` 依序送出釘選／分類請求；成功後重新讀取文件庫並清除暫存，失敗則回復原本釘選集合、重新讀取並顯示本機錯誤。成功 toast 只在 API 成功後顯示，不把失敗假稱為已保存。
-- **取捨**：不修改搜尋結果、排序、索引 schema 或文件內容，不使用 browser storage、外部服務或新 endpoint；後續 API 行為以 SPEC §95 為準。
-- **驗證**：`test/m90.test.ts` 驗證列表／表格操作與 API 呼叫點及反向斷言；`scripts/ui-smoke.mjs` 在 1920×1080、1440×900、1180×800 以隔離合成資料實際驗證釘選／取消釘選／分類請求。
-
-## D133：Codex path recall 以逐行 token 掃描保留完整 reference
-
-- 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
-- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。掃描器不再對每個 regex match 重掃剩餘全文，而是以單調 cursor、每個 token 最多 401 字元、每段文字最多 2,000,000 字元的確定性狀態機前進，避免連續反斜線／未閉合引號形成 O(n²)。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
-- 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
-- m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。
-- M96 synthetic 200 KiB 未閉合引號、連續反斜線與空白輸入，修正後抽取約 13 ms；修正前同類 rollout 在 5 秒 watchdog 內未完成。性能門檻固定為單段文字 200 ms 內完成，不以真實使用者資料作測試。
-
-## D134：Codex reference existence 檢查延後至 detail API
-
-- 日期：2026-10-02。監工以真實 57 個 rollout 逐檔計時回報總計 88.5 秒；其中 31.5 MB 單檔 73.5 秒，另有小檔約 2,717～5,448 ms。未在本工作區重讀真實 rollout；依程式證據，原 parser 在每個 finalized reference 以同步 `statSync` 檢查候選 path，UNC／不存在磁碟機可阻塞約數秒，與量測形狀一致。
-- parser 現在只建立字串 Reference Set，`exists` 未檢查時為 `null`、`kind` 為 `unknown`，不對候選 path 執行檔案系統 I/O。工作台 list 只解析與摘要，不做 reference existence check；detail API 只對被選取的 session 做檢查。
-- detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
-- synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
-- M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。
-
-## D135：Codex 與工作台上下文採 token session 共用索引集合
-
-- 日期：2026-10-02。依 SPEC §100。本分支只處理 `src/workbench.ts`、`src/workbench-app.ts`、`src/codex-session-app.ts`、`test/m96.test.ts` 與 `scripts/ui-smoke.mjs`；不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
-- 事實：
-  - D125 的上下文選取原本只存在工作台頁面的 `state.selected`；Codex 頁使用同一個 loopback token 但另有 JavaScript execution context，導覽後無法看到或修改右側欄，因此 §99 刻意沒有虛構「加入上下文」。
-  - 以 URL fragment 傳送 selected reference 會把完整絕對路徑暴露在 history、referrer 或畫面 URL；browser storage 又違反本產品的本機偏好與安全邊界。文件庫 SQLite 是持久化資料，不適合保存這個 session-only 選取狀態。
-- 決定：
-  - 在單一 `createWorkbench` handle 內保存受 token 保護的 `contextSelection`：索引文件只保留經 `indexedLibraryDocument` 驗證後的 canonical `path`、stable `reference`、`name`，另保留工作台臨時文件計數供 20 份上限判斷。工作台關閉時由程序清除，不寫 SQLite、檔案、URL 或 browser storage。
-  - 新增 `GET`／`POST`／`DELETE`／`PUT /api/context-selection`。`POST` 只加入已索引文件；`DELETE` 移除一份或清除索引集合；`PUT` 只同步工作台的臨時文件數。所有變更沿用既有 token、Origin／Referer 與 same-origin API 檢查；API 回傳的只有 selection metadata。
-  - Codex reference row 的「加入上下文／移出上下文」直接呼叫共用 API；工作台啟動、結果操作、側欄移除／清除與有限輪詢均讀寫同一集合。輪詢只合併索引文件，保留臨時文件的 session-local 狀態；前端以遞增 mutation version 丟棄較舊的 optimistic response，避免快速移除後重新加入時被舊回應覆寫。optimistic mutation 失敗時回復並顯示錯誤。
-  - 不採 `window.opener`、`postMessage` 或 `BroadcastChannel` 作唯一來源：它們依賴分頁開啟方式，不能涵蓋同一分頁導覽、reload 或沒有 opener 的 Codex route；server memory session 同時覆蓋這些情況而不增加持久化資料。
-- 取捨：
-  - 同一個 Workbench process／token 的頁面共用，重啟 Workbench 後選取清除；這符合上下文「目前工作階段」語意，不把使用者選取變成文件庫資料。
-  - Codex 頁只可加入已索引 reference，不能加入低信心、未索引或 arbitrary path；臨時文件仍只屬工作台頁面，故 `temporaryCount` 只作上限協調，不把暫存內容跨頁傳出。
-- 驗證：
-  - `test/m96.test.ts` 使用暫存資料目錄與合成文件，覆蓋 API 邊界、stable reference、跨頁讀取、上限與反向契約；`scripts/ui-smoke.mjs` 實際操作工作台／Codex route 的加入、移除、reload 與右側欄同步。
-
-## D136：表格結果操作採精簡主列與更多選單
-
-- 日期：2026-10-02。依 SPEC §94。本次只調整工作台結果列的呈現、勾選欄 CSS、`test/m90.test.ts` 與 `scripts/ui-smoke.mjs`；不新增 API、資料欄位、持久化資料或搜尋結果邏輯。
-- 決定：
-  - 清單維持完整操作群組；表格沿用同一個 `resultActions` 與 action handler，但以 `compact: true` 顯示「開啟」、「加入上下文／移出上下文」與「更多」，複製、所在位置、釘選／取消釘選及分類控制收在同一個可收合選單。選單開啟時仍使用原本的按鈕、select、stable reference 與 library payload。
-  - 表格勾選 input 明確使用 block 排列並由儲存格置中；smoke 同時檢查儲存格 `innerText`／`textContent`、`::before`／`::after` content、`list-style-type` 與 input display，避免把截圖中的裝飾誤判成產品文字。
-  - smoke 在選單收合與展開兩種狀態收集可見控制的 `getBoundingClientRect()`，要求任兩個控制不重疊且操作群組 `scrollWidth <= clientWidth`；這是實際 DOM 版面契約，不以 source text 代替。
-- 理由：
-  - 固定表格操作欄同時放七項控制會在窄視窗或字型差異下互相覆蓋；共用 handler 加更多選單可縮短主列而不改行為。
-  - 句點來源未必是文字節點，直接驗證 DOM 文字、偽元素與列表樣式可區分產品內容與繪製裝飾。
-- 驗證：`test/m90.test.ts` 包含精簡表格呼叫與勾選欄的反向契約；`scripts/ui-smoke.mjs` 實際切換表格、展開更多選單並驗證 bounding rect、溢出及勾選欄內容。
-
-## D142：以真實 fs.watch 合成壓力驗證漏事件，不先改 watcher 演算法（2026-10-02）
-
-- **背景**：0.46 的有界補掃與 0.47 的 `lastTiming` 已增加防護／觀測，但使用者偶爾漏事件的根因仍未證實；目前沒有可用的真實背景更新數據。本批先在隔離暫存根目錄以真正 `fs.watch` 壓測，避免把合成 watcher callback 或事件數相等誤當成資料正確性。
-- **決定**：`test/m102.test.ts` 覆蓋高頻建立／修改／改名／移動／刪除、深層與接近長路徑、Office 暫存檔、原子替換、safe-write、資料夾批次移入／移出與局部更新忙碌時事件湧入。每個情境以 synthetic token 比對「應被索引」與 `search()` 實際可搜尋集合，記錄遺失數／遺失率及既有 watcher 計數。
-- **取捨**：若未得到穩定且可縮小的遺失重現，不修改 watcher 排程、reconcile 排序或近期檔案延後策略，也不宣稱漏事件已解決；不得重試已否決的 mtime 排序與近期延後局部佇列實驗。若測試發現可重現遺失，才另以最小回歸測試與新決策修正。
-- **邊界**：測試只建立暫存 synthetic fixture，`LOCALDOCSEARCH_DATA_DIR` 指向同一暫存樹；測試結束停止 engine、關閉 store 並清理，不讀取真實 LocalDocSearch 資料或索引。
-- **本次結果**：m102 在一輪 Windows `win32` 真實 `fs.watch` 壓力矩陣中共核對 626 份 synthetic token，`search()` 可搜尋 626、遺失 0、stale 0；另觀測 `eventCount=446`、空檔名事件 2、補掃 1、降級子目錄 0，保留 timing sample 20 筆（上限 32）。這只證明該輪沒有重現遺失，不改變根因未證實的判定。
-
-## D143：autoupdate diagnose 只回報有界匿名 live watcher 摘要（2026-10-02）
-
-- **背景**：`autoupdate status` 已有單一根目錄的 `lastTiming` 與不確定事件計數，但難以直接提供最近多批次、事件到可搜尋延遲分布及 watcher 錯誤，又不能把完整來源路徑貼到外部診斷內容。
-- **決定**：新增唯讀 `autoupdate diagnose`。命令只查詢正在執行 daemon 的 live control snapshot，不啟動、停止或重啟程序；沒有 live daemon 沿用 `AUTOUPDATE_NOT_RUNNING`。每根保留最多 32 筆最近局部批次 timing；命令預設輸出最近 20 筆，接受 1～32 的上限。延遲樣本為該批第一個事件到局部提交完成，輸出 count、p50、p95、max。
-- **匿名化**：摘要只輸出模式／階段、計數、時間、根目錄雜湊、相對深度、降級數量與固定 watcher error code 計數；不輸出文件內容、檔名、完整路徑、路徑參數、session／prompt 或 control token。一般 `autoupdate status` 的既有詳細輸出契約不因診斷摘要而放寬。
-- **驗證**：`test/m103.test.ts` 覆蓋命令解析、live-only、最近批次上限、延遲統計與匿名化；移除任一安全邊界時反向斷言必須失敗。
+- 狀態：已確認
+- 決策：以 Node.js 22.17.0 x64 為目標環境，應用程式碼採用嚴格模式 TypeScript。
+- 原因：公司電腦可以執行 Node.js，已技術驗證 npm 套件可用，而且沒有可用的 .NET SDK。
