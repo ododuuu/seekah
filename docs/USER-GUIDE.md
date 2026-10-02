@@ -189,6 +189,7 @@ node dist/src/cli.js tui
 ```powershell
 .\seekah.cmd autoupdate start
 .\seekah.cmd autoupdate status
+.\seekah.cmd autoupdate diagnose
 .\seekah.cmd autoupdate stop
 .\seekah.cmd autoupdate startup enable
 .\seekah.cmd autoupdate startup status
@@ -207,6 +208,8 @@ Windows 可選登入啟動必須明確執行 `autoupdate startup enable`；預�
 - 不確定事件也會在 status 顯示：`空檔名` 是收到但無法定位檔名的事件數，`補掃` 是實際排入 watchDir 目錄展開的次數，`最近補掃` 是最後一次排入時間；同一 watchDir 會受冷卻、60 秒上限與有限退避抑制。根目錄仍保留完整校正安全網。`GET /api/index-status` 的 `autoupdate.live` 會保留同一批欄位；若某個子目錄降級，根目錄列會顯示路徑與原因。
 - `uncertainRescanStateCount` 是目前每根／全部根目錄保留的 watchDir 冷卻狀態數；每根最多 1,024，child watcher 釋放／降級／移除或根目錄移除後會清除，供 status／API 診斷記憶體界線。
 - `autoupdate status` 的每個根目錄若已有局部批次，會追加最近一次的事件→排程、穩定等待、列舉、取鎖與提交毫秒數；這些是診斷量測，不是固定完成時間承諾。搜尋 query 時間仍以搜尋 trace／量測記錄為準。
+
+若偶爾懷疑 `fs.watch` 漏事件，可執行 `.\seekah.cmd autoupdate diagnose`；`--limit 1～32` 可調整輸出的最近批次數。摘要只含計數、時間、事件到索引可搜尋的延遲分布、分階段 timing、watcher 錯誤代碼與依本次 live snapshot 登錄順序產生的 `R1`、`R2`……根目錄標籤及相對深度；序號只在本次輸出有效，不輸出任何雜湊、文件內容、檔名或完整來源路徑。命令只讀取正在執行的背景 daemon；沒有 daemon 時會回報未執行，不會自行啟動或停止更新。
 每次自動更新啟動時會清除 `.work.sqlite` 中不再登錄根目錄的事件、校正與已見範圍，並在日誌記錄清理筆數；移至垃圾桶、移除或合併子根時也會清理，還原根目錄後可照常接收新事件。
 
 
