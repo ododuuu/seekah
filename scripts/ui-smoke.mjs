@@ -1495,27 +1495,86 @@ async function runViewport(viewport, chromePath) {
         const actionCell = cells.at(-1);
         const checkCell = cells[0];
         const group = actionCell?.querySelector(".document-actions");
-        const controls = Array.from(group?.querySelectorAll("button, select") || []);
+        const isVisible = node => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return !node.hidden && style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        const allControls = Array.from(group?.querySelectorAll("button, select") || []);
+        const controls = allControls.filter(isVisible);
+        const boxes = controls.map(node => node.getBoundingClientRect());
+        const overlap = boxes.some((left, index) => boxes.slice(index + 1).some(right =>
+          left.left < right.right && right.left < left.right && left.top < right.bottom && right.top < left.bottom));
+        const moreMenu = actionCell?.querySelector(".result-more-menu");
+        const menuLabels = Array.from(moreMenu?.querySelectorAll("button, select") || []).map(node =>
+          node instanceof HTMLSelectElement ? node.options[0]?.textContent || "" : node.textContent || "");
+        const checkInput = checkCell?.querySelector("input.table-check");
         return {
           cellCount: cells.length,
           headerCount: document.querySelectorAll(".documents-table thead th").length,
           labels: controls.map(node => node instanceof HTMLSelectElement ? node.selectedOptions?.[0]?.textContent || "" : node.textContent || ""),
+          menuLabels,
           actionCellClass: actionCell?.className || "",
           gap: group ? getComputedStyle(group).gap : "",
           heights: controls.map(node => Math.round(node.getBoundingClientRect().height)),
           primaryContext: Boolean(actionCell?.querySelector('button[data-action="context"].primary')),
           titleCopyButtons: row.querySelectorAll("td:nth-child(2) .copy-control").length,
           checkVisibleText: (checkCell?.innerText || "").trim(),
+          checkTextContent: (checkCell?.textContent || "").trim(),
           checkPseudoText: [getComputedStyle(checkCell, "::before").content, getComputedStyle(checkCell, "::after").content].join(""),
+          checkListStyle: getComputedStyle(checkCell).listStyleType,
+          checkCellTag: checkCell?.tagName || "",
+          checkInputDisplay: checkInput ? getComputedStyle(checkInput).display : "",
           hasStandaloneDot: (checkCell?.innerText || "").includes(".")
             || [getComputedStyle(checkCell, "::before").content, getComputedStyle(checkCell, "::after").content].some(value => value.includes(".")),
+          overlap,
+          scrollWidth: group?.scrollWidth || 0,
+          clientWidth: group?.clientWidth || 0,
+          menuHidden: moreMenu?.hidden === true,
         };
       })()`);
-      expect(tableActions?.cellCount === 7 && tableActions.headerCount === 7, "表格結果沒有獨立七欄操作結構。");
-      expect(tableActions.labels.length === expectedLabels.length && expectedLabels.every(value => tableActions.labels.includes(value)), "表格操作群組與列表不一致。");
-      expect(tableActions.gap === "6px" && tableActions.heights.every(value => value === 30) && tableActions.primaryContext
+      const tableVisibleLabels = ["開啟", "加入上下文", "更多 ▾"];
+      const tableMenuLabels = ["複製路徑", "複製檔名", "顯示所在位置", "釘選", "加入分類"];
+      expect(tableActions?.labels.length === tableVisibleLabels.length && tableVisibleLabels.every(value => tableActions.labels.includes(value))
+        && tableActions.menuLabels.length === tableMenuLabels.length && tableMenuLabels.every(value => tableActions.menuLabels.includes(value))
+        && tableActions.menuHidden, "表格操作群組沒有以精簡主列與可展開更多操作呈現。");
+      expect(tableActions?.gap === "6px" && tableActions.heights.every(value => value === 30) && tableActions.primaryContext
         && tableActions.titleCopyButtons === 0 && tableActions.actionCellClass.includes("document-actions-cell")
-        && !tableActions.checkVisibleText.includes(".") && !tableActions.checkPseudoText.includes("."), "勾選框所在儲存格可見文字不得含句點。");
+        && !tableActions.overlap && tableActions.scrollWidth <= tableActions.clientWidth + 1
+        && !tableActions.checkVisibleText.includes(".") && !tableActions.checkTextContent.includes(".")
+        && !tableActions.checkPseudoText.includes(".") && tableActions.checkCellTag === "TD"
+        && tableActions.checkInputDisplay === "block", `表格操作欄互相重疊、水平溢出或勾選欄含多餘句點：${JSON.stringify(tableActions)}`);
+      await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "multi-passage-lines.txt");
+        row?.querySelector(".result-more-toggle")?.click();
+      })()`);
+      await waitFor(() => cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "multi-passage-lines.txt");
+        return row?.querySelector(".result-more-menu")?.hidden === false;
+      })`));
+      const expandedTableActions = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "multi-passage-lines.txt");
+        const group = row?.querySelector(".document-actions");
+        const visible = node => {
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return !node.hidden && style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        };
+        const controls = Array.from(group?.querySelectorAll("button, select") || []).filter(visible);
+        const boxes = controls.map(node => node.getBoundingClientRect());
+        const overlap = boxes.some((left, index) => boxes.slice(index + 1).some(right =>
+          left.left < right.right && right.left < left.right && left.top < right.bottom && right.top < left.bottom));
+        return {
+          labels: controls.map(node => node instanceof HTMLSelectElement ? node.options[0]?.textContent || "" : node.textContent || ""),
+          overlap,
+          scrollWidth: group?.scrollWidth || 0,
+          clientWidth: group?.clientWidth || 0,
+        };
+      })()`);
+      expect(expandedTableActions && tableMenuLabels.every(value => expandedTableActions.labels.includes(value))
+        && !expandedTableActions.overlap && expandedTableActions.scrollWidth <= expandedTableActions.clientWidth + 1, "表格展開更多操作後仍有重疊或水平溢出。");
+      await cdp.evaluate(`(() => document.querySelector("#document-table-body .result-more-toggle")?.click())()`);
       await click(cdp, "#view-list");
       await waitFor(() => visible(cdp, "#document-list"));
       await noBrowserErrorsSince(cdp, start, "列表／表格快捷操作");

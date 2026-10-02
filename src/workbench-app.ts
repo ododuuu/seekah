@@ -668,6 +668,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .document-actions select.result-action { flex: 0 0 auto; height: 30px; min-height: 30px; padding: 4px 24px 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font-size: 11px; }
 .result-action.btn { height: 30px; min-height: 30px; padding: 4px 8px; font-size: 11px; }
 .result-action.is-active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-2); }
+.result-more-menu {
+  display: flex;
+  flex: 0 0 100%;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--input-surface);
+}
+.result-more-menu[hidden] { display: none; }
+.result-more-menu .copy-actions { display: contents; }
+.result-more-menu .copy-action { display: inline-flex; }
+.table-actions { flex-wrap: wrap; }
+.table-actions .result-more-toggle { order: 3; }
+.table-actions .result-more-menu { order: 4; }
+.table-actions .result-more-menu .result-action { flex: 0 0 auto; }
 .table-wrap {
   overflow-x: auto;
   overflow-y: hidden;
@@ -715,7 +733,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 }
 .table-title:hover { color: var(--brand-2); text-decoration: underline; }
 .table-empty { height: 96px; color: var(--muted); text-align: center !important; }
-.table-check { width: 18px; height: 18px; accent-color: var(--brand); }
+.table-check { display: block; width: 18px; height: 18px; margin: 0 auto; accent-color: var(--brand); }
 .bulk-bar {
   position: sticky;
   bottom: 0;
@@ -2097,9 +2115,9 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     libraryActionChain = libraryActionChain.then(operation, operation);
     await libraryActionChain;
   }
-  function resultActions(item) {
-    const actions = make("div", "document-actions");
-    actions.append(resultCopyActions(item));
+  function resultActions(item, options = {}) {
+    const compact = options.compact === true && !item.temporary;
+    const actions = make("div", "document-actions" + (compact ? " table-actions" : ""));
     if (item.temporary) {
       const source = state.imported.get(item.id);
       const selected = Boolean(source?.selected);
@@ -2138,7 +2156,41 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       selected ? "small result-action is-active" : "small result-action primary",
       () => toggleSelection(item, !selectedReference(item.reference)));
     toggle.dataset.action = "context";
-    actions.append(open, reveal, pin, group, toggle);
+    if (!compact) {
+      actions.append(resultCopyActions(item), open, reveal, pin, group, toggle);
+      return actions;
+    }
+    const menu = make("div", "result-more-menu", "");
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "更多操作");
+    menu.append(resultCopyActions(item), reveal, pin, group);
+    for (const control of menu.querySelectorAll("button, select")) control.setAttribute("role", "menuitem");
+    const more = button("更多 ▾", "small result-action result-more-toggle", event => {
+      const nextOpen = menu.hidden;
+      for (const other of document.querySelectorAll(".result-more-menu:not([hidden])")) {
+        other.hidden = true;
+        other.previousElementSibling?.setAttribute("aria-expanded", "false");
+      }
+      menu.hidden = !nextOpen;
+      if (event.currentTarget instanceof HTMLElement) event.currentTarget.setAttribute("aria-expanded", String(nextOpen));
+    });
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-expanded", "false");
+    const closeMenu = () => {
+      menu.hidden = true;
+      more.setAttribute("aria-expanded", "false");
+    };
+    menu.addEventListener("click", event => {
+      if (event.target instanceof HTMLElement && event.target.closest("button, select")) window.setTimeout(closeMenu, 0);
+    });
+    menu.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeMenu();
+      more.focus();
+    });
+    actions.append(open, toggle, more, menu);
     return actions;
   }
   function makeDocumentRow(item) {
@@ -2206,7 +2258,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const statusCell = document.createElement("td");
     statusCell.textContent = item.status === "indexed" ? "可讀" : (item.status || "未提供");
     const actionsCell = make("td", "document-actions-cell", "");
-    actionsCell.append(resultActions(item));
+    actionsCell.append(resultActions(item, { compact: true }));
     row.append(checkCell, titleCell, rootCell, formatCell, locationCell, statusCell, actionsCell);
     return row;
   }

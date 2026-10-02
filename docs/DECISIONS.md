@@ -1706,3 +1706,15 @@
   - Codex 頁只可加入已索引 reference，不能加入低信心、未索引或 arbitrary path；臨時文件仍只屬工作台頁面，故 `temporaryCount` 只作上限協調，不把暫存內容跨頁傳出。
 - 驗證：
   - `test/m96.test.ts` 使用暫存資料目錄與合成文件，覆蓋 API 邊界、stable reference、跨頁讀取、上限與反向契約；`scripts/ui-smoke.mjs` 實際操作工作台／Codex route 的加入、移除、reload 與右側欄同步。
+
+## D136：表格結果操作採精簡主列與更多選單
+
+- 日期：2026-10-02。依 SPEC §94。本次只調整工作台結果列的呈現、勾選欄 CSS、`test/m90.test.ts` 與 `scripts/ui-smoke.mjs`；不新增 API、資料欄位、持久化資料或搜尋結果邏輯。
+- 決定：
+  - 清單維持完整操作群組；表格沿用同一個 `resultActions` 與 action handler，但以 `compact: true` 顯示「開啟」、「加入上下文／移出上下文」與「更多」，複製、所在位置、釘選／取消釘選及分類控制收在同一個可收合選單。選單開啟時仍使用原本的按鈕、select、stable reference 與 library payload。
+  - 表格勾選 input 明確使用 block 排列並由儲存格置中；smoke 同時檢查儲存格 `innerText`／`textContent`、`::before`／`::after` content、`list-style-type` 與 input display，避免把截圖中的裝飾誤判成產品文字。
+  - smoke 在選單收合與展開兩種狀態收集可見控制的 `getBoundingClientRect()`，要求任兩個控制不重疊且操作群組 `scrollWidth <= clientWidth`；這是實際 DOM 版面契約，不以 source text 代替。
+- 理由：
+  - 固定表格操作欄同時放七項控制會在窄視窗或字型差異下互相覆蓋；共用 handler 加更多選單可縮短主列而不改行為。
+  - 句點來源未必是文字節點，直接驗證 DOM 文字、偽元素與列表樣式可區分產品內容與繪製裝飾。
+- 驗證：`test/m90.test.ts` 包含精簡表格呼叫與勾選欄的反向契約；`scripts/ui-smoke.mjs` 實際切換表格、展開更多選單並驗證 bounding rect、溢出及勾選欄內容。
