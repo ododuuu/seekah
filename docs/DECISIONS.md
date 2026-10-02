@@ -1657,3 +1657,10 @@
 - 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
+
+## D133：Codex path recall 以逐行 token 掃描保留完整 reference
+
+- 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
+- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
+- 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
+- m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。

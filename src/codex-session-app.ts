@@ -174,7 +174,8 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
     const row = make("div", "reference-row");
     const pathCell = make("span", "reference-path", reference.path);
     const sources = Array.isArray(reference.sources) && reference.sources.length ? reference.sources.map(sourceLabel).join("、") : sourceLabel(reference.source);
-    const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence));
+    const kindLabel = reference.kind === "directory" ? "資料夾" : reference.kind === "file" ? "檔案" : "";
+    const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence) + (kindLabel ? " · " + kindLabel : ""));
     const status = (reference.exists ? "磁碟存在" : "磁碟不存在") + " · " + (reference.indexed ? "已在 Seekah 索引" : "未在 Seekah 索引");
     const indexCell = make("span", "reference-meta", status + " · " + String(reference.occurrences || 0) + " 次");
     if (reference.seekahReference) indexCell.append(make("div", "mono", reference.seekahReference));

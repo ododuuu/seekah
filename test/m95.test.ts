@@ -93,8 +93,8 @@ test("M95 Codex sessions API 只回傳 metadata、reference 與 Seekah 索引狀
     referenceCount: number;
     visibleReferenceCount: number;
     lowReferenceCount: number;
-    references: Array<{ path: string; source: string; indexed: boolean; exists: boolean; display: string; indexedStatus?: string; seekahReference?: string }>;
-    lowReferences: Array<{ path: string; source: string; indexed: boolean; exists: boolean; display: string; indexedStatus?: string }>;
+    references: Array<{ path: string; source: string; indexed: boolean; exists: boolean; kind: string; display: string; indexedStatus?: string; seekahReference?: string }>;
+    lowReferences: Array<{ path: string; source: string; indexed: boolean; exists: boolean; kind: string; display: string; indexedStatus?: string }>;
   };
   assert.equal(details.readOnly, true);
   assert.equal(details.sessionId, "m95-session");
@@ -104,6 +104,7 @@ test("M95 Codex sessions API 只回傳 metadata、reference 與 Seekah 索引狀
   assert.equal(details.references.length, 2);
   const indexed = details.references.find(item => item.path === fixture.indexedPath);
   assert.ok(indexed);
+  assert.equal(indexed.kind, "file");
   assert.equal(indexed.indexed, true);
   assert.equal(indexed.exists, true);
   assert.match(indexed.seekahReference ?? "", /^[1-9]\d*-[0-9a-f]{16}$/u);
@@ -155,6 +156,7 @@ test("M95 Codex 工作階段頁面可由 loopback route 開啟且不含對話內
   assert.match(pageHtml, /\/api\/library\/pinned/u);
   assert.match(pageHtml, /\/api\/library\/groups\//u);
   assert.match(pageHtml, /reference\.exists/u);
+  assert.match(pageHtml, /reference\.kind/u);
 });
 
 test("M95 reverse 移除 API 索引比對或入口時契約必須失敗", async () => {

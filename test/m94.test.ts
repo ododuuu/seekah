@@ -148,6 +148,82 @@ test("M94 path noise、事件 type 上限與 stream line 上限必須拒絕", as
   assert.equal(limitedLine.eventCount, 0);
 });
 
+test("M94 path recall 保留中文、空白、JSON escape、包裝與資料夾", async t => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m94-recall-"));
+  const codexHome = path.join(temp, "synthetic-codex-home");
+  const rollout = path.join(codexHome, "sessions", "2026", "10", "03", "rollout-recall.jsonl");
+  const directoryA = path.join(temp, "資料 根目錄", "報表");
+  const directoryB = path.join(temp, "另一個資料夾");
+  await mkdir(path.dirname(rollout), { recursive: true });
+  await mkdir(directoryA, { recursive: true });
+  await mkdir(directoryB, { recursive: true });
+  await writeFile(path.join(directoryA, "訊息通知設定.xlsx"), "synthetic\n", "utf8");
+  const chinesePath = "C:\\Users\\x\\Desktop\\報表\\訊息通知設定.xlsx";
+  const forwardSlashWindowsPath = "C:/Users/x/Desktop/資料/年度報告/summary.txt";
+  const escapedWindowsPath = "C:\\Users\\x\\Desktop\\JSON escape\\通知設定.json";
+  const programFilesPath = "C:\\Program Files\\Seekah Docs\\My File.pdf";
+  const myDocsPath = "D:\\My Docs\\a b.pdf";
+  const uncPath = "\\\\server\\share\\資料\\shared report.xlsx";
+  const wrappedBacktickPath = "C:\\Users\\x\\Desktop\\包裝\\backtick.md";
+  const wrappedBracketPath = "C:/Users/x/Desktop/包裝/list item.md";
+  const wrappedParenthesisPath = "C:/Users/x/Desktop/包裝/括號.md";
+  const toolProgramPath = "C:\\Program Files\\Seekah\\工具輸出.txt";
+  const toolDocsPath = "D:\\My Docs\\build result.pdf";
+  const toolUncPath = "\\\\server\\share\\資料\\deploy.txt";
+  const longMessagePath = "C:\\Users\\x\\Desktop\\長說明\\最後一個檔案.txt";
+  const rows = [
+    { type: "session_meta", payload: { type: "session_meta", session_id: "m94-recall", cwd: temp } },
+    { type: "response_item", payload: { type: "message", role: "user", content: [
+      { type: "input_text", text: `請查看 ${chinesePath}，以及 ${forwardSlashWindowsPath}。` },
+      { type: "input_text", text: `JSON: ${escapedWindowsPath}` },
+      { type: "input_text", text: `UNC: ${uncPath}` },
+      { type: "input_text", text: `\`${wrappedBacktickPath}\`\n- [${wrappedBracketPath}]\n(${wrappedParenthesisPath})` },
+      { type: "input_text", text: `"${programFilesPath}" 與 "${myDocsPath}"` },
+      { type: "input_text", text: `\`${directoryA}\` 與 ${directoryB}${path.sep}` },
+      { type: "input_text", text: `${"這是一段超過四百字元的說明。".repeat(30)} ${longMessagePath}` },
+      { type: "input_text", text: "https://example.test/C:/noise/url.txt data:image/png;base64,/9j/4AAQSkZJRgABAQ base64,/iVBORw0KGgoAAAANSUhEUgAA" },
+    ] } },
+    { type: "response_item", payload: { type: "function_call", name: "shell_command", arguments: { command: `type "${toolProgramPath}"` } } },
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", input: { command: `cat "${toolDocsPath}"` } } },
+    { type: "response_item", payload: { type: "custom_tool_call", name: "apply_patch", input: `*** Update File: ${toolUncPath}\n+deploy` } },
+    { type: "event_msg", payload: { type: "item_completed", item: { type: "FileChange", path: toolUncPath } } },
+  ];
+  await writeFile(rollout, rows.map(row => JSON.stringify(row)).join("\n") + "\n", "utf8");
+  t.after(() => rm(temp, { recursive: true, force: true }));
+
+  const [session] = await parseCodexSessions({ codexHome });
+  assert.ok(session);
+  const expected = [
+    [chinesePath, "user-provided"],
+    [forwardSlashWindowsPath, "user-provided"],
+    [escapedWindowsPath, "user-provided"],
+    [programFilesPath, "user-provided"],
+    [myDocsPath, "user-provided"],
+    [uncPath, "user-provided"],
+    [wrappedBacktickPath, "user-provided"],
+    [wrappedBracketPath, "user-provided"],
+    [wrappedParenthesisPath, "user-provided"],
+    [directoryA, "user-provided", "directory"],
+    [directoryB, "user-provided", "directory"],
+    [longMessagePath, "user-provided"],
+    [toolProgramPath, "codex-tool"],
+    [toolDocsPath, "codex-tool"],
+    [toolUncPath, "codex-tool"],
+  ] as const;
+  for (const [value, source, kind] of expected) {
+    const normalized = codexReferencePathForTest(value);
+    assert.ok(normalized, `path 無法正規化：${value}`);
+    const item: CodexSession["references"][number] | undefined = session.references.find(reference => reference.path === normalized);
+    assert.ok(item, `召回缺少完整 path：${value}`);
+    assert.equal(item.source, source, `來源錯誤：${value}`);
+    if (kind) assert.equal(item.kind, kind, `kind 錯誤：${value}`);
+  }
+  assert.equal(session.references.find(item => item.path === codexReferencePathForTest(directoryA))?.occurrences, 1);
+  assert.equal(session.references.some(item => item.path.includes("noise")), false);
+  assert.equal(session.references.some(item => item.path.includes("base64")), false);
+  assert.equal(session.references.some(item => item.path.includes("example.test")), false);
+});
+
 test("M94 檔案大小上限回傳 skipped，path+mtime+size cache 重用 parse result", async t => {
   const fixtureData = await fixture();
   t.after(() => rm(fixtureData.temp, { recursive: true, force: true }));

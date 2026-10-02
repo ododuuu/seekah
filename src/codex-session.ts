@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ export const CODEX_REFERENCE_SOURCES = ["seekah-prompt", "user-provided", "seeka
 export type CodexReferenceSource = (typeof CODEX_REFERENCE_SOURCES)[number];
 export type CodexReferenceConfidence = "high" | "medium" | "low";
 export type CodexReferenceDisplay = "normal" | "low-confidence-missing";
+export type CodexReferenceKind = "file" | "directory" | "unknown";
 export type CodexSessionParseMode = "structured" | "message-path-fallback";
 
 export interface CodexSessionReference {
@@ -17,6 +18,7 @@ export interface CodexSessionReference {
   source: CodexReferenceSource;
   sources: CodexReferenceSource[];
   confidence: CodexReferenceConfidence;
+  kind: CodexReferenceKind;
   display: CodexReferenceDisplay;
   exists: boolean;
   occurrences: number;
@@ -92,7 +94,8 @@ const AUTO_INJECTED_USER_PREFIXES = [
 ];
 const SEEKAH_CONTEXT_MARKER = "# Seekah 上下文";
 const MCP_SERVER_NAMES = new Set(["localdocsearch", "seekah"]);
-const PATH_BOUNDARY = /[\u0022\u0027\u0060\u003c\u003e\u007c\u0028\u0029\u005b\u005d\u007b\u007d\u3001\u3002\u3009\u300a\u300b\u300d\u3010\u3011\u3014\u3015\u3017\u3019\u301b\u2026\uff0c\uff1a\uff1b\uff01\uff1f]/u;
+const PATH_START_TOKEN = /(?:file:\/\/|[A-Za-z]:[\\/]|\\\\|\/)/gu;
+const PATH_STOP_CHARS = new Set(["\"", "'", "`", "<", ">", "|", "(", ")", "[", "]", "{", "}", "，", "。", "、", "！", "？", "；", "：", "…", "」", "』", "】", "〕", "〉", "》", "）", "］", "｝"]);
 const ALLOWED_EVENT_TYPES = new Set([
   "unknown", "session_meta", "turn_context", "world_state", "compacted",
   "response", "response_item", "response/message", "response_item/message",
@@ -102,7 +105,6 @@ const ALLOWED_EVENT_TYPES = new Set([
   "event_msg/user_message", "event_msg/agent_message", "event_msg/reasoning",
   "event_msg/plan", "event_msg/web_search", "event_msg/context_compaction",
 ]);
-const ABSOLUTE_PATH_TOKEN = /(?:file:\/\/[^\s"'`<>|]+|[A-Za-z]:[\\/][^\s"'`<>|]+|\\\\[^\s"'`<>|]+|\/(?:[^\s"'`<>|]+\/)*[^\s"'`<>|/]+)/gu;
 
 interface JsonRecord { [key: string]: unknown }
 interface PathEvidence {
@@ -180,11 +182,19 @@ function isWindowsAbsolute(value: string): boolean {
 
 function trimPathToken(value: string): string {
   let candidate = value.trim();
-  const boundary = candidate.search(PATH_BOUNDARY);
-  if (boundary >= 0) candidate = candidate.slice(0, boundary);
-  candidate = candidate.replace(/[,:;.!?]+$/u, "");
-  candidate = candidate.replace(/:(?:\d+)$/u, "");
-  return candidate.replace(/[,:;.!?]+$/u, "").trim();
+  candidate = candidate.replace(/^[\u0022\u0027\u0060\u0028\u005b\u007b\u003c\u300c\u300e\u3010\u3014\u3008\u300a\uff08\uff3b\uff5b]+/u, "");
+  const sentenceBoundary = candidate.search(/[\u3001\u3002\u2026\uff0c\uff1a\uff1b\uff01\uff1f]/u);
+  if (sentenceBoundary > 0 && /\.[A-Za-z0-9]{1,16}$/u.test(candidate.slice(0, sentenceBoundary))) {
+    candidate = candidate.slice(0, sentenceBoundary);
+  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const previous = candidate;
+    candidate = candidate.replace(/:(?:\d+)$/u, "");
+    candidate = candidate.replace(/[\u0022\u0027\u0060\u0029\u005d\u007d\u003e\u300d\u300f\u3011\u3015\u3009\u300b\uff09\uff3d\uff5d]+$/u, "");
+    candidate = candidate.replace(/[,:;.!?\u3001\u3002\u2026\uff0c\uff1a\uff1b\uff01\uff1f]+$/u, "");
+    if (candidate === previous) break;
+  }
+  return candidate.trim();
 }
 function isLikelyBase64Fragment(value: string): boolean {
   const candidate = value.replace(/^\/+/u, "");
@@ -210,8 +220,14 @@ function normalizeAbsolutePath(value: string): string | null {
   }
   candidate = trimPathToken(candidate);
   if (!candidate || candidate.length > MAX_REFERENCE_TEXT_LENGTH || candidate.includes("\n") || candidate.includes("\r")) return null;
-  if (isWindowsAbsolute(candidate)) return path.win32.normalize(candidate);
-  if (candidate.startsWith("/")) return path.posix.normalize(candidate);
+  if (isWindowsAbsolute(candidate)) {
+    const normalized = path.win32.normalize(candidate);
+    return /^[A-Za-z]:\\$/u.test(normalized) ? normalized : normalized.replace(/[\\]+$/u, "");
+  }
+  if (candidate.startsWith("/")) {
+    const normalized = path.posix.normalize(candidate);
+    return normalized === "/" ? normalized : normalized.replace(/\/+$/u, "");
+  }
   return null;
 }
 
@@ -220,28 +236,76 @@ function pathKey(value: string): string {
   return isWindowsAbsolute(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+const PATH_START_BOUNDARY_CHARS = new Set(["\"", "'", "`", "(", "<", "[", "{", "："]);
+
+function isPathStartBoundary(text: string, index: number): boolean {
+  if (index === 0) return true;
+  return /\s/u.test(text[index - 1] ?? "") || PATH_START_BOUNDARY_CHARS.has(text[index - 1] ?? "");
+}
+
+function isAbsolutePathStart(text: string, index: number): boolean {
+  const first = text.charCodeAt(index);
+  if (first === 102 && text.startsWith("file://", index)) return isPathStartBoundary(text, index);
+  const second = text.charCodeAt(index + 1);
+  if (((first >= 65 && first <= 90) || (first >= 97 && first <= 122))
+    && second === 58 && (text[index + 2] === "/" || text[index + 2] === "\\")) {
+    return isPathStartBoundary(text, index);
+  }
+  if (text[index] === "\\" && text[index + 1] === "\\") return isPathStartBoundary(text, index);
+  return text[index] === "/" && isPathStartBoundary(text, index);
+}
+
+function pathSpan(text: string, start: number): string {
+  let end = start;
+  while (end < text.length && !PATH_STOP_CHARS.has(text[end]!)) {
+    if (end > start && isAbsolutePathStart(text, end)) break;
+    end++;
+  }
+  return text.slice(start, end);
+}
+
+function pathCandidate(value: string): string | null {
+  let candidate = trimPathToken(value);
+  candidate = candidate.replace(/([\\/])\s+(?:與|和|及|以及|and|or|&)\s*$/iu, "$1");
+  if (!candidate) return null;
+  for (const match of candidate.matchAll(/\.[A-Za-z0-9]{1,16}(?=\s|$)/gu)) {
+    const end = (match.index ?? 0) + match[0].length;
+    if (end < candidate.length) return candidate.slice(0, end);
+    break;
+  }
+  return candidate;
+}
+
+function appendPath(paths: string[], raw: string): void {
+  const candidate = pathCandidate(raw);
+  if (!candidate) return;
+  const normalized = normalizeAbsolutePath(candidate);
+  if (normalized && !paths.includes(normalized)) paths.push(normalized);
+}
+
 function extractAbsolutePaths(text: string): string[] {
-  if (text.length > MAX_REFERENCE_TEXT_LENGTH || /[\r\n]/u.test(text)) return [];
   const paths: string[] = [];
-  for (const match of text.matchAll(ABSOLUTE_PATH_TOKEN)) {
-    const candidate = match[0];
-    const index = match.index ?? 0;
-    const prefix = text.slice(0, index);
-    const lowerPrefix = prefix.toLowerCase();
-    const networkStarts = [lowerPrefix.lastIndexOf("http://"), lowerPrefix.lastIndexOf("https://"), lowerPrefix.lastIndexOf("ftp://")];
-    const networkStart = Math.max(...networkStarts);
-    const dataStart = lowerPrefix.lastIndexOf("data:");
-    const base64Start = lowerPrefix.lastIndexOf(";base64");
-    const splitNetworkUrl = (lowerPrefix.endsWith("htt") && /^p:[\\/]/iu.test(candidate))
-      || (lowerPrefix.endsWith("http") && /^s:[\\/]/iu.test(candidate))
-      || (lowerPrefix.endsWith("ft") && /^p:[\\/]/iu.test(candidate));
-    const insideNetworkUrl = (networkStart >= 0 && !/\s/u.test(text.slice(networkStart, index))) || splitNetworkUrl;
-    const insideDataUri = dataStart >= 0 && !/\s/u.test(text.slice(dataStart, index));
-    const insideBase64 = base64Start >= 0 && !/\s/u.test(text.slice(base64Start, index));
-    if (insideNetworkUrl || insideDataUri || insideBase64 || isLikelyBase64Fragment(candidate) || candidate.startsWith("//")
-      || (candidate.startsWith("/") && (text[index - 1] === ":" || text[index - 1] === "/"))) continue;
-    const normalized = normalizeAbsolutePath(candidate);
-    if (normalized && !paths.includes(normalized)) paths.push(normalized);
+  for (const line of text.split(/\r?\n/u)) {
+    for (const match of line.matchAll(PATH_START_TOKEN)) {
+      const candidate = pathSpan(line, match.index ?? 0);
+      const index = match.index ?? 0;
+      if (!candidate || candidate === "/") continue;
+      const prefix = line.slice(0, index);
+      const lowerPrefix = prefix.toLowerCase();
+      const networkStarts = [lowerPrefix.lastIndexOf("http://"), lowerPrefix.lastIndexOf("https://"), lowerPrefix.lastIndexOf("ftp://")];
+      const networkStart = Math.max(...networkStarts);
+      const dataStart = lowerPrefix.lastIndexOf("data:");
+      const base64Start = Math.max(lowerPrefix.lastIndexOf(";base64"), lowerPrefix.lastIndexOf("base64,"));
+      const splitNetworkUrl = (lowerPrefix.endsWith("htt") && /^p:[\\/]/iu.test(candidate))
+        || (lowerPrefix.endsWith("http") && /^s:[\\/]/iu.test(candidate))
+        || (lowerPrefix.endsWith("ft") && /^p:[\\/]/iu.test(candidate));
+      const insideNetworkUrl = (networkStart >= 0 && !/\s/u.test(line.slice(networkStart, index))) || splitNetworkUrl;
+      const insideDataUri = dataStart >= 0 && !/\s/u.test(line.slice(dataStart, index));
+      const insideBase64 = base64Start >= 0 && !/\s/u.test(line.slice(base64Start, index));
+      if (insideNetworkUrl || insideDataUri || insideBase64 || isLikelyBase64Fragment(candidate) || candidate.startsWith("//")
+        || (candidate.startsWith("/") && (line[index - 1] === ":" || line[index - 1] === "/"))) continue;
+      appendPath(paths, candidate);
+    }
   }
   return paths;
 }
@@ -351,7 +415,10 @@ function seekahPromptPaths(text: string): string[] {
   }
   const lines = trimmed.split(/\r?\n/u).map(item => item.trim()).filter(Boolean);
   if (!lines.length) return [];
-  const paths = lines.map(normalizeAbsolutePath);
+  const paths = lines.map(item => {
+    const normalized = normalizeAbsolutePath(item);
+    return normalized && trimPathToken(item) === item ? normalized : null;
+  });
   return paths.every((value): value is string => Boolean(value)) ? uniquePaths(paths) : [];
 }
 
@@ -513,17 +580,27 @@ function createMutableSession(id: string): MutableSession {
     eventTypes: {}, parseMode: "structured", parseStatus: "parsed", references: new Map() };
 }
 
+function inspectReference(filePath: string): { exists: boolean; kind: CodexReferenceKind } {
+  try {
+    const info = statSync(filePath);
+    return { exists: true, kind: info.isDirectory() ? "directory" : info.isFile() ? "file" : "unknown" };
+  } catch {
+    return { exists: false, kind: "unknown" };
+  }
+}
+
 function finalizeReference(reference: MutableReference): CodexSessionReference {
   const sources = [...reference.sources].sort((left, right) => (SOURCE_PRIORITY.get(left) ?? 99) - (SOURCE_PRIORITY.get(right) ?? 99));
-  const exists = existsSync(reference.path);
-  const display: CodexReferenceDisplay = exists ? "normal" : "low-confidence-missing";
+  const inspected = inspectReference(reference.path);
+  const display: CodexReferenceDisplay = inspected.exists ? "normal" : "low-confidence-missing";
   return {
     path: reference.path,
     source: reference.source,
     sources,
     confidence: reference.confidence,
+    kind: inspected.kind,
     display,
-    exists,
+    exists: inspected.exists,
     occurrences: reference.occurrences,
     eventTypes: [...reference.eventTypes].sort(),
     indexed: reference.indexed,
