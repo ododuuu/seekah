@@ -1,4 +1,21 @@
 # 設計決策紀錄
+## D132：Codex 安全邊界、增量解析與文件庫操作
+
+- 日期：2026-10-03。依 SPEC §§98–99；先將本分支 rebase 到 `main`，保留 main 的文件庫 API、工作台導覽與上下文抽屜實作；本次只修改 Codex parser、loopback API、Codex 頁面與 m94／m95 合成測試，不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - Codex API 原本沿用 token，但 GET Codex route 未套用既有 non-GET Origin guard；Codex 頁面的 `Origin`／`Referer` 必須在有提供時限制為目前 loopback origin。
+  - rollout 可能包含 data URI、base64／URL noise、超長文字、超長單行與大型檔案；每次 request 重新解析全部 rollout 會放大 I/O 與 JSON 配置成本。
+  - main 的文件庫已有 stable reference 驗證、釘選與分類 API；main 的上下文抽屜是工作台選取狀態，沒有 Codex 獨立頁到該狀態的跨頁共享契約。
+- 決定：
+  - path text 加上 data／base64／URL／換行／400 字元邊界與標點／`:line` 清理；event type 使用固定 allowlist 與 128 字元上限；單檔 64 MiB、單行 2,000,000 字元，超檔回傳 skipped，stream 組行避免無界 readline 配置。
+  - cache key 採 canonical rollout path + `mtimeMs` + size；session 清單建立後 detail 只解析目標 rollout，並將 `exists`、可見／低信心 reference buckets 與 parse status 明確放入 API。
+  - 已索引 reference 才提供 Pin 與 Add-to-category，payload 沿用 main 的 canonical path／stable reference API。Codex 頁面不新增虛構的 Add-to-context；需要上下文時仍使用工作台既有選取流程。
+- 理由：
+  - 這些邊界同時限制輸出 injection、錯誤 path 顯示、單一檔案資源消耗與重複解析成本，並保留真實 rollout schema 的未知事件可觀測性。
+  - 直接復用文件庫 API 可保留 stable reference／Origin／transaction 驗證；沒有跨頁 context contract 時不新增第二套 context state，避免 UI 宣稱已加入但工作台看不到。
+- 驗證：
+  - `test/m94.test.ts` 使用暫存 synthetic Codex home 覆蓋 path noise、event type、line／file cap、skip 與 cache；`test/m95.test.ts` 覆蓋 token／Origin、visible／low buckets、exists／indexed 與頁面 library action 接線。未讀取真實 `~/.codex` 或 `%LOCALAPPDATA%\\LocalDocSearch*`，不宣稱公司 Windows 驗收。
+
 ## D127：文件庫採獨立 SQLite 並以路徑去重
 
 - 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
@@ -41,6 +58,48 @@
   - 既有完整測試、UI smoke 與 search-diff 分別覆蓋編譯／回歸、實際瀏覽器表面及搜尋結果不變，維持六個月後可診斷性。
 - 否決：
   - 不讀取 `%LOCALAPPDATA%\\LocalDocSearch*`，不執行真實索引操作，不把一次通過的本機 smoke 宣稱為公司 Windows 驗收；不修改 package version、lockfile、STATUS、NEXT-TODO 或 handoff。
+
+## D131：Codex 工作階段以 token 保護的 loopback metadata 頁面呈現
+
+- 日期：2026-10-02。依 SPEC §99；本分支範圍是 `src/workbench.ts`、`src/codex-session-app.ts`、`src/workbench-app.ts` 與 `test/m95.test.ts`，不修改 package 版本、STATUS、NEXT-TODO 或 handoff。
+- 事實：
+  - 工作台已有 loopback HTTP server、URL fragment token 與 CSP；Codex 頁面可沿用同一個本機認證邊界，不需要新增服務或瀏覽器 storage。
+  - Reference Set 需要同時呈現 session summary 與指定 session 的完整 path metadata，且既有索引可用 exact／case-insensitive path lookup 產生 canonical document reference。
+  - 真實 rollout 的低信心未知事件可能留下不存在路徑；它只能維持 low confidence／未索引狀態，不能與已確認文件同等呈現。
+- 決定：
+  - 新增 `GET /api/codex/sessions` 與 `GET /api/codex/sessions/:id/references`；兩者均要求 `X-LocalDocSearch-Token`，只回傳 parser metadata、事件統計、來源／confidence、絕對路徑與索引狀態。
+  - 新增 `/codex-sessions` 獨立頁面，從工作台頂列進入；所有值以 DOM `textContent` 呈現。頁面只提供重新整理與回到工作台，不提供送出、修改 rollout、執行 tool 或開啟附件。
+  - parser 結果若有現有索引才做唯讀比對；索引不存在時仍可顯示 session metadata，不在 Codex 頁面啟動索引或 autoupdate。低信心且未命中索引的 reference 以降級 metadata 顯示。
+- 理由：
+  - 復用既有 loopback token／CSP 能維持本機資料邊界，獨立頁面檔案也避開平行工作台頁面重構的主要衝突面。
+  - API summary 與 detail 分離可避免清單重複傳輸 reference，同時讓 UI 在選取 session 後才讀取有限的 detail。
+- 否決：
+  - 不把 Codex message、reasoning、query、command、tool result 或附件內容放入 API／HTML；不把 Codex home 檔案路徑或原始 rollout 檔名公開。
+  - 不新增外部服務、MCP 呼叫、Provider 傳送、write endpoint 或跨工作階段保存。
+- 驗證：
+  - `test/m95.test.ts` 覆蓋 token 403、summary／detail、索引 path match、來源分類、頁面 CSP／安全 DOM 呈現、內容不外洩與入口／索引比對的反向契約。
+
+## D130：Codex rollout 採真實欄位摘要對照與有界唯讀 parser
+
+- 日期：2026-10-02。依 SPEC §98；本分支範圍是 `src/codex-session.ts`、`test/m94.test.ts`、`docs/research/codex-session-format-2026-10-02.md`，不修改 package 版本、STATUS、NEXT-TODO 或 handoff。
+- 事實：
+  - 使用者提供的摘要確認 rollout 是 `sessions/YYYY/MM/DD/rollout-*.jsonl`；57 個 rollout 的高頻 path 主要來自環境設定、工具輸出與 user message，不能以遞迴掃描欄位當作檔案引用。
+  - `turn_context`、`event_msg/thread_settings_applied`、`world_state`、session base instructions、developer／assistant message 是環境或模型資料；`results[].url`、stdout、aggregated／formatted output 是工具輸出。
+  - 實際 MCP server registration 是 `localdocsearch`；只有 localdocsearch MCP event／namespace 才能成為 `seekah-mcp`。真實摘要沒有這類 call，因此 real-format fixture 的 Seekah MCP 應為 0。
+  - 合成研究沒有讀取真實 `~/.codex`、`%LOCALAPPDATA%\\LocalDocSearch*`、認證、history、attachment 或 SQLite，也沒有把 conversation content 放入解析結果。
+- 決定：
+  - parser 只列舉可設定 Codex home 的 `sessions/` 下 `rollout-*.jsonl`，以固定 session／line／reference 上限逐行唯讀解析；不依賴 `history.jsonl`、`session_index.jsonl`、archived sessions、attachments 或 SQLite。
+  - user source 只處理 plain `input_text`／`input_image`；`# Seekah 上下文` 的 path heading 與 pi 每行 absolute path 清單才是 `seekah-prompt`。environment prefix、設定 root、developer／assistant 與工具 output 一律忽略。
+  - `seekah-mcp` 只接受 `McpToolCall` 的 localdocsearch identity 或 `mcp__localdocsearch__...` namespace；`codex-tool` 只接受明確的 FileChange、CommandExecution、shell／exec／apply_patch input。
+  - Reference 以正規化絕對路徑去重，保留事件類型、occurrences、來源集合與 confidence；HTTP／HTTPS URL 永不成為 reference。未知事件才可標為 `user-provided`／`low` 的 `message-path-fallback`。
+- 理由：
+  - 依真實欄位先建立 allowlist 能消除 permission profile、workspace root、tool output 與 URL 造成的 false positive，也避免把任意含 seekah 的字串冒認 MCP。
+  - 明確來源欄位與低信心 fallback 能讓未知格式可見但不假裝理解；localdocsearch 的 exact／case-insensitive index lookup 仍維持唯讀。
+- 否決：
+  - 不反序列化或輸出完整事件，不執行 Codex tool／MCP，不把 path reference 寫回 Codex，不加入 OCR、embedding 或外部解析服務。
+  - 不把任意 `server`／`source`／path 字串含 seekah 當作 Seekah MCP，也不把 URL 或不存在的低信心 path 提升為已確認文件。
+- 驗證：
+  - `test/m94.test.ts` 覆蓋 schema 正／負欄位、四種來源、MCP false positive、URL 排除、無效行、輸入檔案邊界與 conversation content 不輸出；移除 path collection 時反向契約失敗。
 
 ## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
 
@@ -1598,3 +1657,19 @@
 - 每次完成的 search／answer trace 追加至索引資料目錄的 `trace.log` UTF-8 JSONL；每檔 2 MiB、目前檔加 4 個輪替檔，避免無界成長。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`，`LOCALDOCSEARCH_DATA_DIR` 仍沿用既有資料目錄選擇。
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
+
+## D133：Codex path recall 以逐行 token 掃描保留完整 reference
+
+- 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。
+- parser 改為逐行掃描絕對 path 起點，不再因整段 message 超過 400 字元或含換行而整段捨棄；400 字元限制套用到最後的單一路徑 token。掃描器不再對每個 regex match 重掃剩餘全文，而是以單調 cursor、每個 token 最多 401 字元、每段文字最多 2,000,000 字元的確定性狀態機前進，避免連續反斜線／未閉合引號形成 O(n²)。引號、backtick、括號、Markdown list 與句末中英文標點只作 token 邊界／包裝清理；URL、`data:`、base64 與工具輸出仍維持明確排除。
+- 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
+- m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。
+- M96 synthetic 200 KiB 未閉合引號、連續反斜線與空白輸入，修正後抽取約 13 ms；修正前同類 rollout 在 5 秒 watchdog 內未完成。性能門檻固定為單段文字 200 ms 內完成，不以真實使用者資料作測試。
+
+## D134：Codex reference existence 檢查延後至 detail API
+
+- 日期：2026-10-02。監工以真實 57 個 rollout 逐檔計時回報總計 88.5 秒；其中 31.5 MB 單檔 73.5 秒，另有小檔約 2,717～5,448 ms。未在本工作區重讀真實 rollout；依程式證據，原 parser 在每個 finalized reference 以同步 `statSync` 檢查候選 path，UNC／不存在磁碟機可阻塞約數秒，與量測形狀一致。
+- parser 現在只建立字串 Reference Set，`exists` 未檢查時為 `null`、`kind` 為 `unknown`，不對候選 path 執行檔案系統 I/O。工作台 list 只解析與摘要，不做 reference existence check；detail API 只對被選取的 session 做檢查。
+- detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
+- synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
+- M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。

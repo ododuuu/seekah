@@ -3032,3 +3032,48 @@ docsearch doctor
 - 每項文件庫行為都必須有正向斷言及可移除實作接線後失敗的反向斷言：持久化 transaction／去重／損壞隔離、loopback path 驗證／四種事件、以及四個 UI 導覽／選取／重新搜尋。
 - 文件庫相關變更完成後必須執行 `npm run build`、三個聚焦測試、`node scripts/ui-smoke.mjs`、`npm test` 及 `scripts/search-diff.mjs`；搜尋差異必須為 0。所有命令都必須在本 worktree 執行，測試程序與 Chrome 結束後不得殘留指向暫存資料的程序。
 - 不得因文件庫功能順手加入 OCR、embedding、LAN 暴露、外部內容服務、未規格化檔案格式或 browser storage；任何新產品行為須另立規格與設計決策。
+
+## 98. Codex rollout 工作階段唯讀解析與 Reference Set
+
+依 D130。本節只增加本機 Codex rollout 的 metadata 解析，不把 Codex 變成文件索引來源，也不把任何對話內容送到外部服務。
+
+### 98.1 輸入邊界與可配置 home
+
+- 解析器可由嵌入端傳入 Codex home；工作台使用 `SEEKAH_CODEX_HOME`、`CODEX_HOME`，最後才使用目前使用者 home 下的 `.codex`。所有路徑列舉與讀取必須留在本機且唯讀。
+- 輸入只限 Codex home 下 `sessions/` 遞迴的 `rollout-*.jsonl`。不得為補資料而讀取 `history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔或 SQLite 狀態檔。
+- 每行 JSONL 個別解析；`session_meta`、`response_item`、`event_msg`、`turn_context`、`world_state` 與未知事件至少保留事件類型統計、有效／無效行數與必要的 session metadata。不得把 JSONL 原文、message、reasoning、query、command、tool arguments 或 result 放入公開結果。
+- `session_meta.cwd`、`session_id`、時間欄位可作工作階段 metadata；`turn_context`／`thread_settings_applied` 的 permission profile、sandbox、workspace root、cwd、`world_state` filesystem 與 developer message 是環境設定，禁止進入 Reference Set。
+- 路徑抽取只接受 Windows drive、UNC、POSIX 或 `file://` 絕對路徑；`http://`／`https://`／`ftp://`、`data:`、base64 片段永遠排除。單一 path token 超過 400 字元排除，但長說明文字與跨行 message 仍須逐行抽取其中完整 path；每段文字最多掃描 2,000,000 字元，起點與 token 結尾採線性且有界的確定性掃描；句末標點與 `:line` suffix 不得污染 canonical path。parser 只抽取字串，不對候選 reference 執行 `exists`／`stat`；未經 API 顯示層檢查時 `exists` 為 `null`、`kind` 為 `unknown`。
+- 事件類型輸出只接受固定 allowlist 且長度上限為 128；未知或超長 type 統一記為 `unknown`，不得把 rollout 任意字串直接回傳成事件 key。
+- 單一 rollout 檔案大小上限為 64 MiB；超過上限不得讀取內容，session 回傳 `parseStatus: "skipped"` 與 `skipReason: "file-too-large"`。讀檔以 64 KiB stream chunk 組行，單行上限為 2,000,000 字元，超限行只增加 `invalidLineCount`，不得先以無界 `readline` 配置整行。
+
+### 98.2 Reference Set 與來源分類
+
+- Reference Set 以正規化絕對路徑去重，保存出現次數、事件類型、confidence 與來源集合；同一路徑可同時保留多個來源，但主要來源與最高 confidence 必須可重現。
+- 公開來源分類固定為 `seekah-prompt`、`user-provided`、`seekah-mcp`、`codex-tool`。只有 `response_item/message` 的 `role=user` plain `input_text`／`input_image` 可作 `user-provided`；`environment_context`、`turn_aborted`、`recommended_plugins`、`# AGENTS.md`、developer／assistant message 不得計入。
+- `seekah-prompt` 辨識既有 context Markdown 的 `# Seekah 上下文`，只取 `## N. <absolute path>` 標題；亦接受 pi context sidebar 的每行一個 absolute path 清單。不得從 snippet、文件代碼、查詢或說明文字猜測 prompt path。
+- `seekah-mcp` 只接受 `McpToolCall` 且 server identity 為 `localdocsearch`（相容 `seekah`），或 function-call namespace `mcp__localdocsearch__...`；不得以任意 `server`／`source`／path 字串含 seekah 推測 MCP。
+- `codex-tool` 只接受 `apply_patch` input、`FileChange` 實際 path、`CommandExecution` 的 command／parsed_cmd、`function_call{shell_command}` arguments 與 `custom_tool_call{exec}` input。`stdout`、tool result、URL、cwd、query 與 output 不得抽取。
+- parser 不做 reference 的檔案系統檢查，只與現有 Seekah 索引做唯讀 exact／case-insensitive path 比對；成功時可回傳 canonical document reference、path 與 status，不改變索引。工作台只在 detail API 顯示被選取的單一 session 時檢查 reference；每路徑結果快取，最多 8 路並行，每次檢查 300 ms 逾時。UNC／network path 與已知非本機 Windows drive 不發出檢查，直接回傳 `exists: null`、`kind: "unknown"`、`unknownReason: "network"`。
+
+### 98.3 未知格式 fallback 與驗收
+
+- 無法辨識事件來源時仍可只從明確的 `message`／`text` 欄位抽取絕對路徑，但來源固定為 `user-provided`、confidence 為 `low`，並標記 `message-path-fallback`；不得猜測事件語意，也不得遞迴掃描環境設定或工具輸出。
+- parser cache 以 canonical rollout path、`mtimeMs` 與檔案 size 作有效性條件；清單建立後，detail 只解析被選取的 target rollout，命中相同 path／mtime／size 時重用 session result，不得每次 detail 重新解析全部 rollout。`test/m94.test.ts` 必須以暫存 Codex home 的合成 rollout 驗證真實 schema 的正／負欄位、session metadata、事件統計、四種來源、HTTP／HTTPS/data URI/base64 noise 排除、換行／400 字元／event type／檔案大小／單行上限、中文／空白／JSON escape／正斜線 Windows／UNC／Markdown 包裝／資料夾尾斜線的完整 path recall、directory kind、200 KiB 未閉合引號／反斜線輸入在 200 ms 內完成、cache、只讀檔案邊界與不輸出 conversation content；移除 path collection 的反向契約必須失敗。另須以延遲 3 秒的 synthetic `stat` 驗證 parser 不呼叫 reference stat，detail API 逾時後回傳 unknown，且 UNC 不呼叫 stat。
+
+## 99. Codex 工作階段 loopback API 與工作台頁面
+
+依 D131。Codex 工作階段功能只提供本機工作台的 metadata 檢視，不提供送出、修改、執行或附件開啟操作。
+
+### 99.1 API
+
+- `GET /api/codex/sessions` 回傳唯讀 session summary、事件類型統計、reference 總數、可見 reference 數、低信心／不存在 reference 數、尚未檢查 reference 數與來源計數；`GET /api/codex/sessions/:id/references` 回傳指定 session 的 cwd、時間、事件統計、parse status 與 Reference Set，只有後者執行 reference existence check。
+- 兩個 endpoint 均沿用工作台 URL fragment token 的 `X-LocalDocSearch-Token` 認證；若 request 提供 `Origin` 或 `Referer`，其 origin 必須等於目前 loopback origin，否則拒絕。回應不得包含原始 rollout path、message、reasoning、prompt、query、command、tool arguments、tool result 或附件內容。
+- detail reference 的 `exists` 為 `true`、`false` 或 `null`（未知）；本機檔案使用最多 8 路非同步檢查與每路 300 ms timeout，逾時標示 `kind: "unknown"`、`unknownReason: "timeout"`；UNC／network path 與已知非本機 Windows drive 標示 `unknownReason: "network"`。detail 將 `exists === true || indexed` 的 reference 放在主要 `references`，明確不存在且未索引或未知的 reference 放在對應低信心／待檢查區塊；讀取不存在索引時仍可回傳 rollout metadata，不得把 Codex parser 變成索引建立流程。
+
+### 99.2 工作台呈現與驗收
+
+- `/codex-sessions` 顯示工作階段清單、cwd、時間、事件類型統計、Reference Set、來源分類、confidence、磁碟存在／未知原因、`kind`（檔案／資料夾／未知）與 Seekah 索引狀態；list 只顯示尚未檢查數，不執行 path existence check；detail 才呈現檢查結果，低信心／未知 path 置於可展開區塊。
+- 只有已在 Seekah 索引的 reference 顯示 `Pin` 與 `Add-to-category` 操作，且沿用既有 `/api/library/pinned`、`/api/library/groups/:id/items` stable reference API；Codex 獨立頁沒有跨頁 context bridge，因此不虛構 `Add-to-context`，右側上下文欄仍由工作台既有選取流程管理。
+- 頁面只提供重新整理、回到工作台及上述文件庫操作；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
+- `test/m95.test.ts` 必須驗證 token／Origin 邊界、session／reference API、可見與低信心 buckets、索引比對、來源分類、頁面 CSP／安全文字呈現、文件庫按鈕 API 接線與 conversation content 不外洩；移除 API 索引比對或頁面入口的反向契約必須失敗。
