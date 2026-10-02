@@ -14,6 +14,7 @@ import {
 import { createAutoupdateLog, formatAutoupdateLogLine } from "./autoupdate-log.js";
 import { LiveUpdateEngine, resolveAutoupdateReconcile, resolveWatchDebounce, WatchError } from "./live-update.js";
 import { describeIndexClientError, sanitizeRecentError } from "./index-errors.js";
+import { serializeVersionedJson, serializeVersionedJsonError } from "./status-json.js";
 import { isStartupCatchupMode, resolveStartupCatchupMode, type StartupCatchupAction, type StartupCatchupMode } from "./startup-catchup.js";
 
 import { autoupdateStartupDisable, autoupdateStartupEnable, autoupdateStartupStatus } from "./autoupdate-startup.js";
@@ -96,6 +97,13 @@ export function formatLiveStatus(status: LiveStatus, extra?: { unresponsive?: bo
   return lines.join("\n");
 }
 
+export function formatLiveStatusJson(status: LiveStatus, extra?: { stale?: boolean }): string {
+  return serializeVersionedJson({
+    ...status,
+    recentErrors: status.recentErrors.map(sanitizeRecentError),
+    stale: extra?.stale ?? false,
+  });
+}
 
 function diagnosticDepth(value: string): number {
   return value.split(/[\\/]+/u).filter(Boolean).length;
@@ -182,31 +190,53 @@ function staleError(state: AutoupdateStateFile): AutoupdateError {
   return new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
 }
 
-export async function autoupdateStatus(databasePath = defaultDatabasePath()): Promise<{ code: number; text: string; live?: LiveStatus }> {
+function staleStatus(state: AutoupdateStateFile, message: string): LiveStatus {
+  return {
+    schemaVersion: 1,
+    instanceId: state.instanceId,
+    pid: state.pid,
+    mode: state.mode,
+    startedAt: state.startedAt,
+    lastHeartbeatAt: "",
+    phase: "stopping",
+    settings: state.settings,
+    startupCatchup: { mode: resolveStartupCatchupMode(state.settings.startupCatchupMode), state: "none", roots: [] },
+    ready: false,
+    roots: [],
+    pendingCount: 0,
+    eventCount: 0,
+    localUpdateCount: 0,
+    rootScanCount: 0,
+    subtreeScanCount: 0,
+    queuePendingCount: 0,
+    queueDegraded: false,
+    recentErrors: [message],
+  };
+}
+
+export async function autoupdateStatus(databasePath = defaultDatabasePath()): Promise<{ code: number; text: string; live?: LiveStatus; stale?: boolean }> {
   const state = readStateFile(databasePath);
   if (!state) throw new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
   try {
     const live = await queryLive(databasePath);
     if (!live) throw new AutoupdateError("AUTOUPDATE_NOT_RUNNING", "沒有正在執行的自動更新。");
-    return { code: 0, text: formatLiveStatus(live.status), live: live.status };
+    return { code: 0, text: formatLiveStatus(live.status), live: live.status, stale: false };
   } catch (error) {
     if (error instanceof AutoupdateError && (error.code === "AUTOUPDATE_NOT_RUNNING" || error.code === "AUTOUPDATE_UNRESPONSIVE")) {
       if (isPidAlive(state.pid)) {
+        const live = staleStatus(state, error.message);
         return {
           code: 3,
-          text: `${formatLiveStatus({
-            schemaVersion: 1, instanceId: state.instanceId, pid: state.pid, mode: state.mode,
-            startedAt: state.startedAt, lastHeartbeatAt: "", phase: "stopping",
-            settings: state.settings,
-            startupCatchup: { mode: resolveStartupCatchupMode(state.settings.startupCatchupMode), state: "none", roots: [] },
-            ready: false, roots: [], pendingCount: 0,
-            eventCount: 0, localUpdateCount: 0, rootScanCount: 0, subtreeScanCount: 0,
-            queuePendingCount: 0, queueDegraded: false,
-            recentErrors: [error.message],
-          }, { unresponsive: true })}\nAUTOUPDATE_UNRESPONSIVE：控制通道無回應。`,
+          text: `${formatLiveStatus(live, { unresponsive: true })}\nAUTOUPDATE_UNRESPONSIVE：控制通道無回應。`,
+          live,
+          stale: true,
         };
       }
-      return { code: 3, text: `AUTOUPDATE_NOT_RUNNING：沒有正在執行的自動更新。\n殘留狀態：instance=${state.instanceId} pid=${state.pid}（程序已不存在）` };
+      return {
+        code: 3,
+        text: `AUTOUPDATE_NOT_RUNNING：沒有正在執行的自動更新。\n殘留狀態：instance=${state.instanceId} pid=${state.pid}（程序已不存在）`,
+        stale: true,
+      };
     }
     throw error;
   }
@@ -449,12 +479,17 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
   let diagnoseLimit: number | undefined;
   let dataDir: string | undefined;
   let databasePathOption: string | undefined;
+  let json = false;
   let daemon = false;
   const positional: string[] = [];
   try {
     for (let index = 0; index < args.length; index++) {
       const option = args[index]!;
-      if (option === "--daemon") daemon = true;
+      if (option === "--json") {
+        if (json) throw new Error("不可重複指定 --json。");
+        json = true;
+      }
+      else if (option === "--daemon") daemon = true;
       else if (option === "--debounce") {
         const value = args[++index];
         if (!value || value.startsWith("--")) throw new Error("--debounce 缺少毫秒數。");
@@ -482,10 +517,11 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         if (!value || value.startsWith("--")) throw new Error("內部 database path 缺少值。");
         databasePathOption = path.resolve(value);
       } else if (option.startsWith("--") || !option.trim()) {
-        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
+        throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--json] [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
       } else positional.push(option);
     }
     if (daemon) {
+      if (json) throw new Error("--json 只用於 autoupdate status。");
       if (positional.length || diagnoseLimit !== undefined) throw new Error("內部 --daemon 不接受其他子命令或 --limit。");
       return await runAutoupdateDaemon({
         debounceMs: resolveWatchDebounce(debounce),
@@ -501,8 +537,9 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
         throw new Error("用法：docsearch autoupdate startup enable|disable|status");
       }
     } else if (positional.length !== 1 || !action || !["start", "status", "diagnose", "stop"].includes(action)) {
-      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
+      throw new Error("用法：docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>]\n        docsearch autoupdate status [--json] [--data-dir <資料目錄>]\n        docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]\n        docsearch autoupdate stop [--data-dir <資料目錄>]\n        docsearch autoupdate startup enable|disable|status");
     }
+    if (json && action !== "status") throw new Error("--json 只用於 autoupdate status。");
     if (diagnoseLimit !== undefined && action !== "diagnose") {
       throw new Error("只有 autoupdate diagnose 可指定 --limit。");
     }
@@ -532,7 +569,13 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
     }
     if (action === "status") {
       const result = await autoupdateStatus(databasePath);
-      console.log(result.text);
+      if (json) {
+        console.log(result.live
+          ? formatLiveStatusJson(result.live, result.stale === undefined ? undefined : { stale: result.stale })
+          : serializeVersionedJsonError("AUTOUPDATE_NOT_RUNNING", result.text));
+      } else {
+        console.log(result.text);
+      }
       return result.code;
     }
     if (action === "diagnose") {
@@ -544,6 +587,19 @@ export async function runAutoupdateCommand(args: readonly string[], options: Aut
     console.log(result.text);
     return result.code;
   } catch (error) {
+    if (json) {
+      if (error instanceof AutoupdateError) {
+        console.log(serializeVersionedJsonError(error.code, `${error.code}：${error.message}`));
+        return error.exitCode;
+      }
+      if (error instanceof WatchError) {
+        console.log(serializeVersionedJsonError(error.code, `${error.code}：${error.message}`));
+        return 2;
+      }
+      const failure = autoupdateFailureOutput(error);
+      console.log(serializeVersionedJsonError(failure.code, failure.message));
+      return failure.code === "INDEX_BUSY" || failure.code === "INDEX_RECOVERY_REQUIRED" ? 3 : 2;
+    }
     if (error instanceof AutoupdateError) {
       console.error(`${error.code}：${error.message}`);
       return error.exitCode;

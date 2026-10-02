@@ -26,6 +26,7 @@ import { buildIndexProfile, profilePaths, reserveNewProfile, writeIndexProfile }
 import type { SyncReport } from "./sync.js";
 import { productVersion } from "./version.js";
 import { formatTruncatedListNotice, previewStatusList, STATUS_LIST_PREVIEW_LIMIT } from "./status-preview.js";
+import { buildStatusJson, serializeVersionedJson, serializeVersionedJsonError } from "./status-json.js";
 import { describeIndexClientError } from "./index-errors.js";
 
 function formatStorageSize(footprint: StorageFootprint): string {
@@ -96,13 +97,13 @@ export function buildHelpText(): string {
     "  docsearch open <文件代碼> [--dry-run]",
     "  docsearch reveal <文件代碼> [--dry-run]",
     "  docsearch roots [remove <root>]",
-    "  docsearch status [--issues] [--types]",
+    "  docsearch status [--json] [--issues] [--types]",
     "  docsearch exclusions [--root <path>]              # 查看有效排除規則與逐規則 skipped",
     "  docsearch explain <path>                          # 查詢目前檔案為何搜不到",
     "  docsearch rebuild [root] [--verbose]",
     "  docsearch watch [root] [--debounce <毫秒>] [--rescan <毫秒>] [--verbose]",
     "  docsearch autoupdate start [--debounce <毫秒>] [--reconcile <毫秒>] [--startup-catchup <ask|auto|off>] [--data-dir <資料目錄>] # 初次索引後的日常變更",
-    "  docsearch autoupdate status [--data-dir <資料目錄>]",
+    "  docsearch autoupdate status [--json] [--data-dir <資料目錄>]",
     "  docsearch autoupdate diagnose [--limit <1～32>] [--data-dir <資料目錄>]",
     "  docsearch autoupdate stop [--data-dir <資料目錄>]",
     "  docsearch autoupdate startup enable|disable|status",
@@ -294,6 +295,7 @@ export async function main(args: readonly string[]): Promise<number> {
   let types: string[] | undefined;
   let statusIssues = false;
   let statusTypes = false;
+  let statusJson = false;
   try {
     if (command === "watch") {
       const values: string[] = [];
@@ -351,12 +353,13 @@ export async function main(args: readonly string[]): Promise<number> {
     } else if (command === "status") {
       const seen = new Set<string>();
       for (const option of args.slice(1)) {
-        if (option !== "--issues" && option !== "--types") throw new Error("用法：docsearch status [--issues] [--types]");
+        if (option !== "--issues" && option !== "--types" && option !== "--json") throw new Error("用法：docsearch status [--json] [--issues] [--types]");
         if (seen.has(option)) throw new Error(`不可重複指定 ${option}。`);
         seen.add(option);
       }
       statusIssues = seen.has("--issues");
       statusTypes = seen.has("--types");
+      statusJson = seen.has("--json");
     } else if (command === "exclusions") {
       if (args.length > 3 || (args[1] !== undefined && args[1] !== "--root") || (args[1] === "--root" && !args[2]?.trim())) {
         throw new Error("用法：docsearch exclusions [--root <path>]");
@@ -449,8 +452,16 @@ export async function main(args: readonly string[]): Promise<number> {
       try { reserveNewProfile(profilePath); }
       catch (error) { console.error(error instanceof Error ? error.message : String(error)); return 2; }
     }
-    if (command === "status") console.log(`索引位置：${databasePath}\n讀取索引狀態…`);
-    if (!writes && !existsSync(databasePath)) { console.error("索引尚未建立；請先執行 docsearch index <root>。"); return 3; }
+    if (command === "status" && !statusJson) console.log(`索引位置：${databasePath}\n讀取索引狀態…`);
+    if (!writes && !existsSync(databasePath)) {
+      const message = "索引尚未建立；請先執行 docsearch index <root>。";
+      if (command === "status" && statusJson) {
+        console.log(serializeVersionedJsonError("INDEX_NOT_FOUND", message));
+        return 3;
+      }
+      console.error(message);
+      return 3;
+    }
     if (writes) {
       reporter = createProgressReporter({ isTTY: Boolean(process.stderr.isTTY), verbose });
       reporter.update({ stage: "recover", message: "開啟並檢查本機索引" });
@@ -690,7 +701,13 @@ export async function main(args: readonly string[]): Promise<number> {
       return 0;
     }
     if (!roots.length) {
-      console.error("索引尚未建立；請先執行 docsearch index <root>。"); return 3;
+      const message = "索引尚未建立；請先執行 docsearch index <root>。";
+      if (command === "status" && statusJson) {
+        console.log(serializeVersionedJsonError("INDEX_NOT_FOUND", message));
+        return 3;
+      }
+      console.error(message);
+      return 3;
     }
     const searchScope = rootFilter ? store.resolveSearchScope(rootFilter) : undefined;
     const selectedRoot = searchScope?.root;
@@ -714,6 +731,13 @@ export async function main(args: readonly string[]): Promise<number> {
       return 0;
     }
     if (command === "status") {
+      if (statusJson) {
+        console.log(serializeVersionedJson(buildStatusJson(indexStore, roots, {
+          includeIssues: statusIssues,
+          includeTypes: statusTypes,
+        })));
+        return 0;
+      }
       const format = store.formatStatus();
       console.log(`索引格式：區段儲存 ${format.chunkStoreVersion ?? "未完成"}${format.legacySearchStructures ? "；舊版段落／payload／搜尋索引仍保留（遷移完成後移除）" : ""}`);
       if (format.needsUpgrade) console.log(`儲存格式升級：需要升級（區段儲存 ${format.chunkStoreCompletedDocuments}/${format.totalDocuments}）；請執行 index 接續，不必刪庫。升級前搜尋使用舊路徑，結果相同但較慢。`);
@@ -833,6 +857,27 @@ export async function main(args: readonly string[]): Promise<number> {
       return 130;
     }
     const sqliteCode = sqliteExtendedCode(error);
+    if (command === "status" && statusJson) {
+      if (sqliteCode === 776 || sqliteCode === 1288 || sqliteCode === 1294) {
+        console.log(serializeVersionedJsonError("INDEX_RECOVERY_REQUIRED", "INDEX_RECOVERY_REQUIRED：索引有未完成交易或 WAL 無法初始化，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。"));
+        return 3;
+      }
+      if (isSqliteBusy(error)) {
+        console.log(serializeVersionedJsonError("INDEX_BUSY", "INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。"));
+        return 3;
+      }
+      if (error instanceof IndexBusyError || error instanceof ContextError || error instanceof WatchError || error instanceof ClipboardError
+        || error instanceof DocumentActionError || error instanceof SearchIndexChangedError) {
+        console.log(serializeVersionedJsonError(error.code, `${error.code}：${error.message}`));
+        return 3;
+      }
+      if (error instanceof RootError || error instanceof IgnoreConfigurationError) {
+        console.log(serializeVersionedJsonError("STATUS_FAILED", error.message));
+        return 3;
+      }
+      console.log(serializeVersionedJsonError("INTERNAL_ERROR", "內部錯誤 LDS-001：無法完成操作。"));
+      return 4;
+    }
     if (sqliteCode === 776 || sqliteCode === 1288 || sqliteCode === 1294) {
       console.error("INDEX_RECOVERY_REQUIRED：索引有未完成交易或 WAL 無法初始化，需要由下一次 index 安全回復；請勿刪除 journal 或 WAL。");
       return 3;
