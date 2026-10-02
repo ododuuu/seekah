@@ -1,8 +1,16 @@
-# 目前交接：Seekah 0.48.0（文件庫、Codex Reference Set 與跨頁上下文）
+# 目前交接：Seekah 0.49.0（錯誤邊界、監看診斷與狀態 JSON）
 
 更新：2026-10-02。
 
-**package 為 0.48.0。** 本版合併文件庫最近／釘選／分類／已存搜尋、Codex session 唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100／D127–D136）。右側上下文欄只顯示絕對路徑；Codex 頁只有已索引且有 stable reference 的 reference 可加入／移出上下文。監工在合併後 `main`（`994c920`）實跑：`npm run build` 通過；`npm test` 524 項、521 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。公司 Windows 驗收仍只到 0.44。
+**package 為 0.49.0。** 本版合併 SQLite 錯誤邊界、工作台索引容量與 sidecar、stdio MCP `explain_path` 邊界、Windows 8.3／`subst` 正規化、fs.watch 壓力驗證、匿名 `autoupdate diagnose` 與 `status --json`／`autoupdate status --json`（SPEC §§101–108／D137–D144）。監工在合併後 `main`（`34707b0`）提供 `npm test` 539 項、536 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 以 0.48.0（`2fde72c`）為基準，小型 650、大型 30，錯誤 0、差異 0。公司 Windows 驗收仍只到 0.44。
+
+- 從 [0.49.0.md](0.49.0.md) 開始：本版範圍、分支內容、壓力驗證、JSON 契約、限制與部署步驟。
+- [0.49.0 驗證](../0.49.0-VALIDATION.md)。
+- 本批已檢視 `docs/USER-GUIDE.md`；status JSON、`autoupdate diagnose`、R 序號／相對深度與隱私邊界已有對應操作說明。若要追查實際漏事件，使用者需重啟背景更新後執行 diagnose 回傳匿名數據；`autoupdate.log` 仍可能含完整路徑，限留本機。
+
+## 0.48.0 交接
+
+**package 為 0.48.0。** 本版合併文件庫最近／釘選／分類／已存搜尋、Codex session 唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100／D127–D136）。右側上下文欄只顯示絕對路徑；Codex 頁只有已索引且有 stable reference 的 reference 可加入／移出上下文。合併後 `main`（`994c920`）的 `npm test` 為 524 項、521 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。公司 Windows 驗收仍只到 0.44。
 
 - 從 [0.48.0.md](0.48.0.md) 開始：本版範圍、分支內容、監工提供的 rollout 統計、實跑驗證、限制與部署步驟。
 - [0.48.0 驗證](../0.48.0-VALIDATION.md)。

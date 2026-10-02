@@ -10,7 +10,7 @@
 
 新手請先讀 [使用手冊](docs/USER-GUIDE.md)；AI 接手固定入口：[docs/handoff/CURRENT.md](docs/handoff/CURRENT.md)；完整 [SPEC](docs/SPEC.md)、[狀態](docs/STATUS.md)。GitHub 倉庫為 [ododuuu/seekah](https://github.com/ododuuu/seekah)；新的封裝名稱為 Seekah-VERSION.zip，包含新舊入口。
 
-目前版本為 **0.48.0**。本版合併文件庫的最近／釘選／分類／已存搜尋、Codex session 的唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100、D127–D136）。右側上下文欄只顯示絕對路徑；只有已索引且有 stable reference 的 Codex reference 可加入或移出上下文。監工在合併後 `main`（`994c920`）實跑 `npm run build` 通過、`npm test` 524 項／521 通過／0 失敗／3 略過、ui-smoke 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。Codex rollout 格式未公開，可能隨更新變動；公司 Windows 驗收目前只到 0.44，0.45～0.48 待驗。
+目前版本為 **0.49.0（2026-10-02）**。本版合併 SQLite 錯誤邊界、工作台索引容量與 sidecar、MCP `explain_path` 邊界、8.3／`subst` 正規化、fs.watch 壓力驗證、匿名 `autoupdate diagnose` 與 `status --json`（SPEC §§101–108、D137–D144）。監工在合併後 `main`（`34707b0`）實跑 `npm test` 539 項／536 通過／0 失敗／3 略過、ui-smoke 失敗清單為空；search-diff 以 0.48.0（`2fde72c`）為基準，小型 650、大型 30，錯誤 0、差異 0。監看壓力 14 情境共核對 626 份 synthetic token、遺失 0，但根因仍未證實；公司 Windows 驗收目前只到 0.44。
 
 若索引很慢，用 `index <根目錄> --profile <新檔案>` 寫一份只留在本機的診斷。檔案必須是新的，拒絕覆寫，不含路徑、檔名或正文；父目錄不存在或無法存取時，錯誤會顯示 resolved parent、錯誤碼與 CMD／PowerShell 各自的安全範例，但不自動建目錄或展開字面環境變數。取消不會顯示 100% 或「同步完整」，已提交的文件保留。
 - 工作台索引的列舉／解析／SQLite 寫入在獨立 worker 執行；狀態頁會持續輪詢並顯示目前檔名，重新整理不會清掉進度。索引資料目錄的 `indexing.json` 只保存狀態與路徑 metadata；程序中斷後重開會標示已中斷，已提交文件保留，重新「完整校正」會接續未提交部分。
@@ -94,6 +94,8 @@ node dist/src/cli.js context "合約" --clipboard
 node dist/src/cli.js watch
 node dist/src/cli.js autoupdate start
 node dist/src/cli.js autoupdate status
+node dist/src/cli.js autoupdate status --json
+node dist/src/cli.js autoupdate diagnose
 node dist/src/cli.js autoupdate stop
 node dist/src/cli.js autoupdate startup enable
 node dist/src/cli.js autoupdate startup status
@@ -106,6 +108,7 @@ node dist/src/cli.js setup codex --dry-run
 node dist/src/cli.js setup codex
 node dist/src/cli.js doctor
 node dist/src/cli.js status
+node dist/src/cli.js status --json
 node dist/src/cli.js status --issues --types
 node dist/src/cli.js exclusions
 node dist/src/cli.js explain "C:\Users\你的帳號\Desktop\123.txt"
@@ -119,13 +122,13 @@ node dist/src/cli.js rebuild --verbose
 - `search`：只搜尋現有索引。互動終端每頁預設 20 份，可輸入 `n` 下一頁、`p` 上一頁、`/ 關鍵字` 縮小目前全部命中、`back` 撤回、`reset` 重設、`q` 結束；即使只有一頁或零結果也可操作。非互動輸出只顯示指定頁並提示下一頁命令。`--page-size` 為 1～100，`--page` 從 1 起算；舊 `--limit` 保留為單次輸出，不能與分頁參數併用。每次都會顯示總命中數，避免把前 20 筆誤認為全部。`--type` 接受逗號分隔格式，可有前導點且忽略大小寫；例如 `.PDF,DocX,xml`。`--verbose` 另向 stderr 輸出 `SEARCH_TRACE <JSON>`，包含總耗時、bottleneck、phase timings、candidate strategy/source、文件／payload counts 與結果數；trace 不寫 SQLite 或 profile。
 - `.xlsm`／`.odt`／`.rtf`／`.csv`：XLSM 沿用安全 OOXML 儲存格解析且忽略巨集；ODT 擷取標題、段落、清單、表格與連結；RTF 使用與 MSG 共用的受限解析核心；CSV 支援引號、逗號、quoted newline、UTF-8／Big5 與 BOM。既有 metadata-only 紀錄下一次普通 `index` 會自動重試，不必 rebuild。
 - `.xml`：依來源行保存原文，搜尋包含標籤、屬性和值；支援 UTF-8、UTF-16 BOM／XML 起始位元組，以及目前 Node.js `TextDecoder` 支援且由 XML declaration 宣告的編碼。格式不完整仍可作原文搜尋，不解析 DTD 或展開外部實體。
-- `status`：顯示索引容量、各文件狀態彙總、最後嘗試／完整同步時間。摘要是歷史紀錄，不是目前索引累計狀態。`--issues` 列出目前文件問題與各根同步診斷；`--types` 依副檔名統計份數、來源 bytes 與狀態。
+- `status`：顯示索引容量、各文件狀態彙總、最後嘗試／完整同步時間。`--issues` 列出目前文件問題與各根同步診斷；`--types` 依副檔名統計份數、來源 bytes 與狀態。`status --json` 以頂層 `schemaVersion: 1` 輸出結構化欄位，腳本應忽略未知新增欄位，不要依賴人類行文字串。
 - `exclusions [--root <路徑>]`：唯讀，列出各根目錄目前生效的排除規則（內建規則、整顆磁碟根目錄的預設排除、各根 `.localdocsearchignore` 的路徑與規則）、上次同步各規則的略過數，以及既有索引的排除清理進度。舊版同步摘要沒有逐規則計數時顯示「未提供」，不會補成 0。
 - `explain <路徑>`：現算並說明某個檔案為何搜不到：被排除（來源類別、命中的規則與祖先目錄，並附「若真的需要索引」的替代做法）、已索引、尚未索引、解析失敗（只顯示錯誤碼）、僅檔名可搜尋，或不在任何已登錄根目錄內（不回報是否存在）。整顆磁碟根目錄預設排除 `Windows`、`Program Files`、`Program Files (x86)`、`ProgramData`、`Users\<使用者>\AppData`、`PerfLogs`；8.3 短檔名（如 `PROGRA~1`）不會被排除。
 - `.java`／`.sql`／`.js`：逐非空白行保存原文（含註解與字串）。`.class` 僅檔名。文字檔採 BOM／XML 宣告優先，否則嚴格 UTF-8，失敗才回退 Big5。舊 TXT／MD／AsciiDoc／XML 執行一次普通 `index` 即升級，不必 rebuild。
 - `rebuild [root]`：重解析指定根目錄，省略時處理全部已登錄位置的文件，不修改或刪除來源文件。重建只影響該根目錄；根目錄無法讀取時保留既有資料並回報問題。
 
-初次索引或要立刻完整校正時執行 `index`。日常檔案新增／修改／刪除請 `autoupdate start`，用 `autoupdate status` 查看事件、局部更新與根目錄掃描次數。解析器更新若影響先前成功的文件（例如 M4 超連結修正），執行 `rebuild`；M4 升級 M5 的搜尋改善不需重建，執行一次 `index` 即可保存新的同步摘要。
+初次索引或要立刻完整校正時執行 `index`。日常檔案新增／修改／刪除請 `autoupdate start`，用 `autoupdate status` 查看事件、局部更新與根目錄掃描次數；腳本可用 `autoupdate status --json` 並檢查 `schemaVersion`。若懷疑 `fs.watch` 漏事件，先重啟背景更新，再執行 `autoupdate diagnose` 回傳匿名 timing；diagnose 不輸出路徑或雜湊，但 `autoupdate.log` 仍可能是含完整路徑的本機檔案。解析器更新若影響先前成功的文件（例如 M4 超連結修正），執行 `rebuild`；M4 升級 M5 的搜尋改善不需重建，執行一次 `index` 即可保存新的同步摘要。
 
 ## 選取討論上下文（可選）
 

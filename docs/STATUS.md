@@ -1,8 +1,17 @@
 # 專案狀態
 
-最後更新：2026-10-02（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；合併後 main 994c920 的 build、npm test、ui-smoke、search-diff 已實跑）
+最後更新：2026-10-02（package 0.49.0：SQLite 錯誤邊界、工作台容量與 MCP explain_path、Windows 路徑正規化、fs.watch 壓力驗證、匿名 diagnose、status JSON；SPEC §§101–108／D137–D144；合併後 main 34707b0 的 build、npm test、ui-smoke、search-diff 已有證據）
 
 ## 目前狀態
+
+- **2026-10-02 0.49.0（`release/0.49.0`）**：`fix/robust-errors-49`、`fix/status-mcp-49`、`research/watch-miss-49` 與 `feat/status-json-49` 已合併；本次 release 只更新 package／文件，不修改 `src/` 與 `test/`。
+  - §101～§102／D137～D138：`compact` 的 SQLite busy／locked 固定分類為 `INDEX_BUSY`；`rememberError` 分類 busy／recovery；`cleanupOrphanRoots` 失敗時記錄後降級啟動並於下次重試；pi3 補強 m97／m98。
+  - §103～§105／D139～D141：工作台顯示索引容量與 SQLite sidecar；stdio MCP `explain_path` 維持 tokenless 且只回查詢 root；8.3 短名與 `subst` alias 正規化；DECISIONS 由新到舊。
+  - §106～§107／D142～D143：14 個 fs.watch 合成壓力情境核對 626 份 synthetic token、遺失 0，未重現漏事件但根因仍未證實；新增 `autoupdate diagnose`，根目錄以 R1／R2 與相對深度表示，不輸出路徑或雜湊；某輪 stable wait 約 16 秒。
+  - §108／D144：`status --json` 與 `autoupdate status --json` 提供含 `schemaVersion: 1` 的結構化輸出。
+  - 監工在合併後 main（`34707b0`）實跑：`npm test` 539 項、536 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 以 0.48.0（`2fde72c`）為基準，小型 650、大型 30，錯誤 0、差異 0。
+  - 監看漏事件仍需使用者重啟背景更新後執行 `seekah autoupdate diagnose` 回傳數據；`autoupdate.log` 仍可能記錄完整路徑，但那是本機檔案，不是 diagnose 輸出。§90／D122 空號沿用。
+  - 公司 Windows 正式證據仍只到 0.44，不能宣稱 0.49 已通過。
 
 - **2026-10-02 0.48.0（`release/0.48.0`）**：`feat/library-48`、`feat/codex-session-48`、`feat/ui-context-48` 與兩條使用手冊文件線已合併；本次 release 只更新 package／文件，不修改 `src/` 與 `test/`。
   - §95～§97／D127～D129：文件庫提供最近、釘選、分類與已存搜尋，獨立保存路徑與 stable reference metadata，不保存文件內容。
