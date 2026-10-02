@@ -159,6 +159,19 @@ node dist/src/cli.js status
 
 `status` 會顯示各根最近同步錯誤總數；超過 100 筆時標示「共 N 筆，只列前 100 筆」，預設不印出錯誤本文。要看完整文件問題與各根同步診斷，用 `status --issues`。
 
+### 給腳本的狀態 JSON
+
+不要依賴 `status` 人類可讀輸出的行號；逐規則略過、既有索引排除清理與排除摘要等資訊會隨版本增加行。腳本請改讀版本化 JSON：
+
+```sh
+node dist/src/cli.js status --json
+node dist/src/cli.js status --json --issues --types
+node dist/src/cli.js autoupdate status --json
+```
+
+成功時 stdout 是單一 JSON 文件，頂層有 `schemaVersion`；`status` 另外提供 `format`、`storage`、`roots`、`counts`、`documentIssues` 與 `extensionStats`，`--issues`／`--types` 用來要求完整問題／格式明細。`autoupdate status --json` 直接提供 live 狀態欄位及 `stale`。腳本應忽略未知欄位、檢查 `schemaVersion` 與既有欄位型別，不要把人類文字當成穩定 API。
+
+
 加上 `--verbose` 時，CLI 仍把一般結果寫到 stdout，並向 stderr 輸出一行 `SEARCH_TRACE <JSON>`；同一筆 trace 也會追加到索引資料目錄的 `trace.log`。Windows 預設為 `%LOCALAPPDATA%\LocalDocSearch\trace.log`；指定 `LOCALDOCSEARCH_DATA_DIR` 時位於 `<該目錄>\LocalDocSearch\trace.log`。log 以 JSONL 保存，單檔 2 MiB、最多保留目前檔加 4 個輪替檔。Workbench 頂列「Trace」或同一工作階段的 `/traces#<token>` 會開啟獨立 UI；`/api/traces` 提供受 token 保護的篩選 API。search trace schema version 5 內含總耗時、`bottleneck`（self）、`inclusiveBottleneck`、`phasesMs`（inclusive）與 `phaseSelfMs`（self）、candidate strategy/source、文件／payload counts、payload ordinal block expansion、full-document／filename-only fallback、完整結果數與本頁回傳數；answer trace 仍使用自己的 phase schema。trace log 不含 API Key、文件正文、上下文正文或 answer 正文，但會保留查詢／問題字串供本機追查；不寫回 SQLite 或 profile。
 0.39.0 的 `candidateStrategy` 為 `chunk-index`（結果內搜尋為 `chunk-index+restricted-ids`）；`indexPostingRows` 是檔名／heading／區段索引回傳列數，`indexCandidateChunks` 是候選區段數，`indexVerifiedChunks`／`indexVerifiedBytes` 是實際解壓驗證（含當頁 snippet）的區段數與壓縮位元組；`totalRelation` 為 `gte` 表示快速模式提前停止、總數是下限。`payloadsRead` 恆為 0。以下 payload 欄位說明只適用於升級完成前的舊路徑：
 `postings` 只回傳文件 ID，不回傳 payload ordinal；payload-level pruning 與 block reconstruction 的數字分別看 `payloadsAfterPruning`、`expandedPayloads` 與 `blockExpansionRatio`。`payloadsRead` 是所有實際 stream pass 的總和，page materialization 可能重新讀取同一文件，因此不必等於或小於 `payloadsConsidered`。

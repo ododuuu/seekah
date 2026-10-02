@@ -408,6 +408,6 @@ test("M27 zero files and help mention new flags", () => fixture(async (root, _st
   assert.equal(indexed.status, 0, indexed.stderr);
   assert.match(indexed.stdout, /沒有找到文件/);
   const help = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8", env });
-  assert.match(help.stdout, /status \[--issues\] \[--types\]/);
+  assert.match(help.stdout, /status \[--json\] \[--issues\] \[--types\]/);
   assert.match(help.stdout, /\.java/);
 }));

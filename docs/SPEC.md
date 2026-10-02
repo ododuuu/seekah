@@ -3134,3 +3134,29 @@ docsearch doctor
 - 共用狀態只保存 path、stable reference、檔名與臨時文件數；不得保存 snippet、query、answer、Codex 原文、對話、附件或文件內容。Codex page 不得因此取得任意 path 讀取能力，仍只能使用既有文件庫操作。
 - `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
 - `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。
+
+## 108. CLI 狀態 JSON 契約
+
+依 D144。`status` 與 `autoupdate status` 增加給腳本使用的 `--json`，不改變未指定旗標時的人類可讀輸出、行順序、文字或退出碼語意。JSON 只在 stdout 輸出一個完整文件，不混入「索引位置」等前導文字；錯誤時也使用同一 schemaVersion 的固定錯誤物件，不把 SQLite 原文當成腳本契約。
+
+### 108.1 `status --json`
+
+- 頂層必有 `schemaVersion: 1`、`databasePath`、`readOnly: true`、`format`、`textUpgrade`、`storage`、`roots`、`counts`、`documentIssues`、`extensionStats` 與 `options`。欄位名稱、既有欄位型別與既有欄位意義是腳本相容契約。
+- `format` 保留 `IndexFormatStatus` 的全部欄位，包括各儲存版本／完成數、`legacySearchStructures`、`needsUpgrade`、`completedDocuments`、`totalDocuments`、`mappingIndexReady`、文字解析待處理數及依副檔名計數。`textUpgrade` 另以 `pending`、`byExtension` 及固定說明 `note` 表達人類輸出的待處理數與限制。
+- `storage` 保留主庫及所有已知附屬檔的 `files`（含 `label`、`suffix`、`path`、`bytes`、`missing`、`unknown`），以及 `totalBytes`、`incomplete`、`approximate`。缺少檔案不可用 0 偽造；讀取失敗不可用 0 取代未知。
+- `roots` 依既有根目錄順序列出；每根包含 `path`、`lastAttemptedSync`、`lastSuccessfulSync`、`lastSyncComplete`、`recentSync` 與 `exclusion`。`recentSync` 包含歷史 `summary`，以及 `diagnostics`、`errors`、`notices` 的 `items`、`total`、`truncated`；`exclusion` 同時包含結構化 `policy` 與人類摘要 `summary`，因此逐規則略過、既有索引排除清理及排除摘要不依賴行號解析。
+- `counts` 是目前索引累計狀態；`documentIssues` 是目前文件問題的 `total` 與 `items`；`extensionStats` 是 `included` 與 `items`。未指定 `--issues` 時，文件問題與每根診斷只回總數／空 `items`；指定後回傳人類 `status --issues` 會列出的結構化資料。未指定 `--types` 時 `extensionStats.included` 為 `false` 且 `items` 為空；指定後回傳格式統計。`options` 明列兩個旗標是否啟用。
+- `status --json` 成功回傳 0；索引不存在、忙碌、需要回復及其他既有失敗仍維持原退出碼。JSON 錯誤物件為 `{ "schemaVersion": 1, "error": { "code": "...", "message": "..." } }`；`message` 使用既有固定對外訊息，不承諾未分類內部例外文字。
+- 未指定 `--json` 的 `status` 輸出不得因本節增加欄位而改行、改文字或改預設詳細程度；`--json` 不印人類前導／標題文字。
+
+### 108.2 `autoupdate status --json`
+
+- 此命令沿用既有 `LiveStatus` 欄位，以頂層 `schemaVersion: 1` 輸出 `instanceId`、`pid`、`mode`、時間、`phase`、`settings`、`startupCatchup`、`ready`、根目錄、計數、工作佇列、最後事件／更新／校正、`recentErrors` 及其他既有可選診斷欄位，另固定提供 `stale` 布林值。
+- 健康 live 狀態的 `stale` 為 `false`；控制通道無回應但程序仍存在時，回傳退出碼 3、可用的狀態快照與 `stale: true`。沒有狀態檔或程序已不存在時回傳固定 JSON 錯誤物件。背景程序由測試或使用者明確停止，不由 status 查詢暗中終止。
+- `autoupdate status --json` 只改輸出編碼，不改既有控制通道、工作佇列或監看行為；人類格式仍由原本的 `formatLiveStatus` 產生。
+
+### 108.3 版本相容與驗收
+
+- `schemaVersion: 1` 下允許新增欄位，腳本必須忽略未知欄位；刪除、重新命名、改變既有欄位型別或改變既有欄位意義屬破壞性變更，必須升版並另寫規格。欄位值可隨索引與程序狀態變化，不保證資料內容固定。
+- `test/m104.test.ts` 只能使用暫存 `LOCALDOCSEARCH_DATA_DIR`、合成來源與合成索引，鎖定 status／autoupdate status 的既有欄位結構、新增欄位可相容、人類輸出不變及背景程序清理；移除 JSON 接線或任一既有欄位的反向驗證必須失敗。
+- 本節只提供本機 stdout JSON，不新增網路 endpoint、不讀取真實使用者資料、不改索引 schema、不改 `package.json` 版本或 lockfile。

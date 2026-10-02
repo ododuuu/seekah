@@ -1,4 +1,24 @@
 # 設計決策紀錄
+## D144：CLI 狀態輸出提供版本化 JSON 契約
+
+- 日期：2026-10-03。依 SPEC §108；本分支只增加 `status --json`、`autoupdate status --json`、m104 測試及對應使用說明，不修改 `docs/STATUS.md`、`docs/NEXT-TODO.md`、`docs/handoff/`、package 版本或 lockfile。
+- 事實：
+  - `status` 已因逐規則略過、既有索引排除清理與排除摘要增加多行；依固定行號解析 stdout 的外部腳本會在非行為變更時破裂。
+  - CLI 已有 `IndexFormatStatus`、儲存檔案 footprint、每根 `LastSyncReport`、排除 policy、目前文件問題與格式統計；`LiveStatus` 也已是自動更新控制通道的結構化狀態。
+  - 直接把人類行文字串拆回欄位會複製格式化邏輯、遺失 optional／null 語意，也無法對新欄位提供相容承諾。
+- 決定：
+  - 在 status 輸出層建立單一結構化 JSON：頂層固定 `schemaVersion: 1`，狀態資料保留結構化版本、容量、根目錄最近摘要、錯誤／診斷計數與預覽、排除政策、目前文件問題及格式統計。`--issues` 與 `--types` 只控制對應詳細陣列，`options` 明列實際旗標。
+  - `autoupdate status --json` 直接輸出既有 `LiveStatus` 欄位加固定 `stale`，不另建第二套 daemon 狀態模型；人類格式繼續使用 `formatLiveStatus`。
+  - JSON 成功或失敗都只寫一個 stdout 文件；失敗沿用既有退出碼與固定對外訊息，錯誤物件仍含 `schemaVersion` 與穩定 `error.code`／`error.message`，不把 SQLite 原文作為契約。
+  - schema version 1 允許加欄位，禁止刪除／改名／改型別／改語意；此保證只適用 JSON，不凍結人類可讀行文字以外的內部物件。
+- 理由：
+  - 腳本讀取欄位而不是行號，新增 status 多行或重新排序人類排版不會造成位移相容性問題。
+  - 復用既有狀態資料與 LiveStatus 可避免第三套計數／錯誤／排除語意；`readOnly`、null 與 omitted optional 欄位可被明確表達。
+  - `--issues`／`--types` 保留原本可能很大的詳細輸出選擇，避免每次腳本查詢都無條件載入完整診斷與格式明細。
+- 驗證：
+  - `test/m104.test.ts` 以暫存資料目錄與 synthetic source 驗證 status JSON 欄位結構、人類輸出保留、autoupdate status JSON、可新增欄位及 daemon 結束；移除 JSON 接線或既有欄位後測試必須失敗。
+  - 本次沒有搜尋邏輯或前端改動，因此不執行 `scripts/search-diff.mjs`／`node scripts/ui-smoke.mjs`；不宣稱公司 Windows 驗收通過。
+
 ## D132：Codex 安全邊界、增量解析與文件庫操作
 
 - 日期：2026-10-03。依 SPEC §§98–99；先將本分支 rebase 到 `main`，保留 main 的文件庫 API、工作台導覽與上下文抽屜實作；本次只修改 Codex parser、loopback API、Codex 頁面與 m94／m95 合成測試，不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
