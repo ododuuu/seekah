@@ -763,6 +763,93 @@ async function runViewport(viewport, chromePath) {
       await noBrowserErrorsSince(cdp, start, "文件頁");
     });
 
+    await check(`${label} 文件庫四個導覽頁可載入並完成釘選／分類／已存搜尋重新執行`, async () => {
+      const start = browserEvents.length;
+      const indexedPathLiteral = JSON.stringify(fixture.indexedPath);
+      const waitLibrary = async (step, callback) => {
+        try { await waitFor(callback); } catch (error) { throw new Error(step + "：" + errorText(error)); }
+      };
+      await click(cdp, "#nav-documents");
+      await waitLibrary("文件頁顯示", () => visible(cdp, "#documents-page"));
+      await inputAndSearch(cdp, "UI_SMOKE_INCLUDED_NEEDLE");
+      await waitLibrary("搜尋結果顯示", () => cdp.evaluate("document.querySelector('#document-list .document-row .document-actions button') !== null"));
+      const selected = await cdp.evaluate(`(() => {
+        const action = Array.from(document.querySelectorAll("#document-list .document-row .document-actions button"))
+          .find(node => node.textContent?.trim() === "加入上下文");
+        if (!(action instanceof HTMLElement)) return false;
+        action.click();
+        return true;
+      })()`);
+      expect(selected, "搜尋結果沒有可選取文件。");
+      await waitLibrary("最近數量更新", () => cdp.evaluate("document.getElementById('nav-library-recent-count')?.textContent === '1'"));
+      await click(cdp, "#nav-library-recent");
+      await waitLibrary("最近頁顯示", () => visible(cdp, "#library-recent-page"));
+      await waitLibrary("最近文件路徑", () => cdp.evaluate("(document.getElementById('library-recent-list')?.textContent || '').includes(" + indexedPathLiteral + ")"));
+      const pinned = await cdp.evaluate(`(() => {
+        const row = document.querySelector("#library-recent-list .library-item");
+        const action = row && Array.from(row.querySelectorAll("button")).find(node => node.textContent?.trim() === "釘選");
+        if (!(action instanceof HTMLElement)) return false;
+        action.click();
+        return true;
+      })()`);
+      expect(pinned, "最近文件列沒有釘選操作。");
+      await waitLibrary("釘選數量更新", () => cdp.evaluate("document.getElementById('nav-library-pinned-count')?.textContent === '1'"));
+      await click(cdp, "#nav-library-pinned");
+      await waitLibrary("釘選頁顯示", () => visible(cdp, "#library-pinned-page"));
+      await waitLibrary("釘選文件路徑", () => cdp.evaluate("(document.getElementById('library-pinned-list')?.textContent || '').includes(" + indexedPathLiteral + ")"));
+      await click(cdp, "#nav-library-groups");
+      await waitLibrary("分類頁顯示", () => visible(cdp, "#library-groups-page"));
+      const created = await cdp.evaluate(`(() => {
+        const input = document.getElementById("library-group-name");
+        if (!(input instanceof HTMLInputElement)) return false;
+        input.value = "UI Smoke 分類";
+        document.getElementById("library-create-group")?.click();
+        return true;
+      })()`);
+      expect(created, "分類頁沒有建立操作。");
+      await waitLibrary("分類數量更新", () => cdp.evaluate("document.getElementById('nav-library-groups-count')?.textContent === '1'"));
+      await click(cdp, "#nav-library-recent");
+      await waitLibrary("分類加入清單頁", () => visible(cdp, "#library-recent-page"));
+      await waitLibrary("分類選項顯示", () => cdp.evaluate("document.querySelector('#library-recent-list select option:nth-child(2)') !== null"));
+      const grouped = await cdp.evaluate(`(() => {
+        const row = document.querySelector("#library-recent-list .library-item");
+        const select = row?.querySelector("select");
+        const action = row && Array.from(row.querySelectorAll("button")).find(node => node.textContent?.trim() === "加入");
+        if (!(select instanceof HTMLSelectElement) || !(action instanceof HTMLElement)) return false;
+        select.value = select.options[1]?.value || "";
+        action.click();
+        return Boolean(select.value);
+      })()`);
+      expect(grouped, "最近文件列沒有加入分類操作。");
+      await click(cdp, "#nav-library-groups");
+      await waitLibrary("分類文件路徑", () => visible(cdp, "#library-groups-page"));
+      await waitLibrary("分類文件路徑內容", () => cdp.evaluate("(document.getElementById('library-groups-list')?.textContent || '').includes(" + indexedPathLiteral + ")"));
+      await click(cdp, "#nav-documents");
+      await waitLibrary("重新搜尋文件頁", () => visible(cdp, "#documents-page"));
+      await waitLibrary("保存前結果", () => cdp.evaluate("document.querySelector('#document-list .document-row') !== null"));
+      await click(cdp, "#nav-library-saved-searches");
+      await waitLibrary("已存搜尋頁顯示", () => visible(cdp, "#library-saved-searches-page"));
+      const saved = await cdp.evaluate(`(() => {
+        const input = document.getElementById("library-saved-search-name");
+        if (!(input instanceof HTMLInputElement)) return false;
+        input.value = "UI Smoke 搜尋";
+        document.getElementById("library-save-search")?.click();
+        return true;
+      })()`);
+      expect(saved, "已存搜尋頁沒有儲存操作。");
+      await waitLibrary("已存搜尋清單", () => cdp.evaluate("document.querySelector('#library-saved-searches-list .library-item') !== null"));
+      const rerun = await cdp.evaluate(`(() => {
+        const row = document.querySelector("#library-saved-searches-list .library-item");
+        const action = row && Array.from(row.querySelectorAll("button")).find(node => node.textContent?.trim() === "重新搜尋");
+        if (!(action instanceof HTMLElement)) return false;
+        action.click();
+        return true;
+      })()`);
+      expect(rerun, "已存搜尋列沒有重新搜尋操作。");
+      await waitLibrary("已存搜尋重新執行結果", () => cdp.evaluate("!document.getElementById('documents-page')?.hidden && document.querySelector('#document-list .document-row') !== null"));
+      await noBrowserErrorsSince(cdp, start, "文件庫導覽與操作");
+    });
+
     await check(`${label} 臨時文件頁可開啟且無 exception`, async () => {
       const start = browserEvents.length;
       await click(cdp, "#nav-temporary");

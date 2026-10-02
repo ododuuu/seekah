@@ -1,4 +1,46 @@
 # 設計決策紀錄
+## D127：文件庫採獨立 SQLite 並以路徑去重
+
+- 日期：2026-10-03。依 SPEC §95；本分支只處理本機文件庫的儲存、loopback API、最近／釘選／分類／已存搜尋與對應測試，不修改主索引 schema、package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 決定：
+  - 文件庫使用 `dataDirectory(databasePath)/library.sqlite`，與主索引完全分離；SQLite transaction、`synchronous=FULL` 與有界 busy timeout 提供單次異動的原子性及多程序邊界。資料列只保存正規化絕對路徑、stable reference、顯示名稱、時間、事件及已存搜尋條件，永不保存文件內容。
+  - 最近、釘選、分類文件以正規化路徑去重；最近超過 100 筆淘汰最舊列，釘選 100、分類 50 個且每個 200 筆、已存搜尋 100 筆達上限時拒絕新增，避免靜默刪除使用者資料。分類名稱採不分大小寫唯一，已存搜尋用 id 區分同名項目。
+  - 所有 loopback library mutation 沿用既有 token／Origin；新增文件列必須由 stable reference 與目前索引／合法根目錄交叉驗證，不能接受瀏覽器任意絕對路徑。索引更新造成的舊列只保留中繼資料，不自動刪除。
+  - 開啟時做 SQLite schema／完整性檢查；損壞檔案先以唯一副檔名隔離、保留原檔，再建立空文件庫。隔離失敗時不覆寫原檔並回傳 503，不能讓主索引或工作台啟動失敗。
+  - 最近事件只在成功開啟、選取、加入 context 或 MCP `prepare_context` 後記錄；單純 `search_documents` 候選結果不算使用。所有事件合併回同一路徑列，避免搜尋結果數量污染最近清單。
+- 理由：
+  - 獨立 SQLite 比 JSON 需要較少的手動鎖與整體重寫，能在 Workbench 與 MCP 同時寫入時保留 transaction 邊界，也不會讓主索引 schema 承擔使用者 metadata。
+  - 路徑是跨重建仍穩定的文件身份；stable reference 供目前索引驗證與快速更新，兩者同存可避免重建後產生重複釘選／分類項目。
+  - 以隔離而非刪除處理損壞，保留診斷來源且讓產品可恢復為空文件庫；bounded caps 防止無界 metadata 成長。
+- 否決：
+  - 不使用 browser localStorage、外部資料庫、外部 API、文件內容快取或第二套搜尋執行器；不把每次 `search_documents` 的所有結果視為最近使用。
+
+
+## D128：文件庫 UI 採工作台左側頁面並沿用既有搜尋入口
+
+- 日期：2026-10-03。依 SPEC §§95–96；本分支負責左側最近／已釘選／分類／已存搜尋導覽、文件庫操作與 m93／UI smoke，避免修改既有結果列與上下文抽屜的版面契約。
+- 決定：
+  - 文件庫使用工作台既有單頁路由與 `data-page` 顯示切換；每個頁面只呈現名稱、絕對路徑、時間或搜尋條件摘要，不在瀏覽器保存文件內容。
+  - 釘選與分類操作由最近／釘選清單發起；分類可以持有多份文件。已存搜尋保存目前表單條件，重新執行時回填工作台搜尋狀態並呼叫既有 `/api/search`，不新增前端搜尋執行器。
+  - 文件成功開啟仍由既有 `/api/document-action` 完成；結果勾選由 UI 呼叫文件庫 recent API 記錄 `select`，context／MCP 事件由 server 端成功路徑記錄，避免瀏覽器自行宣稱成功。
+- 理由：
+  - 左側頁面與既有工作台導覽、token、CSP、焦點及 responsive layout 共用，能讓文件庫在同一個 loopback 邊界內完成操作。
+  - 把文件內容排除在 UI 與資料庫之外，符合本機資料最小化，也避免建立第二種文件讀取或搜尋語意。
+- 否決：
+  - 不使用 localStorage、sessionStorage、cookie、IndexedDB 或外部網路；不把最近清單塞進既有搜尋結果頁，不以路徑文字取代 server stable reference 驗證。
+
+## D129：文件庫回歸以 synthetic fixture、正反斷言與既有檢查為準
+
+- 日期：2026-10-03。依 SPEC §97；本分支只在 `feat/library-48` 的暫存資料目錄與合成索引驗證，不宣稱公司 Windows 驗收。
+- 決定：
+  - m91 驗證獨立 SQLite 的 transaction、路徑去重、容量邊界、CRUD、重開持久化及損壞隔離；m92 驗證 loopback token／Origin、stable reference path 驗證、open／select／context／mcp 事件及 MCP `prepare_context`；m93 與 UI smoke 驗證四個頁面及釘選／分類／保存／重新搜尋。
+  - 每個聚焦測試都保留移除核心接線後必須失敗的反向斷言；搜尋相關變更仍執行 `scripts/search-diff.mjs`，要求 0 mismatch、0 error。
+  - UI smoke 與測試只能使用暫存 `LOCALDOCSEARCH_DATA_DIR`；結束時停止 Workbench、Chrome、背景／前景測試程序並檢查沒有程序指向暫存資料。
+- 理由：
+  - synthetic fixture 可驗證資料隔離與事件邊界，不會把真實使用者索引或文件內容帶進測試；正反斷言能防止只保留 UI 字串而遺失行為接線。
+  - 既有完整測試、UI smoke 與 search-diff 分別覆蓋編譯／回歸、實際瀏覽器表面及搜尋結果不變，維持六個月後可診斷性。
+- 否決：
+  - 不讀取 `%LOCALAPPDATA%\\LocalDocSearch*`，不執行真實索引操作，不把一次通過的本機 smoke 宣稱為公司 Windows 驗收；不修改 package version、lockfile、STATUS、NEXT-TODO 或 handoff。
 
 ## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
 
