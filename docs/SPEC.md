@@ -3113,6 +3113,24 @@ docsearch doctor
 ### 99.2 工作台呈現與驗收
 
 - `/codex-sessions` 顯示工作階段清單、cwd、時間、事件類型統計、Reference Set、來源分類、confidence、磁碟存在／未知原因、`kind`（檔案／資料夾／未知）與 Seekah 索引狀態；list 只顯示尚未檢查數，不執行 path existence check；detail 才呈現檢查結果，低信心／未知 path 置於可展開區塊。
-- 只有已在 Seekah 索引的 reference 顯示 `Pin` 與 `Add-to-category` 操作，且沿用既有 `/api/library/pinned`、`/api/library/groups/:id/items` stable reference API；Codex 獨立頁沒有跨頁 context bridge，因此不虛構 `Add-to-context`，右側上下文欄仍由工作台既有選取流程管理。
-- 頁面只提供重新整理、回到工作台及上述文件庫操作；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
+- 只有已在 Seekah 索引的 reference 顯示「釘選」、「加入分類」及「加入上下文／移出上下文」操作；文件庫操作沿用既有 stable reference API，上下文操作依 §100 使用目前工作台 token session 的共用集合。低信心、未索引、未知或不存在 reference 不顯示加入上下文操作。
+- 頁面只提供重新整理、回到工作台、上述文件庫操作與 §100 上下文操作；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
 - `test/m95.test.ts` 必須驗證 token／Origin 邊界、session／reference API、可見與低信心 buckets、索引比對、來源分類、頁面 CSP／安全文字呈現、文件庫按鈕 API 接線與 conversation content 不外洩；移除 API 索引比對或頁面入口的反向契約必須失敗。
+
+## 100. Codex Reference 與工作台上下文跨頁共用
+
+依 D135。本節只把已在 Seekah 索引的 Codex reference 接入工作台既有上下文選取；不把 Codex 對話內容、prompt、tool result 或文件正文加入新的儲存或傳輸流程。
+
+### 100.1 共用狀態與 API
+
+- 工作台以目前 URL fragment token 保護的 loopback session 作為上下文索引文件集合的唯一來源；狀態只存在 `createWorkbench` 的程序記憶體，工作台 reload 或在 `/codex-sessions` 間導覽仍保留，Workbench 關閉即消失。不得使用 `localStorage`、`sessionStorage`、cookie、IndexedDB、URL query／fragment payload 或外部服務保存選取。
+- `GET /api/context-selection` 回傳目前 session 的已選索引文件 `{path, reference, name}` 與工作台目前已選臨時文件數；只回傳 stable reference metadata，不回傳文件內容。`POST /api/context-selection` 僅接受一份已由 Seekah 索引且 stable reference／absolute path 相符的文件；`DELETE` 可移除一份或清除整個索引選取；`PUT` 只更新工作台已選臨時文件數。所有 endpoint 沿用 token、loopback Origin／Referer、CSP 與 `no-store` 邊界。
+- API 每次都重新以現有索引驗證 stable reference、canonical path 與 ownership；失效、路徑不符或非索引文件不得加入。索引與臨時文件合計仍最多 20 份；超過上限回傳錯誤且不改變既有集合。
+- Codex 頁每筆已索引 reference 顯示「加入上下文」或「移出上下文」，操作成功後更新該頁及共用 session；低信心、未索引、未知或不存在 reference 不顯示此操作。工作台右側上下文欄、列表／表格結果按鈕及 Codex 頁讀取同一份 session 集合。
+- 工作台在已開啟的另一頁存在時以受限輪詢重新讀取共用集合；輪詢只更新索引文件，不覆寫本工作台臨時文件。新增或移除失敗必須回復本地 optimistic state 並顯示錯誤，不得假稱成功。
+
+### 100.2 安全與驗收
+
+- 共用狀態只保存 path、stable reference、檔名與臨時文件數；不得保存 snippet、query、answer、Codex 原文、對話、附件或文件內容。Codex page 不得因此取得任意 path 讀取能力，仍只能使用既有文件庫操作。
+- `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
+- `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。

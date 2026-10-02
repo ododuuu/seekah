@@ -1093,6 +1093,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     autoupdateDebounceMs: 1500,
     autoupdateReconcileMs: 21600000,
     contextPanelCollapsed: false,
+    contextSyncBusy: false,
+    contextMutationBusy: false,
+    contextMutationChain: Promise.resolve(),
+    contextMutationVersion: 0,
     focusRoot: "",
     dialogTrigger: null,
     library: { recent: [], pinned: [], groups: [], savedSearches: [], busy: false },
@@ -1406,6 +1410,84 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       throw error;
     }
     return data;
+  }
+  function contextRemoteItem(value) {
+    if (!value || typeof value.path !== "string" || !isAbsoluteDocumentPath(value.path)
+      || typeof value.reference !== "string" || typeof value.name !== "string" || !value.name) return null;
+    return { path: value.path, reference: value.reference, filename: value.name, name: value.name };
+  }
+  function applyContextSelection(data) {
+    const remote = new Map();
+    for (const value of Array.isArray(data?.items) ? data.items : []) {
+      const item = contextRemoteItem(value);
+      if (item) remote.set(item.reference, item);
+    }
+    let changed = remote.size !== state.selected.size;
+    for (const reference of state.selected.keys()) {
+      if (!remote.has(reference)) { changed = true; break; }
+    }
+    if (!changed) {
+      for (const [reference, value] of remote) {
+        const current = state.selected.get(reference);
+        if (!current || current.item?.path !== value.path || documentFilenameValue(current.item) !== value.filename) {
+          changed = true;
+          break;
+        }
+      }
+    }
+    for (const [reference, value] of remote) {
+      const current = state.selected.get(reference);
+      state.selected.set(reference, current
+        ? { ...current, item: { ...current.item, ...value } }
+        : { query: state.submittedQuery, reference, item: value });
+    }
+    for (const reference of state.selected.keys()) if (!remote.has(reference)) state.selected.delete(reference);
+    if (changed) invalidatePreview("上下文選取已從其他工作台頁面同步。", true);
+    return changed;
+  }
+  async function refreshContextSelection(showError = false) {
+    if (state.contextSyncBusy || state.contextMutationBusy) return;
+    state.contextSyncBusy = true;
+    try {
+      applyContextSelection(await api("/api/context-selection"));
+    } catch (error) {
+      if (showError) showToast(error.message || "上下文選取同步失敗。");
+    } finally {
+      state.contextSyncBusy = false;
+    }
+  }
+  function enqueueContextMutation(operation, rollback) {
+    const version = ++state.contextMutationVersion;
+    state.contextMutationBusy = true;
+    const run = async () => {
+      try {
+        const data = await operation();
+        if (version === state.contextMutationVersion) applyContextSelection(data);
+      } catch (error) {
+        if (version === state.contextMutationVersion) {
+          rollback();
+          invalidatePreview("上下文選取變更失敗，已恢復原狀。", true);
+          showToast(error.message || "上下文選取變更失敗。");
+          state.contextMutationBusy = false;
+          await refreshContextSelection();
+        }
+      } finally {
+        if (version === state.contextMutationVersion) state.contextMutationBusy = false;
+      }
+    };
+    state.contextMutationChain = state.contextMutationChain.then(run, run);
+  }
+  function syncTemporarySelectionCount(previous, rollback) {
+    const next = selectedTemporaryCount();
+    if (next === previous) return;
+    enqueueContextMutation(
+      () => api("/api/context-selection", { method: "PUT", body: { temporaryCount: next } }),
+      () => {
+        if (rollback) rollback();
+        renderTemporary();
+        if (state.route === "documents") renderDocuments();
+      },
+    );
   }
   function clearSearchCancellation() {
     clearInterval(state.searchCancelTimer);
@@ -2284,21 +2366,43 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     renderContextPanel();
   }
   function clearIndexedSelection(message) {
+    const previous = new Map(state.selected);
     state.selected.clear();
     invalidatePreview(message || "索引選取已清除；請重新產生精確預覽。", true);
+    if (previous.size) {
+      enqueueContextMutation(
+        () => api("/api/context-selection", { method: "DELETE", body: { clear: true } }),
+        () => { state.selected = new Map(previous); },
+      );
+    }
   }
   function toggleSelection(item, checked) {
+    const previous = state.selected.get(item.reference);
     if (checked) {
-      if (state.selected.has(item.reference)) return;
+      if (previous) return;
       if (selectedCount() >= MAX) {
         showToast("索引文件與臨時文件合計最多 20 份；未加入第 21 份。");
         renderDocuments();
         return;
       }
       state.selected.set(item.reference, { query: state.submittedQuery, reference: item.reference, item });
-      void recordLibraryAction(item, "select");
-    } else state.selected.delete(item.reference);
+      invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+      enqueueContextMutation(
+        () => api("/api/context-selection", { method: "POST", body: libraryDocumentPayload(item) }).then(data => {
+          void recordLibraryAction(item, "select");
+          return data;
+        }),
+        () => { state.selected.delete(item.reference); },
+      );
+      return;
+    }
+    if (!previous) return;
+    state.selected.delete(item.reference);
     invalidatePreview("選取已變更；請重新產生精確預覽。", true);
+    enqueueContextMutation(
+      () => api("/api/context-selection", { method: "DELETE", body: { reference: item.reference } }),
+      () => { state.selected.set(item.reference, previous); },
+    );
   }
   function toggleImported(item, checked) {
     if (checked && selectedCount() >= MAX) {
@@ -2306,10 +2410,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderTemporary();
       return;
     }
+    const previous = item.selected;
+    const previousCount = selectedTemporaryCount();
     item.selected = checked;
     invalidatePreview("選取已變更；請重新產生精確預覽。", true);
     renderTemporary();
     if (state.route === "documents") renderDocuments();
+    syncTemporarySelectionCount(previousCount, () => { item.selected = previous; });
   }
   async function selectAllAccessible() {
     if (!state.data || !state.submittedQuery) return;
@@ -2333,8 +2440,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
           renderDocuments();
           return;
         }
-        state.selected.set(item.reference, { query: data.query, reference: item.reference, item });
-        void recordLibraryAction(item, "select");
+        toggleSelection(item, true);
         added++;
       }
     }
@@ -2494,12 +2600,17 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   async function removeImported(item) {
     if (item.pending) return;
+    const previousSelected = item.selected;
+    const previousCount = selectedTemporaryCount();
     try {
       if (!String(item.id).startsWith("pending-")) await api("/api/files/" + encodeURIComponent(item.id), { method: "DELETE" });
       state.imported.delete(item.id);
       invalidatePreview("臨時文件已移除；請重新產生精確預覽。", true);
       renderTemporary();
       if (state.route === "documents" && state.submittedQuery) void search(1);
+      syncTemporarySelectionCount(previousCount, () => {
+        if (previousSelected) state.imported.set(item.id, item);
+      });
       showToast("臨時文件已從本次工作階段移除。");
     } catch (error) { setStatus("file-status-message", error.message || "臨時文件移除失敗。", "error"); }
   }
@@ -2514,12 +2625,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderTemporary();
       setStatus("file-status-message", "本機解析 " + file.name + "…", "");
       try {
+        const previousCount = selectedTemporaryCount();
         const data = await api("/api/files", { method: "POST", headers: { "X-File-Name": encodeURIComponent(file.name), "content-type": "application/octet-stream" }, body: file });
         state.imported.delete(pending.id);
         data.selected = data.status === "indexed" && selectedCount() < MAX;
         data.pending = false;
         state.imported.set(data.id, data);
         invalidatePreview("臨時文件已更新；請重新產生精確預覽。", true);
+        syncTemporarySelectionCount(previousCount, () => { data.selected = false; });
         setStatus("file-status-message", file.name + " 已收到 server 狀態：" + data.status + "。", data.status === "indexed" ? "ok" : "warn");
       } catch (error) {
         pending.pending = false;
@@ -2565,9 +2678,20 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
   }
   function clearContextSelection() {
+    const previousSelected = new Map(state.selected);
+    const previousTemporary = new Set([...state.imported.values()].filter(item => item.selected).map(item => item.id));
     state.selected.clear();
     for (const item of state.imported.values()) item.selected = false;
     invalidatePreview("選取已清除；路徑清單已更新。", true);
+    if (previousSelected.size || previousTemporary.size) {
+      enqueueContextMutation(
+        () => api("/api/context-selection", { method: "DELETE", body: { clear: true } }),
+        () => {
+          state.selected = new Map(previousSelected);
+          for (const item of state.imported.values()) item.selected = previousTemporary.has(item.id);
+        },
+      );
+    }
   }
   function showDialog(dialog, trigger, focusTarget) {
     state.dialogTrigger = trigger || document.activeElement;
@@ -2606,8 +2730,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       body.append(pathNode);
       const actions = make("div", "context-item-actions");
       actions.append(button("移除", "small result-action", () => {
-        state.selected.delete(selected.reference);
-        invalidatePreview("選取已變更；路徑清單已更新。", true);
+        toggleSelection(selected.item, false);
       }));
       row.append(body, actions);
       indexed.append(row);
@@ -2626,8 +2749,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         body.append(make("div", "context-item-meta", "臨時上傳文件沒有可複製的原始絕對路徑。"));
       }
       row.append(body, button("移除", "small result-action", () => {
+        const previous = item.selected;
+        const previousCount = selectedTemporaryCount();
         item.selected = false;
         invalidatePreview("選取已變更；路徑清單已更新。", true);
+        syncTemporarySelectionCount(previousCount, () => { item.selected = previous; });
       }));
       temporary.append(row);
     }
@@ -3907,12 +4033,19 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   }
   async function initialize() {
     await loadState();
+    await refreshContextSelection(true);
+    try {
+      applyContextSelection(await api("/api/context-selection", { method: "PUT", body: { temporaryCount: selectedTemporaryCount() } }));
+    } catch (error) {
+      showToast(error.message || "上下文選取上限同步失敗。");
+    }
     await refreshStatus();
     await refreshLibrary();
   }
   buildApp();
   applyTheme(readThemeMode(), false);
   setInterval(() => { if (isIndexing()) void refreshIndexProgress(); }, 750);
+  setInterval(() => { void refreshContextSelection(); }, 1_000);
   void initialize();
 })();
 </script>

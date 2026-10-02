@@ -173,6 +173,8 @@ async function fixtureFor(viewport) {
   try {
   const root = path.join(temp, "synthetic-root 中文😀");
   const dataDir = path.join(temp, "data");
+  const codexHome = path.join(temp, "codex-home");
+  const codexRollout = path.join(codexHome, "sessions", "2026", "10", "02", "rollout-ui-smoke.jsonl");
   const refreshFolder = path.join(root, "refresh-area");
   const multiPath = path.join(root, "multi-passage-lines.txt");
   const singlePath = path.join(root, "single-passage.txt");
@@ -181,6 +183,7 @@ async function fixtureFor(viewport) {
   const omittedPath = path.join(root, "omitted-terms.txt");
   await mkdir(path.join(root, "excluded"), { recursive: true });
   await mkdir(path.join(refreshFolder, "ignored"), { recursive: true });
+  await mkdir(path.dirname(codexRollout), { recursive: true });
   await writeFile(path.join(root, ".localdocsearchignore"), "excluded/\nrefresh-area/ignored/\n");
   await writeFile(path.join(root, "included 中文😀.txt"), "UI_SMOKE_INCLUDED_NEEDLE\n一般合成文件。\n");
   await writeFile(path.join(root, "ordinary.md"), "普通文件，不含測試查詢。\n");
@@ -210,10 +213,15 @@ async function fixtureFor(viewport) {
   await writeFile(path.join(refreshFolder, "refresh-removed.txt"), "UI_SMOKE_REFRESH_REMOVED\n");
   await writeFile(path.join(refreshFolder, "ignored", "skip.txt"), "UI_SMOKE_IGNORED\n");
   runIndex(root, dataDir);
+  await writeFile(codexRollout, [
+    JSON.stringify({ type: "session_meta", payload: { type: "session_meta", session_id: "ui-smoke-session", cwd: root, timestamp: "2026-10-02T10:00:00.000Z" } }),
+    JSON.stringify({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Please inspect " + multiPath }] } }),
+  ].join("\n") + "\n");
   return {
     temp,
     root,
     dataDir,
+    codexHome,
     refreshFolder,
     excludedPath: path.join(root, "excluded", "secret.txt"),
     indexedPath: path.join(root, "included 中文😀.txt"),
@@ -280,13 +288,14 @@ function stopCliAutoupdate(fixture) {
   }
 }
 
-function startWorkbench(dataDir, temp) {
+function startWorkbench(dataDir, temp, codexHome) {
   const databasePath = path.join(dataDir, "LocalDocSearch", "index.db");
   const workbenchModule = pathToFileURL(path.join(project, "dist", "src", "workbench.js")).href;
   const launcher = `
     import { createWorkbench } from ${JSON.stringify(workbenchModule)};
     const handle = await createWorkbench({
       databasePath: ${JSON.stringify(databasePath)},
+      codexHome: ${JSON.stringify(codexHome)},
       tempParent: ${JSON.stringify(temp)},
       searchDelayMs: 1250,
       indexHold: () => new Promise(resolve => setTimeout(resolve, 3000)),
@@ -728,7 +737,7 @@ async function runViewport(viewport, chromePath) {
     fixture = await fixtureFor(viewport);
     syntheticProcessPaths.add(fixture.temp);
     syntheticProcessPaths.add(fixture.dataDir);
-    workbench = startWorkbench(fixture.dataDir, fixture.temp);
+    workbench = startWorkbench(fixture.dataDir, fixture.temp, fixture.codexHome);
     const url = await waitForWorkbench(workbench);
     port = await unusedPort();
     chromeProfile = await mkdtemp(path.join(outputDir, `chrome-${label}-`));
@@ -857,6 +866,53 @@ async function runViewport(viewport, chromePath) {
       expect(rerun, "已存搜尋列沒有重新搜尋操作。");
       await waitLibrary("已存搜尋重新執行結果", () => cdp.evaluate("!document.getElementById('documents-page')?.hidden && document.querySelector('#document-list .document-row') !== null"));
       await noBrowserErrorsSince(cdp, start, "文件庫導覽與操作");
+    });
+    await check(`${label} Codex reference 可加入上下文並跨頁／reload 保留`, async () => {
+      const start = browserEvents.length;
+      await click(cdp, "#codex-session-toggle");
+      await waitFor(async () => {
+        const snapshot = await cdp.evaluate(`(() => ({
+          pathname: location.pathname,
+          sessionRows: document.querySelectorAll("#session-list .session-row").length,
+          detailButtons: document.querySelectorAll("#session-detail button[data-action='context']").length,
+          body: document.body?.textContent?.slice(0, 500) || "",
+        }))()`);
+        if (snapshot.pathname === "/codex-sessions" && snapshot.sessionRows > 0) return true;
+        throw new Error("Codex 頁面狀態：" + JSON.stringify(snapshot));
+      });
+      await waitFor(() => cdp.evaluate("document.querySelector('#session-detail button[data-action=\"context\"]') !== null"));
+      const added = await cdp.evaluate(`(() => {
+        const button = document.querySelector('#session-detail button[data-action="context"]');
+        if (!(button instanceof HTMLElement) || button.textContent?.trim() !== "加入上下文") return false;
+        button.click();
+        return true;
+      })()`);
+      expect(added, "Codex 已索引 reference 沒有加入上下文按鈕。");
+      await waitFor(() => cdp.evaluate("document.querySelector('#session-detail button[data-action=\"context\"]')?.textContent?.trim() === '移出上下文'"));
+      await click(cdp, "#back");
+      await waitFor(() => cdp.evaluate("location.pathname === '/' && Boolean(document.getElementById('documents-page'))"));
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '2'"));
+      const shared = await cdp.evaluate(`(() => ({
+        count: document.getElementById("nav-context-count")?.textContent || "",
+        panel: document.getElementById("context-indexed-list")?.textContent || "",
+      }))()`);
+      expect(shared.count === "2" && shared.panel.includes("multi-passage-lines.txt") && shared.panel.includes(fixture.multiPath), "Codex 選取沒有同步到工作台上下文側欄。");
+      await reloadWorkbench(cdp);
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '2'"));
+      const removed = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#context-indexed-list .context-item")).find(node => node.textContent?.includes("multi-passage-lines.txt"));
+        const button = row?.querySelector(".result-action");
+        if (!(button instanceof HTMLElement)) return false;
+        button.click();
+        return true;
+      })()`);
+      expect(removed, "工作台側欄沒有移除 Codex 選取的文件。");
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '1'"));
+      await reloadWorkbench(cdp);
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '1'"));
+      await click(cdp, "#context-clear-selection");
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '0'"));
+      await noBrowserErrorsSince(cdp, start, "Codex reference 跨頁上下文");
     });
 
     await check(`${label} 臨時文件頁可開啟且無 exception`, async () => {

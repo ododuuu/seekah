@@ -43,6 +43,9 @@ const HOST = "127.0.0.1";
 const JSON_LIMIT = 128 * 1024;
 
 interface Selection { query: string; reference: string }
+interface ContextSelectionItem { path: string; reference: string; name: string }
+interface ContextSelectionState { items: Map<string, ContextSelectionItem>; temporaryCount: number }
+
 interface ContextRequest {
   provider: ProviderSelection;
   model: string;
@@ -490,10 +493,33 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
   function getLibrary(): LibraryStore {
     return library ??= new LibraryStore(options.databasePath);
   }
-  async function resolveLibraryDocument(body: Record<string, unknown>) {
+  async function resolveLibraryDocument(body: Record<string, unknown>): Promise<ContextSelectionItem> {
     const input = libraryDocumentBody(body);
-    return openStore(options.databasePath, store => indexedLibraryDocument(store, input.reference, input.path), options.createIndexStore);
+    const document = await openStore(options.databasePath, store => indexedLibraryDocument(store, input.reference, input.path), options.createIndexStore);
+    if (!document.reference) throw Object.assign(new Error("文件代碼已失效，請重新搜尋。"), { statusCode: 400 });
+    return { path: document.path, reference: document.reference, name: document.name };
   }
+  const contextSelection: ContextSelectionState = { items: new Map(), temporaryCount: 0 };
+  const contextSelectionPayload = () => ({
+    items: [...contextSelection.items.values()].map(item => ({ ...item })),
+    temporaryCount: contextSelection.temporaryCount,
+  });
+  const contextTemporaryCount = (body: Record<string, unknown>): number => {
+    if (!Number.isSafeInteger(body.temporaryCount) || Number(body.temporaryCount) < 0 || Number(body.temporaryCount) > WORKBENCH_FILE_LIMIT) {
+      throw Object.assign(new Error("臨時文件選取數無效。"), { statusCode: 400 });
+    }
+    const value = Number(body.temporaryCount);
+    if (contextSelection.items.size + value > WORKBENCH_FILE_LIMIT) {
+      throw Object.assign(new Error("索引與拖曳文件合計最多 20 份。"), { statusCode: 409 });
+    }
+    return value;
+  };
+  const contextReference = (body: Record<string, unknown>): string => {
+    if (typeof body.reference !== "string" || !/^[1-9]\d*-[0-9a-f]{16}$/u.test(body.reference)) {
+      throw Object.assign(new Error("上下文文件代碼無效。"), { statusCode: 400 });
+    }
+    return body.reference;
+  };
 
   const codexParserOptions = {
     ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }),
@@ -837,7 +863,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       if (!url.pathname.startsWith("/api/")) { json(response, 404, { error: "找不到本機資源。" }); return; }
       if (request.headers["x-localdocsearch-token"] !== token) { json(response, 403, { error: "工作階段 token 無效。" }); return; }
       const codexApi = url.pathname.startsWith("/api/codex/");
-      if (codexApi) {
+      const loopbackProtectedApi = codexApi || url.pathname === "/api/context-selection";
+      if (loopbackProtectedApi) {
         let allowedOrigin = !request.headers.origin;
         if (request.headers.origin) allowedOrigin = request.headers.origin === origin;
         else if (request.headers.referer) {
@@ -846,6 +873,36 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         }
         if (!allowedOrigin) { json(response, 403, { error: "跨來源要求已拒絕。" }); return; }
       }
+      if (url.pathname === "/api/context-selection") {
+        if (request.method === "GET") {
+          json(response, 200, contextSelectionPayload());
+          return;
+        }
+        if (request.method === "POST") {
+          const item = await resolveLibraryDocument(await readJson(request));
+          if (!contextSelection.items.has(item.reference) && contextSelection.items.size + contextSelection.temporaryCount >= WORKBENCH_FILE_LIMIT) {
+            throw Object.assign(new Error("索引與拖曳文件合計最多 20 份。"), { statusCode: 409 });
+          }
+          contextSelection.items.set(item.reference, item);
+          json(response, 200, contextSelectionPayload());
+          return;
+        }
+        if (request.method === "DELETE") {
+          const body = await readJson(request);
+          if (body.clear === true) contextSelection.items.clear();
+          else contextSelection.items.delete(contextReference(body));
+          json(response, 200, contextSelectionPayload());
+          return;
+        }
+        if (request.method === "PUT") {
+          contextSelection.temporaryCount = contextTemporaryCount(await readJson(request));
+          json(response, 200, contextSelectionPayload());
+          return;
+        }
+        json(response, 405, { error: "上下文操作方法不支援。" });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/api/codex/sessions") {
         const sessions = await readCodexSessions();
         json(response, 200, { readOnly: true, sessions: summarizeCodexSessions(sessions) });
@@ -1450,7 +1507,8 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
       library?.close();
       keys.destroy();
       documents.clear();
-      consumedPreviews.clear();
+      contextSelection.items.clear();
+      contextSelection.temporaryCount = 0;
       await new Promise<void>(resolve => server.close(() => resolve()));
       await rm(tempRoot, { recursive: true, force: true });
     },

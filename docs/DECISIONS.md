@@ -1689,3 +1689,20 @@
 - detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
 - synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
 - M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。
+
+## D135：Codex 與工作台上下文採 token session 共用索引集合
+
+- 日期：2026-10-02。依 SPEC §100。本分支只處理 `src/workbench.ts`、`src/workbench-app.ts`、`src/codex-session-app.ts`、`test/m96.test.ts` 與 `scripts/ui-smoke.mjs`；不修改 package 版本、lockfile、`docs/STATUS.md`、`docs/NEXT-TODO.md` 或 `docs/handoff/`。
+- 事實：
+  - D125 的上下文選取原本只存在工作台頁面的 `state.selected`；Codex 頁使用同一個 loopback token 但另有 JavaScript execution context，導覽後無法看到或修改右側欄，因此 §99 刻意沒有虛構「加入上下文」。
+  - 以 URL fragment 傳送 selected reference 會把完整絕對路徑暴露在 history、referrer 或畫面 URL；browser storage 又違反本產品的本機偏好與安全邊界。文件庫 SQLite 是持久化資料，不適合保存這個 session-only 選取狀態。
+- 決定：
+  - 在單一 `createWorkbench` handle 內保存受 token 保護的 `contextSelection`：索引文件只保留經 `indexedLibraryDocument` 驗證後的 canonical `path`、stable `reference`、`name`，另保留工作台臨時文件計數供 20 份上限判斷。工作台關閉時由程序清除，不寫 SQLite、檔案、URL 或 browser storage。
+  - 新增 `GET`／`POST`／`DELETE`／`PUT /api/context-selection`。`POST` 只加入已索引文件；`DELETE` 移除一份或清除索引集合；`PUT` 只同步工作台的臨時文件數。所有變更沿用既有 token、Origin／Referer 與 same-origin API 檢查；API 回傳的只有 selection metadata。
+  - Codex reference row 的「加入上下文／移出上下文」直接呼叫共用 API；工作台啟動、結果操作、側欄移除／清除與有限輪詢均讀寫同一集合。輪詢只合併索引文件，保留臨時文件的 session-local 狀態；前端以遞增 mutation version 丟棄較舊的 optimistic response，避免快速移除後重新加入時被舊回應覆寫。optimistic mutation 失敗時回復並顯示錯誤。
+  - 不採 `window.opener`、`postMessage` 或 `BroadcastChannel` 作唯一來源：它們依賴分頁開啟方式，不能涵蓋同一分頁導覽、reload 或沒有 opener 的 Codex route；server memory session 同時覆蓋這些情況而不增加持久化資料。
+- 取捨：
+  - 同一個 Workbench process／token 的頁面共用，重啟 Workbench 後選取清除；這符合上下文「目前工作階段」語意，不把使用者選取變成文件庫資料。
+  - Codex 頁只可加入已索引 reference，不能加入低信心、未索引或 arbitrary path；臨時文件仍只屬工作台頁面，故 `temporaryCount` 只作上限協調，不把暫存內容跨頁傳出。
+- 驗證：
+  - `test/m96.test.ts` 使用暫存資料目錄與合成文件，覆蓋 API 邊界、stable reference、跨頁讀取、上限與反向契約；`scripts/ui-smoke.mjs` 實際操作工作台／Codex route 的加入、移除、reload 與右側欄同步。
