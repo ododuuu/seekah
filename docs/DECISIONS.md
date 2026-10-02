@@ -1665,3 +1665,11 @@
 - 純「每行一個絕對路徑」的既有 `seekah-prompt` 分類只接受未包裝的完整行；帶說明或包裝的行回到 `user-provided`，避免 recall 修正把使用者文字誤升級成 prompt。Reference 另外以唯讀 `stat` 回傳 `kind: file|directory|unknown`；資料夾保留在 Reference Set 並 canonicalize 尾端 separator。
 - m94 以每類至少兩個 synthetic path 驗證完整 recall、`kind: directory` 與既有 noise=0；不讀取真實 Codex home 或 LocalDocSearch 資料目錄。
 - M96 synthetic 200 KiB 未閉合引號、連續反斜線與空白輸入，修正後抽取約 13 ms；修正前同類 rollout 在 5 秒 watchdog 內未完成。性能門檻固定為單段文字 200 ms 內完成，不以真實使用者資料作測試。
+
+## D134：Codex reference existence 檢查延後至 detail API
+
+- 日期：2026-10-02。監工以真實 57 個 rollout 逐檔計時回報總計 88.5 秒；其中 31.5 MB 單檔 73.5 秒，另有小檔約 2,717～5,448 ms。未在本工作區重讀真實 rollout；依程式證據，原 parser 在每個 finalized reference 以同步 `statSync` 檢查候選 path，UNC／不存在磁碟機可阻塞約數秒，與量測形狀一致。
+- parser 現在只建立字串 Reference Set，`exists` 未檢查時為 `null`、`kind` 為 `unknown`，不對候選 path 執行檔案系統 I/O。工作台 list 只解析與摘要，不做 reference existence check；detail API 只對被選取的 session 做檢查。
+- detail 檢查使用非同步 `stat`、每路徑快取、最多 8 路並行與 300 ms timeout；UNC／network path 與已知非本機 Windows drive 直接回傳 `unknownReason: "network"`，逾時回傳 `unknownReason: "timeout"`。未知結果不提升成存在或缺失。
+- synthetic 33,030,174-byte／98,926-line rollout 量測：寫入 55.6 ms、讀取 47.0 ms、單純 JSON parse 196.6 ms、產品 parser 1,668.2 ms、2000 references，低於 5 秒；parser 結果的所有 `exists` 均為 `null`。
+- M97 以不可取消的 3 秒 synthetic `stat` 驗證 API 約 300 ms 回傳 unknown、快取避免第二次 stat、UNC 不呼叫 stat，並驗證最多 8 路並行。

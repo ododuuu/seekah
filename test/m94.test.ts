@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   codexReferencePathForTest,
   codexReferencePathsForTest,
+  inspectCodexSessionReferences,
   parseCodexRolloutFile,
   parseCodexSessionFiles,
   parseCodexSessions,
@@ -160,6 +161,85 @@ test("M96 200 KB 未閉合 path 惡意輸入必須在 200 ms 內完成", () => {
   assert.ok(elapsed < 200, `200 KB 惡意 path 掃描耗時 ${elapsed.toFixed(1)} ms`);
 });
 
+test("M97 parser 不檢查 reference，API stat timeout 與 UNC 只回 unknown", async t => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m97-"));
+  const rollout = path.join(temp, "rollout-timeout.jsonl");
+  await writeFile(rollout, JSON.stringify({
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [{ type: "input_text", text: "C:/synthetic/timeout.txt" }] },
+  }) + "\n", "utf8");
+  t.after(() => rm(temp, { recursive: true, force: true }));
+
+  const parsed = await parseCodexRolloutFile(rollout);
+  assert.equal(parsed.references.length, 1);
+  assert.equal(parsed.references[0]?.exists, null);
+  assert.equal(parsed.references[0]?.kind, "unknown");
+
+  // 需要真實計時器：此測試驗證不可取消的 stat promise 逾時後 API 先返回 unknown。
+  let statCalls = 0;
+  const delayedStat = async () => {
+    statCalls++;
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 3_000);
+      timer.unref();
+    });
+    return { isDirectory: () => false, isFile: () => true };
+  };
+  const cache = new Map();
+  const started = performance.now();
+  const inspected = await inspectCodexSessionReferences(parsed, { cache, stat: delayedStat, timeoutMs: 300 });
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1_000, `stat timeout 後仍耗時 ${elapsed.toFixed(1)} ms`);
+  assert.equal(statCalls, 1);
+  assert.equal(inspected.references[0]?.exists, null);
+  assert.equal(inspected.references[0]?.kind, "unknown");
+  assert.equal(inspected.references[0]?.unknownReason, "timeout");
+  assert.equal(inspected.references[0]?.display, "unknown");
+
+  const cached = await inspectCodexSessionReferences(parsed, { cache, stat: delayedStat, timeoutMs: 300 });
+  assert.equal(statCalls, 1);
+  assert.equal(cached.references[0]?.unknownReason, "timeout");
+
+  const network = await inspectCodexSessionReferences({
+    ...parsed,
+    references: [{ ...parsed.references[0]!, path: "\\\\server\\share\\missing.txt" }],
+  }, { cache, stat: delayedStat, timeoutMs: 300 });
+  assert.equal(statCalls, 1);
+  assert.equal(network.references[0]?.exists, null);
+  assert.equal(network.references[0]?.unknownReason, "network");
+  if (process.platform === "win32") {
+    const nonLocalDrive = await inspectCodexSessionReferences({
+      ...parsed,
+      references: [{ ...parsed.references[0]!, path: "Z:\\non-local\\missing.txt" }],
+    }, { cache, stat: delayedStat, timeoutMs: 300 });
+    assert.equal(statCalls, 1);
+    assert.equal(nonLocalDrive.references[0]?.exists, null);
+    assert.equal(nonLocalDrive.references[0]?.unknownReason, "network");
+  }
+  let activeStats = 0;
+  let maxActiveStats = 0;
+  const slowStat = async () => {
+    activeStats++;
+    maxActiveStats = Math.max(maxActiveStats, activeStats);
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(resolve, 3_000);
+      timer.unref();
+    });
+    activeStats--;
+    return { isDirectory: () => false, isFile: () => true };
+  };
+  const manyReferences = {
+    ...parsed,
+    references: Array.from({ length: 16 }, (_, index) => ({ ...parsed.references[0]!, path: `C:/synthetic/slow-${index}.txt` })),
+  };
+  const manyStarted = performance.now();
+  const many = await inspectCodexSessionReferences(manyReferences, { stat: slowStat, timeoutMs: 300, maxConcurrency: 8 });
+  const manyElapsed = performance.now() - manyStarted;
+  assert.ok(manyElapsed < 1_000, `多路 stat timeout 後仍耗時 ${manyElapsed.toFixed(1)} ms`);
+  assert.equal(many.references.length, 16);
+  assert.ok(maxActiveStats <= 8, `stat 併發數超過上限：${maxActiveStats}`);
+});
+
 test("M94 path recall 保留中文、空白、JSON escape、包裝與資料夾", async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "seekah-m94-recall-"));
   const codexHome = path.join(temp, "synthetic-codex-home");
@@ -203,8 +283,9 @@ test("M94 path recall 保留中文、空白、JSON escape、包裝與資料夾",
   await writeFile(rollout, rows.map(row => JSON.stringify(row)).join("\n") + "\n", "utf8");
   t.after(() => rm(temp, { recursive: true, force: true }));
 
-  const [session] = await parseCodexSessions({ codexHome });
-  assert.ok(session);
+  const [parsedSession] = await parseCodexSessions({ codexHome });
+  assert.ok(parsedSession);
+  const session = await inspectCodexSessionReferences(parsedSession);
   const expected = [
     [chinesePath, "user-provided"],
     [forwardSlashWindowsPath, "user-provided"],

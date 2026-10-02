@@ -22,7 +22,7 @@ import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, p
 import { workbenchHtml } from "./workbench-app.js";
 import { traceHtml } from "./trace-app.js";
 import { codexSessionHtml } from "./codex-session-app.js";
-import { codexReferenceBuckets, markIndexedCodexReferences, parseCodexRolloutFileCached, parseCodexSessionFiles, summarizeCodexSessions, type CodexSessionCache } from "./codex-session.js";
+import { codexReferenceBuckets, inspectCodexSessionReferences, markIndexedCodexReferences, parseCodexRolloutFileCached, parseCodexSessionFiles, summarizeCodexSessions, type CodexReferenceInspection, type CodexSessionCache } from "./codex-session.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { sync } from "./sync.js";
@@ -500,6 +500,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   };
   const codexParserCache: CodexSessionCache = new Map();
+  const codexReferenceCheckCache = new Map<string, CodexReferenceInspection>();
   const codexSessionFilePaths = new Map<string, string>();
   const readCodexSessionFiles = async () => {
     const files = await parseCodexSessionFiles({ ...codexParserOptions, cache: codexParserCache });
@@ -523,6 +524,7 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     let session;
     try {
       session = await parseCodexRolloutFileCached(filePath, {}, codexParserCache);
+      session = await inspectCodexSessionReferences(session, { cache: codexReferenceCheckCache });
     } catch {
       return undefined;
     }

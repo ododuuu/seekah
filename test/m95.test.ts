@@ -80,8 +80,9 @@ test("M95 Codex sessions API 只回傳 metadata、reference 與 Seekah 索引狀
   assert.equal(list.sessions.length, 1);
   assert.equal(list.sessions[0]?.id, "m95-session");
   assert.equal(list.sessions[0]?.referenceCount, 4);
-  assert.equal(list.sessions[0]?.visibleReferenceCount, 2);
-  assert.equal(list.sessions[0]?.lowReferenceCount, 2);
+  assert.equal(list.sessions[0]?.visibleReferenceCount, 1);
+  assert.equal(list.sessions[0]?.lowReferenceCount, 0);
+  assert.equal(list.sessions[0]?.unknownReferenceCount, 3);
   assert.equal("references" in (list.sessions[0] ?? {}), false);
   assert.doesNotMatch(JSON.stringify(list), new RegExp(fixture.privateText, "u"));
 

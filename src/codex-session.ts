@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,8 @@ import type { IndexStore, StoredDocumentRow } from "./store.js";
 export const CODEX_REFERENCE_SOURCES = ["seekah-prompt", "user-provided", "seekah-mcp", "codex-tool"] as const;
 export type CodexReferenceSource = (typeof CODEX_REFERENCE_SOURCES)[number];
 export type CodexReferenceConfidence = "high" | "medium" | "low";
-export type CodexReferenceDisplay = "normal" | "low-confidence-missing";
+export type CodexReferenceDisplay = "normal" | "low-confidence-missing" | "unknown";
+export type CodexReferenceUnknownReason = "network" | "timeout" | "unavailable";
 export type CodexReferenceKind = "file" | "directory" | "unknown";
 export type CodexSessionParseMode = "structured" | "message-path-fallback";
 
@@ -20,7 +21,8 @@ export interface CodexSessionReference {
   confidence: CodexReferenceConfidence;
   kind: CodexReferenceKind;
   display: CodexReferenceDisplay;
-  exists: boolean;
+  exists: boolean | null;
+  unknownReason?: CodexReferenceUnknownReason;
   occurrences: number;
   eventTypes: string[];
   indexed: boolean;
@@ -69,11 +71,11 @@ export interface CodexSessionFile {
   size: number;
   session: CodexSession;
 }
-
 export interface CodexSessionSummary extends Omit<CodexSession, "references"> {
   referenceCount: number;
   visibleReferenceCount: number;
   lowReferenceCount: number;
+  unknownReferenceCount: number;
   sourceCounts: Record<CodexReferenceSource, number>;
 }
 
@@ -85,6 +87,8 @@ const MAX_REFERENCE_TEXT_LENGTH = 400;
 const MAX_TEXT_SCAN_LENGTH = DEFAULT_MAX_LINE_LENGTH;
 const MAX_EVENT_TYPE_LENGTH = 128;
 const SOURCE_PRIORITY = new Map<CodexReferenceSource, number>(CODEX_REFERENCE_SOURCES.map((source, index) => [source, index]));
+const DEFAULT_REFERENCE_CHECK_CONCURRENCY = 8;
+const DEFAULT_REFERENCE_CHECK_TIMEOUT_MS = 300;
 const PATH_FIELD_KEYS = new Set(["path", "savedPath", "saved_path", "filePath", "file_path"]);
 const TOOL_NAME_KEYS = new Set(["name", "tool_name", "toolName"]);
 const AUTO_INJECTED_USER_PREFIXES = [
@@ -582,27 +586,181 @@ function createMutableSession(id: string): MutableSession {
     eventTypes: {}, parseMode: "structured", parseStatus: "parsed", references: new Map() };
 }
 
-function inspectReference(filePath: string): { exists: boolean; kind: CodexReferenceKind } {
-  try {
-    const info = statSync(filePath);
-    return { exists: true, kind: info.isDirectory() ? "directory" : info.isFile() ? "file" : "unknown" };
-  } catch {
-    return { exists: false, kind: "unknown" };
+function referenceDisplay(exists: boolean | null, indexed = false): CodexReferenceDisplay {
+  if (indexed || exists === true) return "normal";
+  if (exists === false) return "low-confidence-missing";
+  return "unknown";
+}
+
+export interface CodexReferenceStat {
+  isDirectory(): boolean;
+  isFile(): boolean;
+}
+
+export type CodexReferenceStatFn = (filePath: string) => Promise<CodexReferenceStat>;
+
+export interface CodexReferenceInspection {
+  exists: boolean | null;
+  kind: CodexReferenceKind;
+  unknownReason?: CodexReferenceUnknownReason;
+}
+
+export interface CodexReferenceInspectionOptions {
+  cache?: Map<string, CodexReferenceInspection>;
+  maxConcurrency?: number;
+  timeoutMs?: number;
+  stat?: CodexReferenceStatFn;
+}
+
+function driveLetter(value: string | undefined): string | null {
+  const match = /^([A-Za-z]):(?:[\\/]|$)/u.exec(value ?? "");
+  return match?.[1]?.toUpperCase() ?? null;
+}
+
+const LOCAL_WINDOWS_DRIVES = new Set(
+  [process.env.SystemDrive, process.cwd(), os.homedir(), process.env.LOCALAPPDATA, process.env.SEEKAH_CODEX_HOME, process.env.CODEX_HOME]
+    .map(driveLetter)
+    .filter((drive): drive is string => drive !== null),
+);
+
+function isNetworkReferencePath(filePath: string): boolean {
+  if (/^\\\\/u.test(filePath) || /^\/\/[^/]/u.test(filePath)) return true;
+  const drive = driveLetter(filePath);
+  return process.platform === "win32" && drive !== null && !LOCAL_WINDOWS_DRIVES.has(drive);
+}
+
+function errorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("code" in error)) return null;
+  const code = error.code;
+  return typeof code === "string" ? code : null;
+}
+
+const REFERENCE_CHECK_TIMEOUT = Symbol("reference-check-timeout");
+
+interface ReferenceCheckOperation {
+  result: Promise<CodexReferenceInspection>;
+  settled: Promise<void>;
+}
+
+function inspectReferencePathOperation(
+  filePath: string,
+  statFn: CodexReferenceStatFn,
+  timeoutMs: number,
+): ReferenceCheckOperation {
+  if (isNetworkReferencePath(filePath)) {
+    const result = Promise.resolve({ exists: null, kind: "unknown" as const, unknownReason: "network" as const });
+    return { result, settled: result.then(() => undefined) };
   }
+  let timer: ReturnType<typeof setTimeout>;
+  const statPromise = Promise.resolve().then(() => statFn(filePath));
+  const result = Promise.race([
+    statPromise,
+    new Promise<typeof REFERENCE_CHECK_TIMEOUT>(resolve => {
+      timer = setTimeout(() => resolve(REFERENCE_CHECK_TIMEOUT), timeoutMs);
+    }),
+  ]).then(value => {
+    if (value === REFERENCE_CHECK_TIMEOUT) return { exists: null, kind: "unknown" as const, unknownReason: "timeout" as const };
+    return {
+      exists: true,
+      kind: value.isDirectory() ? "directory" as const : value.isFile() ? "file" as const : "unknown" as const,
+    };
+  }).catch(error => {
+    if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { exists: false, kind: "unknown" as const };
+    return { exists: null, kind: "unknown" as const, unknownReason: "unavailable" as const };
+  }).finally(() => {
+    clearTimeout(timer);
+  });
+  const settled = statPromise.then(() => undefined, () => undefined);
+  return { result, settled };
+}
+
+
+export async function inspectCodexReferences(
+  references: readonly CodexSessionReference[],
+  options: CodexReferenceInspectionOptions = {},
+): Promise<CodexSessionReference[]> {
+  const cache = options.cache ?? new Map<string, CodexReferenceInspection>();
+  const statFn = options.stat ?? stat;
+  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_REFERENCE_CHECK_TIMEOUT_MS));
+  const maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? DEFAULT_REFERENCE_CHECK_CONCURRENCY));
+  const paths = [...new Set(references.map(reference => reference.path))];
+  const inspected = new Map<string, CodexReferenceInspection>();
+  let cursor = 0;
+  let active = 0;
+  let timedOutActive = 0;
+  let pendingResults = 0;
+  let queuedAsUnknown = false;
+  let resolveDone!: () => void;
+  const done = new Promise<void>(resolve => { resolveDone = resolve; });
+  const finishIfDone = () => {
+    if (pendingResults === 0) resolveDone();
+  };
+  const markQueuedUnknown = () => {
+    if (queuedAsUnknown) return;
+    queuedAsUnknown = true;
+    while (cursor < paths.length) {
+      const filePath = paths[cursor++]!;
+      inspected.set(filePath, { exists: null, kind: "unknown", unknownReason: "unavailable" });
+    }
+    finishIfDone();
+  };
+  const schedule = () => {
+    while (!queuedAsUnknown && active < maxConcurrency && cursor < paths.length) {
+      const filePath = paths[cursor++]!;
+      const cached = cache.get(filePath);
+      if (cached) {
+        inspected.set(filePath, cached);
+        continue;
+      }
+      active++;
+      pendingResults++;
+      const operation = inspectReferencePathOperation(filePath, statFn, timeoutMs);
+      let timedOut = false;
+      operation.result.then(result => {
+        timedOut = result.unknownReason === "timeout";
+        if (timedOut) timedOutActive++;
+        cache.set(filePath, result);
+        inspected.set(filePath, result);
+        pendingResults--;
+        if (cursor < paths.length && timedOutActive === active) markQueuedUnknown();
+        finishIfDone();
+      });
+      operation.settled.then(() => {
+        active--;
+        if (timedOut) timedOutActive--;
+        schedule();
+        finishIfDone();
+      });
+    }
+    if (cursor < paths.length && active === 0) markQueuedUnknown();
+    finishIfDone();
+  };
+  schedule();
+  await done;
+  return references.map(reference => {
+    const result = inspected.get(reference.path) ?? { exists: null, kind: "unknown" as const, unknownReason: "unavailable" as const };
+    return { ...reference, ...result, display: referenceDisplay(result.exists, reference.indexed) };
+  });
+}
+
+
+export async function inspectCodexSessionReferences(
+  session: CodexSession,
+  options: CodexReferenceInspectionOptions = {},
+): Promise<CodexSession> {
+  return { ...session, references: await inspectCodexReferences(session.references, options) };
 }
 
 function finalizeReference(reference: MutableReference): CodexSessionReference {
   const sources = [...reference.sources].sort((left, right) => (SOURCE_PRIORITY.get(left) ?? 99) - (SOURCE_PRIORITY.get(right) ?? 99));
-  const inspected = inspectReference(reference.path);
-  const display: CodexReferenceDisplay = inspected.exists ? "normal" : "low-confidence-missing";
   return {
     path: reference.path,
     source: reference.source,
     sources,
     confidence: reference.confidence,
-    kind: inspected.kind,
-    display,
-    exists: inspected.exists,
+    kind: "unknown",
+    display: "unknown",
+    exists: null,
     occurrences: reference.occurrences,
     eventTypes: [...reference.eventTypes].sort(),
     indexed: reference.indexed,
@@ -811,13 +969,15 @@ export async function parseCodexSessions(options: CodexSessionParserOptions = {}
 function referenceSummary(session: CodexSession): CodexSessionSummary {
   const sourceCounts = Object.fromEntries(CODEX_REFERENCE_SOURCES.map(source => [source, 0])) as Record<CodexReferenceSource, number>;
   for (const reference of session.references) for (const source of reference.sources) sourceCounts[source]++;
-  const lowReferenceCount = session.references.filter(reference => !reference.exists && !reference.indexed).length;
+  const lowReferenceCount = session.references.filter(reference => reference.exists === false && !reference.indexed).length;
+  const unknownReferenceCount = session.references.filter(reference => reference.exists === null && !reference.indexed).length;
   const { references: _references, ...summary } = session;
   return {
     ...summary,
     referenceCount: session.references.length,
-    visibleReferenceCount: session.references.length - lowReferenceCount,
+    visibleReferenceCount: session.references.length - lowReferenceCount - unknownReferenceCount,
     lowReferenceCount,
+    unknownReferenceCount,
     sourceCounts,
   };
 }
@@ -833,7 +993,7 @@ export function codexReferenceBuckets(references: readonly CodexSessionReference
   const visible: CodexSessionReference[] = [];
   const lowReferences: CodexSessionReference[] = [];
   for (const reference of references) {
-    if (reference.exists || reference.indexed) visible.push(reference);
+    if (reference.exists === true || reference.indexed) visible.push(reference);
     else lowReferences.push(reference);
   }
   return { references: visible, lowReferences };
@@ -853,8 +1013,8 @@ export function markIndexedCodexReferences(sessions: readonly CodexSession[], st
         return {
           ...reference,
           indexed: false,
-          display: reference.exists ? "normal" : "low-confidence-missing",
-          ...(reference.display === "low-confidence-missing" ? { indexedStatus: "low-confidence-missing" } : {}),
+          display: referenceDisplay(reference.exists),
+          ...(reference.exists === false ? { indexedStatus: "low-confidence-missing" } : {}),
         };
       }
       return {

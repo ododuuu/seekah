@@ -62,6 +62,13 @@ session cache 以 canonical rollout path、`mtimeMs` 與檔案 size 驗證；ses
 
 main 已有文件庫 stable reference API，因此已索引 Codex reference 的 UI 只接 Pin 與分類；工作台右側 context drawer 沒有跨頁共享狀態契約，Codex 頁面不自行宣稱加入 context。上述結論仍只用 synthetic fixture 驗證。
 
+## Reference existence 延後與大型檔案量測
+
+- 監工提供的真實 57 個 rollout 量測為 88.5 秒，其中 31.5 MB 檔案 73.5 秒、數個小檔約 2,717～5,448 ms；本工作區不重讀這批真實資料。原始 `finalizeReference` 對每個候選 path 呼叫同步 `statSync`，可解釋 UNC／不存在磁碟機造成的數秒等待。
+- parser 現在不檢查候選 path；list API 不做 existence I/O，detail API 才對單一 session 以路徑快取、最多 8 路並行、300 ms timeout 執行非同步 `stat`。UNC／network path 與已知非本機 Windows drive 直接為 `unknown(network)`，逾時為 `unknown(timeout)`。
+- 33,030,174-byte／98,926-line synthetic rollout：write 55.6 ms、read 47.0 ms、單純 JSON parse 196.6 ms、Seekah parser 1,668.2 ms，低於 5 秒；2000 個 reference 的 parser 結果全部維持 `exists: null`。
+- M97 延遲 3 秒 stat 的 synthetic 測試驗證 parser 不呼叫 reference stat、API 約 300 ms 回傳 unknown、相同 path 第二次命中快取、UNC 不呼叫 stat，並以 16 個 delayed path 驗證並行上限 8。
+
 ## 合成 fixture 必須覆蓋的負例
 
 fixture 必須同時包含：`turn_context` permission／workspace／cwd、`thread_settings_applied` permission／cwd、`world_state`、session base instructions、developer／assistant message、tool output／result URL、`mcp__beeper`、非 localdocsearch 的 `McpToolCall`、HTTP／HTTPS URL；這些值不得進入 Reference Set。正例必須包含 plain user path、Seekah Markdown／pi path list、localdocsearch MCP、FileChange、CommandExecution、shell command、apply_patch 與 exec。

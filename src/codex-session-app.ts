@@ -124,9 +124,9 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       row.addEventListener("click", () => { state.selected = session.id; renderList(); void loadDetail(session.id); });
       row.append(make("span", "id", session.id));
       const lowCount = Number(session.lowReferenceCount || 0);
+      const unknownCount = Number(session.unknownReferenceCount || 0);
       row.append(make("span", "meta", text(session.cwd || "無 cwd") + " · " + String(session.visibleReferenceCount ?? session.referenceCount ?? 0) + " refs"
-        + (lowCount ? " · " + lowCount + " 低信心" : "") + " · " + formatDate(session.lastEventAt || session.startedAt)));
-      list.append(row);
+        + (lowCount ? " · " + lowCount + " 低信心" : "") + (unknownCount ? " · " + unknownCount + " 待檢查" : "") + " · " + formatDate(session.lastEventAt || session.startedAt)));
     }
   }
   function metaGrid(items) {
@@ -170,13 +170,19 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       $("status-message").className = "status error";
     }
   }
+  function referenceExistenceLabel(reference) {
+    if (reference.exists === true) return "磁碟存在";
+    if (reference.exists === false) return "磁碟不存在";
+    const reason = reference.unknownReason ? "（" + text(reference.unknownReason) + "）" : "";
+    return "磁碟未知" + reason;
+  }
   function referenceRow(reference, allowLibraryActions) {
     const row = make("div", "reference-row");
     const pathCell = make("span", "reference-path", reference.path);
     const sources = Array.isArray(reference.sources) && reference.sources.length ? reference.sources.map(sourceLabel).join("、") : sourceLabel(reference.source);
     const kindLabel = reference.kind === "directory" ? "資料夾" : reference.kind === "file" ? "檔案" : "";
     const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence) + (kindLabel ? " · " + kindLabel : ""));
-    const status = (reference.exists ? "磁碟存在" : "磁碟不存在") + " · " + (reference.indexed ? "已在 Seekah 索引" : "未在 Seekah 索引");
+    const status = referenceExistenceLabel(reference) + " · " + (reference.indexed ? "已在 Seekah 索引" : "未在 Seekah 索引");
     const indexCell = make("span", "reference-meta", status + " · " + String(reference.occurrences || 0) + " 次");
     if (reference.seekahReference) indexCell.append(make("div", "mono", reference.seekahReference));
     if (allowLibraryActions && reference.indexed && reference.seekahReference) {
