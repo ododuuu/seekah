@@ -26,6 +26,7 @@ import { buildIndexProfile, profilePaths, reserveNewProfile, writeIndexProfile }
 import type { SyncReport } from "./sync.js";
 import { productVersion } from "./version.js";
 import { formatTruncatedListNotice, previewStatusList, STATUS_LIST_PREVIEW_LIMIT } from "./status-preview.js";
+import { describeIndexClientError } from "./index-errors.js";
 
 function formatStorageSize(footprint: StorageFootprint): string {
   return footprint.totalBytes === null ? "未知" : formatMib(footprint.totalBytes);
@@ -238,25 +239,31 @@ export async function main(args: readonly string[]): Promise<number> {
     return runDoctor({ databasePath: defaultDatabasePath(), cliPath: path.resolve(process.argv[1] ?? "dist/src/cli.js") });
   }
   if (command === "compact") {
-    // SPEC §52.4: rewrite the index without free pages; refuses while background autoupdate may write.
-    if (args.length !== 1) { console.error("用法：docsearch compact"); return 2; }
-    const databasePath = defaultDatabasePath();
-    if (!existsSync(databasePath)) { console.error("索引尚未建立。"); return 2; }
-    const { autoupdateStatus } = await import("./autoupdate.js");
-    const running = await autoupdateStatus(databasePath).then(result => result.code === 0, () => false);
-    if (running) { console.error("背景自動更新執行中；請先執行 autoupdate stop，壓縮完成後再 autoupdate start。"); return 3; }
-    const before = collectIndexStorage(databasePath);
-    const store = new IndexStore(databasePath);
-    const release = acquireWriteLock(databasePath);
     try {
-      const mainBytes = before.files.find(file => file.suffix === "")?.bytes;
-      const reclaimable = mainBytes == null ? "未知" : formatMib(mainBytes * store.freePageRatio());
-      console.log(`壓縮資料庫中（可回收約 ${reclaimable}）…`);
-      store.compact();
-    } finally { release(); store.close(); }
-    const after = collectIndexStorage(databasePath);
-    console.log(`壓縮完成：${formatStorageSize(before)} → ${formatStorageSize(after)}。`);
-    return 0;
+      // SPEC §52.4: rewrite the index without free pages; refuses while background autoupdate may write.
+      if (args.length !== 1) { console.error("用法：docsearch compact"); return 2; }
+      const databasePath = defaultDatabasePath();
+      if (!existsSync(databasePath)) { console.error("索引尚未建立。"); return 2; }
+      const { autoupdateStatus } = await import("./autoupdate.js");
+      const running = await autoupdateStatus(databasePath).then(result => result.code === 0, () => false);
+      if (running) { console.error("背景自動更新執行中；請先執行 autoupdate stop，壓縮完成後再 autoupdate start。"); return 3; }
+      const before = collectIndexStorage(databasePath);
+      const store = new IndexStore(databasePath);
+      const release = acquireWriteLock(databasePath);
+      try {
+        const mainBytes = before.files.find(file => file.suffix === "")?.bytes;
+        const reclaimable = mainBytes == null ? "未知" : formatMib(mainBytes * store.freePageRatio());
+        console.log(`壓縮資料庫中（可回收約 ${reclaimable}）…`);
+        store.compact();
+      } finally { release(); store.close(); }
+      const after = collectIndexStorage(databasePath);
+      console.log(`壓縮完成：${formatStorageSize(before)} → ${formatStorageSize(after)}。`);
+      return 0;
+    } catch (error) {
+      const message = describeIndexClientError(error);
+      if (message) { console.error(message); return 3; }
+      throw error;
+    }
   }
   if (!["index", "search", "status", "exclusions", "explain", "rebuild", "open", "reveal", "roots", "context", "watch", "tui"].includes(command ?? "")) {
     console.error(`未知命令：${command}`);

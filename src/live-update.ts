@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { acquireWriteLock, IndexBusyError, isSqliteBusy } from "./write-lock.js";
+import { describeIndexClientError } from "./index-errors.js";
 import { IGNORE_FILE, IgnoreConfigurationError } from "./ignore.js";
 import { isIndexArtifact, type IndexStore } from "./store.js";
 import { sync, type SyncOptions, type SyncReport } from "./sync.js";
@@ -327,9 +328,17 @@ export class LiveUpdateEngine {
       ...(options.queueLimit !== undefined ? { limit: options.queueLimit } : {}),
       ...(options.queuePersistHook ? { persistHook: options.queuePersistHook } : {}),
     });
-    const cleanup = this.queue.cleanupOrphanRoots(store.roots());
-    if (cleanup.roots > 0) {
-      this.log(`工作佇列清理孤兒根目錄：根 ${cleanup.roots}；work_items ${cleanup.workItems}；reconcile_state ${cleanup.reconcileStates}；reconcile_seen ${cleanup.reconcileSeen}`);
+    const activeRoots = store.roots();
+    try {
+      const cleanup = this.queue.cleanupOrphanRoots(activeRoots);
+      if (cleanup.roots > 0) {
+        this.log(`工作佇列清理孤兒根目錄：根 ${cleanup.roots}；work_items ${cleanup.workItems}；reconcile_state ${cleanup.reconcileStates}；reconcile_seen ${cleanup.reconcileSeen}`);
+      }
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : "工作佇列清理失敗。";
+      const displayMessage = describeIndexClientError(error) ?? rawMessage;
+      this.log(`工作佇列清理孤兒根目錄失敗：${displayMessage}；孤兒工作狀態仍可能保留，待辦／最舊時間可能暫時受污染；下一次 engine 啟動會再試。`);
+      this.rememberError("QUEUE_CLEANUP_FAILED", rawMessage, error);
     }
     for (const root of roots) this.states.set(root, this.newState(root));
     options.signal?.addEventListener("abort", () => this.requestStop(), { once: true });
@@ -388,8 +397,9 @@ export class LiveUpdateEngine {
     this.options.onLog?.(line);
   }
 
-  private rememberError(code: string, message: string): void {
-    this.recentErrors.push(`${code}: ${message}`);
+  private rememberError(code: string, message: string, error?: unknown): void {
+    const classified = describeIndexClientError(error ?? message);
+    this.recentErrors.push(classified ?? `${code}: ${message}`);
     if (this.recentErrors.length > 20) this.recentErrors.shift();
     if (code.startsWith("WATCH_")) {
       this.watcherErrorCounts.set(code, (this.watcherErrorCounts.get(code) ?? 0) + 1);
@@ -815,11 +825,11 @@ export class LiveUpdateEngine {
         state.syncFailed = true;
         state.offline = true;
         this.log(`監看同步失敗：${state.root}：根目錄同步失敗，保留既有索引`);
-        this.rememberError("ROOT_SYNC_FAILED", error.message);
+        this.rememberError("ROOT_SYNC_FAILED", error.message, error);
       } else {
         state.syncFailed = true;
         this.log(`監看同步失敗：${state.root}：根目錄同步失敗，保留既有索引`);
-        this.rememberError("LIVE_UPDATE_FAILED", error instanceof Error ? error.message : "未知錯誤");
+        this.rememberError("LIVE_UPDATE_FAILED", error instanceof Error ? error.message : "未知錯誤", error);
       }
     } finally {
       release?.();
@@ -1360,12 +1370,14 @@ export class LiveUpdateEngine {
   private failRoot(state: RootState, error: unknown): void {
     if (state.failed || this.stopping) return;
     state.failed = true;
-    state.lastError = error instanceof Error ? error.message : "未知錯誤";
+    const rawMessage = error instanceof Error ? error.message : "未知錯誤";
+    const displayMessage = describeIndexClientError(error) ?? rawMessage;
+    state.lastError = displayMessage;
     if (state.timer) this.clearTimer(state.timer);
     state.timer = undefined;
     this.closeHandles(state);
     this.log(`監看錯誤：${state.root}：${state.lastError}`);
-    this.rememberError("WATCH_ERROR", state.lastError);
+    this.rememberError("WATCH_ERROR", rawMessage, error);
     if (this.reconcileMs) {
       this.log(`降級定期掃描：${state.root}（${this.reconcileMs} ms 後校正並重試監看）`);
       this.armRescan(state);
@@ -1722,7 +1734,7 @@ export class LiveUpdateEngine {
     try { this.queue.ack(root, relPath, generation); }
     catch (error) {
       this.queueDegraded = true;
-      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗");
+      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗", error);
     }
   }
 
@@ -1730,14 +1742,14 @@ export class LiveUpdateEngine {
     try { this.queue.ackUpTo(root, generation); }
     catch (error) {
       this.queueDegraded = true;
-      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗");
+      this.rememberError("QUEUE_ACK_FAILED", error instanceof Error ? error.message : "ack 失敗", error);
     }
   }
 
   private onQueueFailure(state: RootState, error: unknown): void {
     this.queueDegraded = true;
     const message = error instanceof QueuePersistError || error instanceof Error ? error.message : "工作佇列無法落盤。";
-    this.rememberError("QUEUE_PERSIST_FAILED", message);
+    this.rememberError("QUEUE_PERSIST_FAILED", message, error);
     this.failRoot(state, error instanceof Error ? error : new QueuePersistError(message));
   }
 
