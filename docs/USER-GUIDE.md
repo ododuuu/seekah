@@ -286,7 +286,7 @@ ChatGPT 網頁讀不到這台電腦的 MCP，不要當成已連上。
 - Detail 的主要區塊放「磁碟存在」或「已在 Seekah 索引」的 reference。其餘「磁碟不存在／未知」且未索引的 reference 會放在「可能已移動或其他電腦的路徑（N）」摺疊區；展開它是查看低信心路徑，不是刪除或重新解析 Codex session。
 - 只有顯示「已在 Seekah 索引」且有 stable reference 的列才有「釘選」按鈕。按下後會沿用 canonical path 與 stable reference 寫入文件庫。
 - 要加入分類，先在選單選擇既有分類，再按「加入分類」。若顯示「請先在工作台建立分類」，回工作台的「分類」頁建立後再重新整理 Codex 頁面。
-- Codex 頁沒有「加入上下文」按鈕，也沒有跨頁共享的上下文集合；需要上下文時回到工作台，在搜尋結果使用既有選取流程。
+- 已在索引且有 stable reference 的列可按「加入上下文」或「移出上下文」；成功後會同步到目前 Workbench token session 的右側上下文欄，回到工作台、重新整理或在 Codex 頁間導覽仍保留，關閉 Workbench 才清除。低信心、未索引、未知或不存在的列不顯示此操作。
 
 #### 64 MB 上限與快取
 

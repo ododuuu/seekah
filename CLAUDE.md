@@ -7,13 +7,13 @@
 ## 開工順序
 
 1. `git status`、`git log --oneline -5`，確認在預定工作分支且乾淨。
-2. 讀 `docs/handoff/CURRENT.md`，再讀它指向的版本交接（目前 `docs/handoff/0.47.0.md`）。
+2. 讀 `docs/handoff/CURRENT.md`，再讀它指向的版本交接（目前 `docs/handoff/0.48.0.md`）。
 3. 讀 `docs/NEXT-TODO.md` 第 1～3 節：下一版規劃、待驗收、已知問題。
 4. 使用者的下一個指示優先；沒有指示時，從 NEXT-TODO 第 1 節（下一版規劃）開始，並先確認範圍。
 
 ## 常用指令
 
-- 建置與全部測試：`npm test`（含 TypeScript build，合併後 498 項、495 通過、0 失敗、3 略過）。
+- 建置與全部測試：`npm test`（含 TypeScript build）；0.48.0 合併後 `main` 的總數、通過、失敗、略過待監工提供，先記為 `TBD`。
 - 單一測試：`npm run build` 後 `node --test dist/test/mNN.test.js`。
 - 工作台前端改動**必跑**：`node scripts/ui-smoke.mjs`（需本機 Chrome，1180×800、1440×900 與 1920×1080；失敗清單必須為空；結束後確認沒有殘留 daemon／Chrome）。
 - 搜尋程式改動**必做**差分測試：`scripts/search-diff.mjs`（小型 650、大型 30；新舊結果需 0 差異）。
@@ -30,7 +30,7 @@
 
 - 重大工作用 D093：每項工作一條分支＋一個 git worktree（`C:\Users\mains\seekah-wt\<名稱>`），完成後合併回 `main`。worktree 的 `node_modules` 是 junction：移除前先 `cmd /c rmdir <path>\node_modules`，再 `git worktree remove --force`。
 - 若用 omp 手下（pi、pi2、pi3、pi4 = GPT-5.6-luna，經 herdr pane 派工；grok 額度用完不可用）：**我只信自己重跑的驗證，不信手下報告**；手下**沒有 commit 就不算完成**；明確禁止他們改 `docs/STATUS.md`、`docs/NEXT-TODO.md`、`docs/handoff/`、`package.json` 版本（由合併者統一更新）；每項行為變更要有反向驗證（拿掉修正測試必須失敗）；搜尋變更要有差分測試。
-- 文件編號：SPEC 章節遞增（目前到 §92；§90 為空號）、DECISIONS 由新到舊（目前到 D124；D122 為空號）、測試檔 `test/mNN.test.ts`（目前到 m88）。
+- 文件編號：SPEC 章節遞增（目前到 §100）；DECISIONS 由新到舊（目前到 D136）；測試檔 `test/mNN.test.ts`（目前到 m96）。
 - 發版：改 `package.json`／lock 版本、寫 `docs/<版本>-VALIDATION.md` 與 `docs/handoff/<版本>.md`、更新 `handoff/CURRENT.md`、`handoff/README.md`、`STATUS.md`、`NEXT-TODO.md`、`README.md`；跑 `npm test` 與 `ui-smoke`；commit。報告要誠實：量測受負載影響時註明，沒重現的問題不說已解決。
 
 ## 已踩過的坑（不要重犯）
@@ -45,7 +45,7 @@
 
 ## 目前狀態摘要
 
-- 版本 0.47.0，GitHub `main` 由使用者自行 push；本機真實索引的背景更新為停止狀態。
-- 0.47.0 已合併 §87～§89、§91～§92；§90／D122 未使用，保留為空號。合併後 main 的 `npm test` 為 498 項、495 通過、0 失敗、3 略過。
-- 本版完成主題切換、第二命中片段、檔名與內文共命中、多段落最近詞選擇、監看分階段計時與穩定等待重疊，以及長文件多段落候選讀取縮減。
-- 監看漏事件根因仍未證實；背景寫入期間搜尋慢化在本版合成負載約 1.07x，未重現 1.3～1.6 倍，因此未改 WAL／autocheckpoint／唯讀連線設定。
+- 版本 0.48.0；目前 worktree 為 `release/0.48.0`，GitHub `main` 由使用者自行 push；本機真實索引狀態不在本版宣稱。
+- 0.48.0 已合併文件庫、Codex session／Reference Set、工作台／Codex 跨頁上下文與結果操作介面，範圍為 SPEC §§94–100、D127–D136；測試與 build 數字待監工在合併後 `main` 實跑。
+- 監工提供的 57 個真實 rollout 統計為 structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；parser 經六輪修正。
+- Codex rollout 格式未公開，可能隨 Codex 更新變動；公司 Windows 正式驗收目前仍只到 0.44，不能宣稱 0.48 已通過。

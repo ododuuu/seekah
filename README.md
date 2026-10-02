@@ -10,7 +10,7 @@
 
 新手請先讀 [使用手冊](docs/USER-GUIDE.md)；AI 接手固定入口：[docs/handoff/CURRENT.md](docs/handoff/CURRENT.md)；完整 [SPEC](docs/SPEC.md)、[狀態](docs/STATUS.md)。GitHub 倉庫為 [ododuuu/seekah](https://github.com/ododuuu/seekah)；新的封裝名稱為 Seekah-VERSION.zip，包含新舊入口。
 
-目前版本為 **0.47.0**。本版工作台新增自動／淺色／深色主題，顯式主題只保存於目前網址的 `theme` query、不使用瀏覽器 storage 並保留 token fragment；phrase／單詞結果可顯示同文件第二個命中片段，檔名與內文共命中時顯示內文片段；all-terms 改挑彼此最近的命中區段並縮窄位置欄。背景更新新增分階段 timing，逐檔穩定等待可與前一檔處理重疊；安靜合成寫入至可搜尋約 3.0 秒降至約 1.5 秒，但監看漏事件根因仍未證實。背景寫入期間搜尋慢化的隔離量測約 1.07x，未重現 1.3～1.6 倍，因此未改 WAL／autocheckpoint／唯讀連線設定；長文件多段落候選讀取合成 p50 約 93 ms 降至 58 ms。§90／D122 未使用，保留空號。合併後 main 的 `npm test` 為 498 項、495 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 小型 650／大型 30 差異 0。公司 Windows 驗收目前只到 0.44，0.45～0.47 待驗。
+目前版本為 **0.48.0**。本版合併文件庫的最近／釘選／分類／已存搜尋、Codex session 的唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100、D127–D136）。右側上下文欄只顯示絕對路徑；只有已索引且有 stable reference 的 Codex reference 可加入或移出上下文。監工提供的 57 個真實 rollout 統計為 structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；合併後 `main` 的 build、`npm test`、ui-smoke 與 search-diff 數字待填 `TBD`。Codex rollout 格式未公開，可能隨更新變動；公司 Windows 驗收目前只到 0.44，0.45～0.48 待驗。
 
 若索引很慢，用 `index <根目錄> --profile <新檔案>` 寫一份只留在本機的診斷。檔案必須是新的，拒絕覆寫，不含路徑、檔名或正文；父目錄不存在或無法存取時，錯誤會顯示 resolved parent、錯誤碼與 CMD／PowerShell 各自的安全範例，但不自動建目錄或展開字面環境變數。取消不會顯示 100% 或「同步完整」，已提交的文件保留。
 - 工作台索引的列舉／解析／SQLite 寫入在獨立 worker 執行；狀態頁會持續輪詢並顯示目前檔名，重新整理不會清掉進度。索引資料目錄的 `indexing.json` 只保存狀態與路徑 metadata；程序中斷後重開會標示已中斷，已提交文件保留，重新「完整校正」會接續未提交部分。

@@ -1,8 +1,16 @@
 # 專案狀態
 
-最後更新：2026-10-02（package 0.47.0：主題、結果片段、監看分階段計時、背景寫入搜尋慢化調查、長文件多段落候選讀取；SPEC §87～§89、§91～§92／D119～D124；§90／D122 空號）
+最後更新：2026-10-03（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；自動驗證數字待監工提供）
 
 ## 目前狀態
+
+- **2026-10-03 0.48.0（`release/0.48.0`）**：`feat/library-48`、`feat/codex-session-48`、`feat/ui-context-48` 與兩條使用手冊文件線已合併；本次 release 只更新 package／文件，不修改 `src/` 與 `test/`。
+  - §95～§97／D127～D129：文件庫提供最近、釘選、分類與已存搜尋，獨立保存路徑與 stable reference metadata，不保存文件內容。
+  - §98～§99／D130～D134：Codex rollout 唯讀 parser、Reference Set、loopback API 與安全呈現；不公開 conversation content，不把 Codex 當成索引來源。
+  - §94／D136、§100／D135：列表／表格共同操作列、表格「更多」選單、寬畫面延展，以及工作台與 Codex 共用 token session 的索引上下文；右側欄只顯示絕對路徑。
+  - 監工提供的 57 個真實 rollout 統計：structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；parser 經六輪修正。
+  - `npm run build`、`npm test`、`ui-smoke`、`search-diff` 與總測試數字均先記為 `TBD`，待合併後 `main` 實跑；Codex 格式未公開，可能隨更新變動。
+  - 公司 Windows 正式證據仍只到 0.44，不能宣稱 0.48 已通過。
 
 - **2026-10-02 0.47.0（`release/0.47.0`）**：三條分支已合併；合併後 main 的 `npm test` 為 498 項，495 通過、0 失敗、3 略過；`ui-smoke` 失敗清單為空；搜尋差分以基準 `3d8f6b5` 比較小型 650／大型 30，錯誤 0、差異 0。
   - §87／D119：工作台新增自動／淺色／深色主題切換；顯式主題寫入目前工作台 URL 的 `theme` query，不使用 browser storage、cookie、IndexedDB 或設定 API，token fragment 保留。

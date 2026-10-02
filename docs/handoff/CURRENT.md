@@ -1,12 +1,19 @@
-# 目前交接：Seekah 0.47.0（主題、結果片段、監看分階段計時與長文件多段落讀取）
+# 目前交接：Seekah 0.48.0（文件庫、Codex Reference Set 與跨頁上下文）
 
-更新：2026-10-02。
+更新：2026-10-03。
 
-**package 為 0.47.0。(1) 工作台提供自動／淺色／深色主題並以 URL query 保存非敏感偏好（§87／D119）；(2) phrase／單詞結果可顯示同文件第二個命中片段，檔名與內文共命中時顯示 body，all-terms 改選最近詞區段並縮窄位置欄（§88／D120）；(3) 監看局部更新新增分階段計時並重疊逐檔穩定等待（§89／D121）；(4) 背景寫入期間搜尋慢化完成隔離量測但未重現原比例，未改 WAL／autocheckpoint／唯讀連線設定（§91／D123）；(5) 長文件多段落當頁讀取改用保守 chunk／heading 候選，結果語意不變（§92／D124）。§90／D122 未使用，保留為空號。合併後 `npm test` 為 498 項、495 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 小型 650、大型 30 均為 0 差異。公司 Windows 驗收仍只到 0.44。**
+**package 為 0.48.0。** 本版合併文件庫最近／釘選／分類／已存搜尋、Codex session 唯讀 parser 與 Reference Set、工作台與 Codex 跨頁共用上下文，以及列表／表格共同操作列、表格「更多」選單與寬畫面延展（SPEC §§94–100／D127–D136）。右側上下文欄只顯示絕對路徑；Codex 頁只有已索引且有 stable reference 的 reference 可加入／移出上下文。監工提供的 57 個真實 rollout 統計為 structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；build、`npm test`、ui-smoke 與 search-diff 待合併後 `main` 實跑，數字先為 `TBD`。公司 Windows 驗收仍只到 0.44。
+
+- 從 [0.48.0.md](0.48.0.md) 開始：本版範圍、分支內容、監工提供的 rollout 統計、TBD 驗證、限制與部署步驟。
+- [0.48.0 驗證](../0.48.0-VALIDATION.md)。
+- 本批已檢視並更新 `docs/USER-GUIDE.md`；文件庫、Codex session 與跨頁上下文說明已與 0.48 行為一致。Codex rollout 格式未公開，可能隨 Codex 更新變動。
+
+## 0.47.0 交接
+
+**package 為 0.47.0。** 本版提供主題切換、第二命中片段、檔名與內文共命中、all-terms 最近詞區段、監看分階段計時與穩定等待重疊、背景寫入搜尋慢化調查及長文件多段落候選讀取（SPEC §87～§89、§91～§92／D119～D124；§90／D122 空號）。合併後 `npm test` 為 498 項、495 通過、0 失敗、3 略過；ui-smoke 失敗清單為空；search-diff 小型 650、大型 30 均為 0 差異。公司 Windows 驗收仍只到 0.44。
 
 - 從 [0.47.0.md](0.47.0.md) 開始：本版範圍、已完成、空號、量測、驗證、限制與部署步驟。
 - [0.47.0 驗證](../0.47.0-VALIDATION.md)。
-- 本批已檢視 `docs/USER-GUIDE.md`；主題、第二片段、檔名與內文共命中、最近詞與分階段 status 文字已在合併後手冊，無需追加修改。
 
 ## 0.46.0 交接
 
