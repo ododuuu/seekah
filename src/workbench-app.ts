@@ -39,6 +39,7 @@ export function workbenchHtml(nonce: string): string {
   --bulk-surface: #eff8f4;
   --dialog-surface: #f6f8f7;
   --sidebar-width: 246px;
+  --context-width: 338px;
   --focus: #e1a42a;
 }
 @media (prefers-color-scheme: dark) {
@@ -151,9 +152,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--context-width);
   grid-template-rows: 58px minmax(0, 1fr);
   overflow: hidden;
+}
+.app-shell.context-panel-collapsed {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 0;
 }
 .topbar {
   grid-column: 1 / -1;
@@ -637,14 +641,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   -webkit-user-select: text;
   user-select: text;
 }
-.copy-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 5px; }
+.copy-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 6px; }
 .copy-action { display: inline-flex; align-items: center; gap: 4px; }
 .copy-feedback { min-width: 3.4em; color: var(--brand-2); font-size: 11px; white-space: nowrap; }
 .clipboard-fallback { position: fixed; top: 0; left: -10000px; width: 1px; height: 1px; opacity: 0; }
-.copy-control.btn { min-height: 24px; padding: 3px 7px; }
-.document-actions { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; }
-.link-action.btn { min-height: 0; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; }
-.link-action.btn:hover:not(:disabled) { background: transparent; color: var(--brand); text-decoration: underline; }
+.copy-control.btn { min-height: 28px; padding: 4px 8px; }
+.document-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.result-action.btn { min-height: 28px; padding: 4px 8px; font-size: 11px; }
+.result-action.is-active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-2); }
 .table-wrap {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -667,15 +671,16 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   text-align: left;
 }
 .documents-table td { padding: 10px; border-bottom: 1px solid var(--table-line); overflow: hidden; text-align: left; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
-.documents-table td:nth-child(2) { white-space: normal; }
+.documents-table td:nth-child(2), .documents-table td:last-child { white-space: normal; }
 .documents-table tr:last-child td { border-bottom: 0; }
 .documents-table tbody tr:hover, .documents-table tbody tr.is-selected { background: var(--table-selected); }
 .documents-table td:first-child, .documents-table th:first-child { width: 42px; text-align: center; }
-.documents-table th:first-child { font-size: 0; }
-.documents-table th:nth-child(2) { width: 29%; }
-.documents-table th:nth-child(4) { width: 11%; }
-.documents-table th:nth-child(5) { width: 15%; }
-.documents-table th:nth-child(6) { width: 12%; }
+.documents-table th:nth-child(2) { width: 27%; }
+.documents-table th:nth-child(4) { width: 10%; }
+.documents-table th:nth-child(5) { width: 12%; }
+.documents-table th:nth-child(6) { width: 10%; }
+.documents-table th:nth-child(7) { width: 27%; }
+.documents-table .document-actions { margin-top: 0; }
 .table-title {
   min-height: 0;
   padding: 0;
@@ -805,42 +810,33 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .trash-table .trash-empty-row { display: block; padding: 70px; color: var(--muted-strong); text-align: center; }
 .trash-table .trash-empty-row td { width: auto; text-align: center; }
 
-/* context drawer/preview dialog */
-.scrim {
-  position: fixed;
-  z-index: 8;
-  inset: 58px 0 0;
+/* persistent context panel */
+.context-panel {
+  min-width: 0;
+  min-height: 0;
   width: 100%;
-  border: 0;
-  background: rgba(18, 26, 22, .42);
-}
-.context-drawer {
-  position: fixed;
-  z-index: 9;
-  top: 58px;
-  right: 0;
-  bottom: 0;
-  width: min(390px, calc(100vw - 30px));
   display: flex;
   flex-direction: column;
-  border-left: 1px solid var(--line-strong);
+  overflow: hidden;
+  border-left: 1px solid var(--line);
   background: var(--paper);
-  box-shadow: -6px 0 22px rgba(25, 41, 35, .16);
 }
-.context-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
-.context-drawer-head h2 { margin: 0; font-size: 17px; }
-.context-drawer-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-.context-drawer-body { min-height: 0; overflow: auto; padding: 14px 16px; }
+.context-panel.is-collapsed { width: 0; border-left: 0; }
+.context-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 16px; border-bottom: 1px solid var(--line); }
+.context-panel-head h2 { margin: 0; font-size: 17px; }
+.context-panel-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.context-panel-head .btn { flex: none; min-width: 30px; min-height: 30px; padding: 4px 7px; }
+.context-panel-body { min-height: 0; overflow: auto; padding: 14px 16px; }
 .context-section + .context-section { margin-top: 20px; }
 .context-section h3 { margin: 0 0 7px; color: var(--muted); font-size: 12px; }
 .context-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .context-item:last-child { border-bottom: 0; }
-.context-item-name { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.context-item-name { min-width: 0; color: var(--ink); font: 12px/1.45 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
 .context-item-meta { margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .context-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-.context-drawer-footer { padding: 14px 16px 18px; border-top: 1px solid var(--line); }
-.context-drawer-footer .btn { width: 100%; }
-.preview-dialog { width: min(920px, calc(100vw - 52px)); }
+.context-panel-footer { padding: 14px 16px 18px; border-top: 1px solid var(--line); }
+.context-panel-footer .btn { width: 100%; }
+.context-panel-hint { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .settings-dialog { width: min(540px, calc(100vw - 52px)); }
 .delete-dialog { width: min(540px, calc(100vw - 52px)); }
 dialog {
@@ -924,23 +920,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   .autoupdate-settings { background: var(--sidebar); }
   .dialog-actions { background: var(--sidebar); }
 }
-.preview-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 12px; }
-.preview-meta strong { color: var(--ink); }
-.preview-text {
-  max-height: min(58vh, 560px);
-  min-height: 210px;
-  overflow: auto;
-  margin: 14px 0;
-  padding: 16px;
-  border: 1px solid var(--line);
-  background: var(--sidebar);
-  color: var(--ink);
-  font: 13px/1.55 "Cascadia Mono", Consolas, monospace;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.preview-progress { width: 100%; height: 12px; accent-color: var(--brand); }
-.preview-status { min-height: 22px; margin: 9px 0 0; color: var(--muted); }
 .settings-section + .settings-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
 .settings-section h3 { margin: 0 0 8px; font-size: 14px; }
 .settings-section p { margin: 0 0 11px; color: var(--muted); font-size: 12px; }
@@ -999,7 +978,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 
 /* desktop width adjustments */
 @media (max-width: 1320px) {
-  :root { --sidebar-width: 220px; }
+  :root { --sidebar-width: 220px; --context-width: 310px; }
   .topbar { grid-template-columns: 204px minmax(300px, 1fr) auto; gap: 18px; }
   .scope-bar { gap: 6px; }
   .document-query { flex: 1 1 300px; }
@@ -1089,10 +1068,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     autoupdateStartupSaving: false,
     autoupdateDebounceMs: 1500,
     autoupdateReconcileMs: 21600000,
-    preview: null,
-    previewSeq: 0,
+    contextPanelCollapsed: false,
     focusRoot: "",
-    focusAfterDrawer: null,
     dialogTrigger: null,
     library: { recent: [], pinned: [], groups: [], savedSearches: [], busy: false },
   };
@@ -1161,7 +1138,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     feedback.setAttribute("aria-live", "polite");
     feedback.setAttribute("aria-atomic", "true");
     let timer = 0;
-    const control = button(label, "small copy-control", async () => {
+    const control = button(label, "small copy-control result-action", async () => {
       try {
         await copyText(value);
         feedback.textContent = "已複製";
@@ -1930,20 +1907,48 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       : toggleSelection(item, input.checked));
     return input;
   }
+  async function libraryAction(action, item) {
+    const documentPath = escapeText(item && item.path);
+    if (!isAbsoluteDocumentPath(documentPath)) {
+      showToast("只有完整絕對路徑文件可加入固定或分類。");
+      return;
+    }
+    const endpoint = action === "pin" ? "/api/library/pins" : "/api/library/groups";
+    try {
+      const data = await api(endpoint, {
+        method: "POST",
+        body: action === "pin" ? { path: documentPath, reference: item.reference, pinned: true } : { path: documentPath, reference: item.reference },
+      });
+      showToast(data && data.message ? data.message : action === "pin" ? "已更新固定文件。" : "已加入分類。");
+    } catch (error) {
+      showToast(error.message || (action === "pin" ? "固定文件失敗。" : "加入分類失敗。"));
+    }
+  }
   function resultActions(item) {
     const actions = make("div", "document-actions");
     actions.append(resultCopyActions(item));
     if (item.temporary) {
       const source = state.imported.get(item.id);
-      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "link-action",
+      const toggle = button(source?.selected ? "移出上下文" : "加入上下文", "small result-action",
         () => source && toggleImported(source, !source.selected));
       toggle.disabled = !source || source.status !== "indexed";
+      toggle.dataset.action = "context";
       actions.append(toggle);
       return actions;
     }
-    const reveal = button("顯示所在位置", "link-action", () => void documentAction(item, "reveal"));
-    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "link-action", () => toggleSelection(item, !selectedReference(item.reference)));
-    actions.append(reveal, toggle);
+    const open = button("開啟", "small result-action", () => void documentAction(item, "open"));
+    open.dataset.action = "open";
+    const reveal = button("顯示所在位置", "small result-action", () => void documentAction(item, "reveal"));
+    reveal.dataset.action = "reveal";
+    const pin = button("Pin", "small result-action", () => void libraryAction("pin", item));
+    pin.dataset.action = "pin";
+    const group = button("加入分類", "small result-action", () => void libraryAction("group", item));
+    group.dataset.action = "group";
+    const toggle = button(selectedReference(item.reference) ? "移出上下文" : "加入上下文", "small result-action",
+      () => toggleSelection(item, !selectedReference(item.reference)));
+    toggle.dataset.action = "context";
+    toggle.classList.toggle("is-active", selectedReference(item.reference));
+    actions.append(open, reveal, pin, group, toggle);
     return actions;
   }
   function makeDocumentRow(item) {
@@ -1994,7 +1999,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     title.title = item.path;
     const passages = Array.isArray(item && item.passages) ? item.passages : [];
     const passageBlock = makeResultPassages(item);
-    titleCell.append(title, resultCopyActions(item));
+    titleCell.append(title);
     if (passageBlock) titleCell.append(passageBlock);
     else if (!item.temporary && item.filenameOnly && passages.length === 1 && passages[0]?.snippet) {
       const snippet = make("p", "snippet");
@@ -2010,13 +2015,15 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     locationCell.textContent = item.location || "未提供";
     const statusCell = document.createElement("td");
     statusCell.textContent = item.status === "indexed" ? "可讀" : (item.status || "未提供");
-    row.append(checkCell, titleCell, rootCell, formatCell, locationCell, statusCell);
+    const actionsCell = make("td", "document-actions-cell", "");
+    actionsCell.append(resultActions(item));
+    row.append(checkCell, titleCell, rootCell, formatCell, locationCell, statusCell, actionsCell);
     return row;
   }
   function appendTableMessage(body, text) {
     const row = document.createElement("tr");
     const cell = make("td", "table-empty", text);
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     row.append(cell);
     body.append(row);
   }
@@ -2160,13 +2167,13 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       bulk.hidden = false;
       $("selection-label").textContent = "已選取 " + selectedCount() + " 份文件";
     } else bulk.hidden = true;
-    $("review-context").disabled = selectedCount() === 0;
+    $("copy-context-paths").disabled = contextPathValues().length === 0;
     const statusMessage = searchActive && state.searchElapsedSeconds > 0
       ? state.searchMessage + "（已等待 " + state.searchElapsedSeconds + " 秒）"
       : state.searchMessage;
     setStatus("search-status", statusMessage, state.searchKind);
     renderSidebar();
-    renderContextDrawer();
+    renderContextPanel();
   }
   function clearIndexedSelection(message) {
     state.selected.clear();
@@ -2374,8 +2381,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       }
     }
     renderSidebar();
-    renderContextDrawer();
-    $("review-context").disabled = selectedCount() === 0;
+    renderContextPanel();
+    $("copy-context-paths").disabled = contextPathValues().length === 0;
   }
   async function removeImported(item) {
     if (item.pending) return;
@@ -2416,66 +2423,43 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     }
   }
   function invalidatePreview(message, rerender) {
-    state.previewSeq++;
-    state.preview = null;
-    const text = $("preview-text");
-    if (text) text.textContent = "尚未產生預覽。";
-    const meta = $("preview-meta");
-    if (meta) meta.textContent = "尚未產生 server 預覽。";
-    const progress = $("preview-progress");
-    if (progress) progress.value = 0;
-    const copy = $("copy-preview");
-    if (copy) copy.disabled = true;
-    setStatus("preview-status", message || "待產生精確預覽。", "");
     if (rerender) {
       renderSidebar();
-      renderContextDrawer();
+      renderContextPanel();
       if (state.route === "documents") renderDocuments();
       if (state.route === "temporary") renderTemporary();
     }
   }
-  function contextFingerprint() {
-    const selections = Array.from(state.selected.values()).map(item => [item.query, item.reference]);
-    const files = Array.from(state.imported.values()).filter(item => item.selected && item.status === "indexed").map(item => item.id);
-    return JSON.stringify([state.mode, selections, files]);
+  function isAbsoluteDocumentPath(value) {
+    return /^[A-Za-z]:[\\\\/]/u.test(value) || value.startsWith("/") || /^\\\\/.test(value);
   }
-  function previewPayload() {
-    return {
-      provider: "auto",
-      model: "auto",
-      question: "",
-      mode: state.mode,
-      selections: Array.from(state.selected.values()).map(item => ({ query: item.query, reference: item.reference })),
-      fileIds: Array.from(state.imported.values()).filter(item => item.selected && item.status === "indexed").map(item => item.id),
+  function contextPathValues() {
+    const paths = [];
+    const add = value => {
+      const path = escapeText(value);
+      if (isAbsoluteDocumentPath(path) && !paths.includes(path)) paths.push(path);
     };
+    for (const selected of state.selected.values()) add(selected.item?.path);
+    for (const item of state.imported.values()) if (item.selected && item.status === "indexed") add(item.path);
+    return paths;
   }
-  function updatePreviewControls() {
-    const current = Boolean(state.preview && state.preview.fingerprint === contextFingerprint());
-    $("copy-preview").disabled = !current;
-  }
-  async function makePreview() {
-    if (selectedCount() === 0) {
-      setStatus("preview-status", "請先選取文件。", "warn");
+  async function copyContextPaths() {
+    const paths = contextPathValues();
+    if (!paths.length) {
+      showToast("目前選取沒有可供 Codex 使用的完整絕對路徑。");
       return;
     }
-    const seq = ++state.previewSeq;
-    const fingerprint = contextFingerprint();
-    setStatus("preview-status", "正在重新驗證來源並建立精確預覽…", "");
-    $("copy-preview").disabled = true;
     try {
-      const data = await api("/api/preview", { method: "POST", body: previewPayload() });
-      if (seq !== state.previewSeq || fingerprint !== contextFingerprint()) return;
-      state.preview = { ...data, fingerprint };
-      $("preview-text").textContent = data.context;
-      $("preview-meta").textContent = String(data.documentCount) + " 份文件 · " + String(data.bytes) + " bytes" + (data.truncated ? " · 內容已截短" : "");
-      $("preview-progress").value = Math.min(Number(data.bytes || 0), 262144);
-      $("copy-preview").disabled = false;
-      setStatus("preview-status", "預覽完成。複製內容與上方可見文字逐字一致。", "ok");
+      await copyText(paths.join("\\n"));
+      showToast("已複製 " + paths.length + " 個絕對路徑；未自動送出。");
     } catch (error) {
-      if (seq !== state.previewSeq) return;
-      state.preview = null;
-      setStatus("preview-status", error.message || "精確預覽失敗。", "error");
+      showToast(error.message || "路徑複製失敗，請改用滑鼠選取後按 Ctrl+C。");
     }
+  }
+  function clearContextSelection() {
+    state.selected.clear();
+    for (const item of state.imported.values()) item.selected = false;
+    invalidatePreview("選取已清除；路徑清單已更新。", true);
   }
   function showDialog(dialog, trigger, focusTarget) {
     state.dialogTrigger = trigger || document.activeElement;
@@ -2487,24 +2471,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     state.dialogTrigger = null;
     if (trigger instanceof HTMLElement && document.contains(trigger)) trigger.focus();
   }
-  function openPreview() {
-    if (selectedCount() === 0) return;
-    const dialog = $("preview-dialog");
-    showDialog(dialog, document.activeElement, $("copy-preview"));
-    void makePreview();
-  }
-  async function copyPreview() {
-    if (!state.preview || state.preview.fingerprint !== contextFingerprint()) return;
-    try {
-      await navigator.clipboard.writeText(state.preview.context);
-      showToast("已複製目前 server 精確預覽。");
-    } catch { setStatus("preview-status", "瀏覽器拒絕剪貼簿權限；請手動複製可見預覽。", "error"); }
-  }
-  function renderContextDrawer() {
+  function renderContextPanel() {
     const count = selectedCount();
     $("nav-context-count").textContent = String(count);
     $("context-count").textContent = "已選 " + count + " / " + MAX;
-    $("context-open-preview").disabled = count === 0;
+    $("context-copy-paths").disabled = contextPathValues().length === 0;
     const indexed = $("context-indexed-list");
     const temporary = $("context-temporary-list");
     indexed.replaceChildren();
@@ -2514,11 +2485,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       const row = make("div", "context-item");
       const body = make("div", "", "");
       body.append(make("div", "context-item-name", selected.item.path));
-      body.append(make("div", "context-item-meta", (selected.item.extension || "") + " · " + (selected.item.location || "未提供位置")));
-      body.append(resultCopyActions(selected.item));
       const actions = make("div", "context-item-actions");
-      actions.append(button("開啟", "small", () => void documentAction(selected.item, "open")));
-      actions.append(button("移除", "small", () => { state.selected.delete(selected.reference); invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
+      actions.append(button("移除", "small result-action", () => {
+        state.selected.delete(selected.reference);
+        invalidatePreview("選取已變更；路徑清單已更新。", true);
+      }));
       row.append(body, actions);
       indexed.append(row);
     }
@@ -2527,34 +2498,39 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     for (const item of selectedTemps) {
       const row = make("div", "context-item");
       const body = make("div", "", "");
-      body.append(make("div", "context-item-name", item.filename));
-      body.append(make("div", "context-item-meta", (item.extension || "") + " · " + item.status));
-      body.append(resultCopyActions(item));
-      row.append(body, button("移除", "small", () => { item.selected = false; invalidatePreview("選取已變更；請重新產生精確預覽。", true); }));
+      body.append(make("div", "context-item-name", item.path || item.filename));
+      body.append(make("div", "context-item-meta", item.path ? "" : "臨時上傳文件沒有可複製的原始絕對路徑。"));
+      row.append(body, button("移除", "small result-action", () => {
+        item.selected = false;
+        invalidatePreview("選取已變更；路徑清單已更新。", true);
+      }));
       temporary.append(row);
     }
+    syncContextPanel();
   }
-  function openContext(trigger) {
-    const drawer = $("context-drawer");
-    state.focusAfterDrawer = trigger || document.activeElement;
-    drawer.hidden = false;
-    drawer.removeAttribute("inert");
-    drawer.setAttribute("aria-hidden", "false");
-    $("app-shell").setAttribute("inert", "");
-    $("scrim").hidden = false;
-    renderContextDrawer();
-    $("context-close").focus();
+  function syncContextPanel() {
+    const shell = $("app-shell");
+    const panel = $("context-drawer");
+    const toggle = $("context-toggle");
+    const collapsed = state.contextPanelCollapsed;
+    shell?.classList.toggle("context-panel-collapsed", collapsed);
+    panel?.classList.toggle("is-collapsed", collapsed);
+    panel?.setAttribute("aria-hidden", String(collapsed));
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", String(!collapsed));
+      toggle.setAttribute("aria-label", collapsed ? "展開上下文側欄" : "收合上下文側欄");
+      toggle.title = collapsed ? "展開上下文側欄" : "收合上下文側欄";
+      toggle.textContent = collapsed ? "‹" : "›";
+    }
+  }
+  function openContext() {
+    state.contextPanelCollapsed = false;
+    renderContextPanel();
+    $("context-toggle").focus();
   }
   function closeContext() {
-    const drawer = $("context-drawer");
-    drawer.hidden = true;
-    drawer.setAttribute("inert", "");
-    drawer.setAttribute("aria-hidden", "true");
-    $("scrim").hidden = true;
-    $("app-shell").removeAttribute("inert");
-    const trigger = state.focusAfterDrawer;
-    state.focusAfterDrawer = null;
-    if (trigger instanceof HTMLElement && document.contains(trigger)) trigger.focus();
+    state.contextPanelCollapsed = true;
+    syncContextPanel();
   }
   function rootCheckbox(path, selected, kind) {
     const input = document.createElement("input");
@@ -3609,8 +3585,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const searchStatus = make("div", "status", "尚未搜尋。"); searchStatus.id = "search-status"; searchStatus.setAttribute("role", "status"); searchStatus.setAttribute("aria-live", "polite"); docPage.append(searchStatus);
     const resultToolbar = make("div", "results-toolbar"); const resultCopy = make("div", "", ""); resultCopy.append(make("strong", "", "尚未搜尋"), make("span", "", "")); resultCopy.lastChild.id = "results-subtitle"; resultCopy.firstChild.id = "results-title"; const pagination = make("div", "pagination"); const paginationLabel = make("span", "pagination-label", "1"); paginationLabel.id = "pagination-label"; const prev = button("‹", "small", () => void search((state.data?.page || 1) - 1)); prev.id = "documents-prev"; prev.setAttribute("aria-label", "上一頁"); const next = button("›", "small", () => void search((state.data?.page || 1) + 1)); next.id = "documents-next"; next.setAttribute("aria-label", "下一頁"); pagination.append(prev, paginationLabel, next); resultToolbar.append(resultCopy, pagination); docPage.append(resultToolbar);
     const resultList = make("div", "result-list", ""); resultList.id = "document-list"; docPage.append(resultList);
-    const tableWrap = make("div", "table-wrap", ""); tableWrap.id = "document-table-wrap"; const table = document.createElement("table"); table.className = "documents-table"; const thead = document.createElement("thead"); const headRow = document.createElement("tr"); for (const label of ["選取", "標題", "根目錄", "格式", "命中位置", "狀態"]) headRow.append(make("th", "", label)); thead.append(headRow); const tbody = document.createElement("tbody"); tbody.id = "document-table-body"; table.append(thead, tbody); tableWrap.append(table); docPage.append(tableWrap);
-    const bulk = make("div", "bulk-bar", ""); bulk.id = "bulk-bar"; const selectionLabel = make("strong", "", ""); selectionLabel.id = "selection-label"; const review = button("加入上下文", "primary", openPreview); review.id = "review-context"; const clear = button("清除選取", "", () => { state.selected.clear(); for (const item of state.imported.values()) item.selected = false; invalidatePreview("選取已清除；請重新產生精確預覽。", true); }); bulk.append(selectionLabel, review, clear); docPage.append(bulk); main.append(docPage);
+    const tableWrap = make("div", "table-wrap", ""); tableWrap.id = "document-table-wrap"; const table = document.createElement("table"); table.className = "documents-table"; const thead = document.createElement("thead"); const headRow = document.createElement("tr"); for (const label of ["選取", "標題", "根目錄", "格式", "命中位置", "狀態", "操作"]) headRow.append(make("th", "", label)); thead.append(headRow); const tbody = document.createElement("tbody"); tbody.id = "document-table-body"; table.append(thead, tbody); tableWrap.append(table); docPage.append(tableWrap);
+    const bulk = make("div", "bulk-bar", ""); bulk.id = "bulk-bar"; const selectionLabel = make("strong", "", ""); selectionLabel.id = "selection-label"; const copyPaths = button("複製全部路徑", "primary", copyContextPaths); copyPaths.id = "copy-context-paths"; const clear = button("清除選取", "", clearContextSelection); clear.id = "clear-selection"; bulk.append(selectionLabel, copyPaths, clear); docPage.append(bulk); main.append(docPage);
 
     const temporaryPage = make("section", "page", ""); temporaryPage.dataset.page = "temporary"; temporaryPage.id = "temporary-page"; const tempHeader = makePageHeader("臨時文件", "本次工作階段解析，不加入永久索引。"); const tempCount = make("strong", "sr-only", "0 / 20 份"); tempCount.id = "temporary-count"; tempHeader.actions.append(tempCount, button("選取文件", "primary", () => $("file-input").click())); temporaryPage.append(tempHeader); const drop = make("div", "drop-zone", ""); drop.id = "drop-zone"; drop.tabIndex = 0; drop.setAttribute("role", "button"); drop.setAttribute("aria-label", "拖曳或選取文件"); drop.append(make("strong", "", "拖曳文件到這裡"), make("small", "", "目前有 0 份臨時文件可加入上下文。")); drop.querySelector("small").id = "drop-help"; temporaryPage.append(drop); const fileInput = document.createElement("input"); fileInput.id = "file-input"; fileInput.type = "file"; fileInput.multiple = true; fileInput.hidden = true; temporaryPage.append(fileInput); const fileStatus = make("div", "status", ""); fileStatus.id = "file-status-message"; fileStatus.setAttribute("role", "status"); fileStatus.setAttribute("aria-live", "polite"); temporaryPage.append(fileStatus); const fileList = make("div", "file-list", ""); fileList.id = "file-list"; temporaryPage.append(fileList); main.append(temporaryPage);
 
@@ -3648,12 +3624,41 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const savedCreate = button("儲存目前搜尋", "primary", () => void saveCurrentSearch()); savedCreate.id = "library-save-search";
     const savedToolbar = make("div", "library-toolbar"); savedToolbar.append(savedName, savedCreate); savedHeader.actions.append(savedToolbar);
     const savedList = make("div", "library-list"); savedList.id = "library-saved-searches-list"; librarySavedPage.append(savedHeader, savedList); main.append(librarySavedPage);
-    shell.append(main); app.append(shell);
-
-    const scrim = make("button", "scrim", ""); scrim.id = "scrim"; scrim.type = "button"; scrim.setAttribute("aria-label", "關閉上下文抽屜"); scrim.hidden = true; scrim.addEventListener("click", closeContext); app.append(scrim);
-    const drawer = make("div", "context-drawer", ""); drawer.id = "context-drawer"; drawer.hidden = true; drawer.setAttribute("aria-hidden", "true"); drawer.setAttribute("inert", ""); drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-labelledby", "context-title"); const drawerHead = make("div", "context-drawer-head", ""); const drawerTitle = make("div", "", ""); drawerTitle.append(make("h2", "", "已選上下文"), make("p", "", "")); drawerTitle.firstChild.id = "context-title"; drawerTitle.lastChild.id = "context-count"; const drawerClose = iconButton("×", "關閉上下文抽屜", closeContext); drawerClose.id = "context-close"; drawerHead.append(drawerTitle, drawerClose); const drawerBody = make("div", "context-drawer-body", ""); const indexedSection = make("section", "context-section", ""); indexedSection.append(make("h3", "", "已索引文件")); const indexedList = make("div", "", ""); indexedList.id = "context-indexed-list"; indexedSection.append(indexedList); const temporarySection = make("section", "context-section", ""); temporarySection.append(make("h3", "", "本次臨時文件")); const temporaryList = make("div", "", ""); temporaryList.id = "context-temporary-list"; temporarySection.append(temporaryList); drawerBody.append(indexedSection, temporarySection); const drawerFooter = make("div", "context-drawer-footer", ""); const drawerPreview = button("檢查精確上下文", "primary", openPreview); drawerPreview.id = "context-open-preview"; drawerFooter.append(drawerPreview); drawer.append(drawerHead, drawerBody, drawerFooter); app.append(drawer);
-
-    const previewDialog = document.createElement("dialog"); previewDialog.id = "preview-dialog"; previewDialog.className = "preview-dialog"; previewDialog.setAttribute("aria-labelledby", "preview-title"); const previewHeadDialog = make("div", "dialog-head", ""); const previewHeading = make("div", "", ""); previewHeading.append(make("h2", "", "檢查精確上下文"), make("p", "", "重新驗證來源後顯示 server context；不包含完整文件。")); previewHeading.firstChild.id = "preview-title"; const previewClose = iconButton("×", "關閉精確上下文預覽", () => previewDialog.close()); previewHeadDialog.append(previewHeading, previewClose); const previewBodyDialog = make("div", "dialog-body", ""); const previewMeta = make("div", "preview-meta", "尚未產生 server 預覽。"); previewMeta.id = "preview-meta"; const previewText = make("pre", "preview-text", "尚未產生預覽。"); previewText.id = "preview-text"; const progress = document.createElement("progress"); progress.className = "preview-progress"; progress.id = "preview-progress"; progress.max = 262144; progress.value = 0; progress.setAttribute("aria-label", "精確上下文 bytes，最多 256 KiB"); const previewStatus = make("div", "preview-status", "待產生精確預覽。"); previewStatus.id = "preview-status"; previewStatus.setAttribute("role", "status"); previewStatus.setAttribute("aria-live", "polite"); previewBodyDialog.append(previewMeta, previewText, progress, previewStatus); const previewActions = make("div", "dialog-actions", ""); const copy = button("複製預覽", "primary", () => void copyPreview()); copy.id = "copy-preview"; copy.disabled = true; const previewCancel = button("關閉", "", () => previewDialog.close()); previewActions.append(previewCancel, copy); previewDialog.append(previewHeadDialog, previewBodyDialog, previewActions); app.append(previewDialog);
+    const contextPanel = make("aside", "context-panel", "");
+    contextPanel.id = "context-drawer";
+    contextPanel.setAttribute("aria-hidden", "false");
+    contextPanel.setAttribute("role", "region");
+    contextPanel.setAttribute("aria-labelledby", "context-title");
+    const contextHead = make("div", "context-panel-head", "");
+    const contextTitle = make("div", "", "");
+    contextTitle.append(make("h2", "", "上下文"), make("p", "", ""));
+    contextTitle.firstChild.id = "context-title";
+    contextTitle.lastChild.id = "context-count";
+    const contextToggle = iconButton("›", "收合上下文側欄", closeContext);
+    contextToggle.id = "context-toggle";
+    contextToggle.setAttribute("aria-expanded", "true");
+    contextHead.append(contextTitle, contextToggle);
+    const contextBody = make("div", "context-panel-body", "");
+    const indexedSection = make("section", "context-section", "");
+    indexedSection.append(make("h3", "", "索引文件"));
+    const indexedList = make("div", "", "");
+    indexedList.id = "context-indexed-list";
+    indexedSection.append(indexedList);
+    const temporarySection = make("section", "context-section", "");
+    temporarySection.append(make("h3", "", "臨時文件"));
+    const temporaryList = make("div", "", "");
+    temporaryList.id = "context-temporary-list";
+    temporarySection.append(temporaryList);
+    contextBody.append(indexedSection, temporarySection);
+    const contextFooter = make("div", "context-panel-footer", "");
+    const contextCopy = button("複製全部路徑", "primary", copyContextPaths);
+    contextCopy.id = "context-copy-paths";
+    const contextClear = button("清除選取", "", clearContextSelection);
+    contextClear.id = "context-clear-selection";
+    const contextHint = make("p", "context-panel-hint", "剪貼簿只會包含每行一個完整絕對路徑；不會自動送出。");
+    contextFooter.append(contextCopy, contextClear, contextHint);
+    contextPanel.append(contextHead, contextBody, contextFooter);
+    shell.append(main, contextPanel); app.append(shell);
 
     const settingsDialog = document.createElement("dialog"); settingsDialog.id = "settings-dialog"; settingsDialog.className = "settings-dialog"; settingsDialog.setAttribute("aria-labelledby", "settings-title");
     const settingsHead = make("div", "dialog-head", ""); const settingsHeading = make("div", "", ""); settingsHeading.append(make("h2", "", "設定")); settingsHeading.firstChild.id = "settings-title"; const settingsClose = iconButton("×", "關閉設定", () => settingsDialog.close()); settingsHead.append(settingsHeading, settingsClose);
@@ -3719,8 +3724,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 
     state.viewMode = "list";
     switchPageVisibility();
-    renderDocuments(); renderTemporary(); renderRoots(); renderTrash(); renderContextDrawer(); renderLibraryPage();
-    for (const dialog of [previewDialog, settingsDialog, deleteDialog]) dialog.addEventListener("close", restoreDialogFocus);
+    renderDocuments(); renderTemporary(); renderRoots(); renderTrash(); renderContextPanel(); renderLibraryPage();
+    for (const dialog of [settingsDialog, deleteDialog]) dialog.addEventListener("close", restoreDialogFocus);
     globalQuery.addEventListener("input", () => { state.queryDraft = globalQuery.value; pageQuery.value = state.queryDraft; });
     pageQuery.addEventListener("input", () => { state.queryDraft = pageQuery.value; globalQuery.value = state.queryDraft; });
     globalQuery.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); routeFromTopSearch(); void search(1); } });
@@ -3734,7 +3739,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("is-dragging"); });
     drop.addEventListener("dragleave", () => drop.classList.remove("is-dragging"));
     drop.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("is-dragging"); void upload(event.dataTransfer.files); });
-    document.addEventListener("keydown", event => { if (event.key === "Escape" && !$("context-drawer").hidden) closeContext(); });
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && !state.contextPanelCollapsed) closeContext(); });
     $("view-list").setAttribute("aria-pressed", "true"); $("view-table").setAttribute("aria-pressed", "false");
     $("mode-phrase").setAttribute("aria-pressed", "true"); $("mode-all-terms").setAttribute("aria-pressed", "false");
     $("trash-status-message").textContent = "垃圾桶只保存索引 metadata；來源資料不會被刪除。";

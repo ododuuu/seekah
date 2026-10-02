@@ -1658,6 +1658,27 @@
 - logger 失敗不得破壞搜尋、answer 或唯讀索引結果；log 只保存 trace metadata，絕不保存 API Key、文件正文、context 正文、snippet 或 answer 正文。query／question 會保留在本機 log，因為沒有它們無法把慢查詢與特定 answer 事件對回來源。
 - 不把 trace 寫入 SQLite 或 `--profile`，不新增第二套通用 logging framework；`trace-log.ts` 只負責有界 JSONL append／rotate／read，沿用既有 autoupdate log 的輪替邊界。
 
+## D125：工作台上下文採常駐側欄，Codex prompt 只複製絕對路徑（2026-10-02）
+
+- **背景**：工作台原本以遮罩抽屜承載上下文預覽，無法在瀏覽結果、臨時文件與頁面操作間保持可見；使用者要把選取文件交給 Codex 時，只需要可貼上的本機路徑，不需要文件內容或自動送出。
+- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 338 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
+- **路徑規則**：前端只收集已選索引結果中的完整絕對路徑，以穩定順序去重後用 `join("\n")` 產生剪貼簿文字；不加標題、標記、檔名、正文或尾端說明，也不自動送出。上傳臨時文件若沒有原始絕對路徑，側欄可以顯示其 session 項目，但排除於 prompt，禁止用檔名冒充路徑。
+- **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
+- **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
+
+## D126：Pin／分類先採 pi2 假定的 library API 呼叫點（2026-10-02）
+
+- **背景**：本分支需要先提供結果列 Pin 與加入分類按鈕，但 pi2 的 library 行為規格 §95 尚未在本分支出現；前端不得自行建立另一份持久化模型。
+- **假定契約**：
+  - `GET /api/library/pins` 回傳 `{ "items": [...] }`，供未來載入既有 Pin 狀態。
+  - `POST /api/library/pins` 接受 `{ "path": string, "reference": string, "pinned": true }`，成功回傳可選 `message` 與 `item`。
+  - `GET /api/library/groups` 回傳 `{ "groups": [{ "id": string, "name": string }] }`，供未來分類選擇器使用。
+  - `POST /api/library/groups` 接受 `{ "path": string, "reference": string }`；pi2 可在後續 §95 擴充 `groupId` 或分類選擇欄位，成功回傳可選 `message` 與 `item`。
+  - 失敗回應使用既有 `api` helper 的錯誤格式；前端顯示錯誤 toast，不得把失敗當成功。
+- **決策**：`src/workbench-app.ts` 只保留 Pin 與分類的 POST 呼叫點，使用索引結果的絕對路徑與 reference，不在前端 fake persistence、不讀取或寫入外部服務；GET 契約先記錄供 pi2 後續整合，分類 UI 不在本項偷偷選擇或建立資料。
+- **取捨**：按鈕目前可驗證 request payload 與錯誤處理，但真正的 Pin 狀態同步、分類選擇與持久化由 §95／pi2 決定；若 §95 改變 endpoint 或 payload，必須同步更新本決策、前端與 `test/m90.test.ts`。
+- **驗證**：UI smoke 以隔離瀏覽器 fetch mock 驗證兩個 POST 呼叫點及 payload；不連線真實 library，也不使用使用者索引。
+
 ## D133：Codex path recall 以逐行 token 掃描保留完整 reference
 
 - 日期：2026-10-02。真實摘要的既有結果顯示 structured 解析與 noise 排除正確，但 user-provided／codex-tool reference 數低於使用者預期；本次只用 synthetic rollout 重現中文、空白、JSON escape、正斜線 Windows、UNC、Markdown 包裝、長說明與資料夾尾斜線。

@@ -76,7 +76,7 @@ test("0.37.0 workbench exposes real root, trash and confirmation controls", () =
   assert.match(html, /還原並重新索引/u);
   assert.match(html, /showModal/u);
   assert.match(html, /aria-labelledby/u);
-  assert.match(html, /inert/u);
+  assert.match(html, /aria-live/u);
   assert.doesNotMatch(html, /innerHTML|delete-details|confirmAndStartIndex/u);
 });
 

@@ -486,6 +486,7 @@ async function installPickerPatch(cdp) {
       selectRoot: null,
       requests: [],
       documentActions: [],
+      libraryActions: [],
       clipboardText: null,
       failNextAutoupdate: false,
       failNextStartupCatchupMode: false,
@@ -516,6 +517,10 @@ async function installPickerPatch(cdp) {
         try { body = JSON.parse(String(init?.body || "")); } catch {}
         window.__uiSmoke.documentActions.push(body);
         return new Response(JSON.stringify({ changed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (requestPath === "/api/library/pins" || requestPath === "/api/library/groups") {
+        window.__uiSmoke.libraryActions.push({ path: requestPath, method: requestMethod, body });
+        return new Response(JSON.stringify({ message: "煙霧測試已記錄 library action", item: body }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (requestPath === "/api/settings" && body?.startupCatchupMode !== undefined && window.__uiSmoke.failNextStartupCatchupMode) {
         window.__uiSmoke.failNextStartupCatchupMode = false;
@@ -1302,7 +1307,7 @@ async function runViewport(viewport, chromePath) {
       await noBrowserErrorsSince(cdp, start, "omittedTerms 提示");
     });
 
-    await check(`${label} 模式切換、分頁與上下文抽屜維持可操作`, async () => {
+    await check(`${label} 模式切換、分頁與上下文常駐側欄維持可操作`, async () => {
       const start = browserEvents.length;
       await setSearchMode(cdp, "phrase");
       await inputAndSearch(cdp, "UI_SMOKE_PAGE_TOKEN");
@@ -1329,16 +1334,107 @@ async function runViewport(viewport, chromePath) {
       expect(selected, "找不到多段落結果的加入上下文控制。");
       await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '1'"));
       await click(cdp, "#nav-context");
-      await waitFor(() => visible(cdp, "#context-drawer"));
-      const drawer = await cdp.evaluate(`(() => ({
-        hidden: Boolean(document.getElementById("context-drawer")?.hidden),
+      await waitFor(() => cdp.evaluate("document.getElementById('context-drawer')?.classList.contains('context-panel') && !document.getElementById('context-drawer')?.classList.contains('is-collapsed')"));
+      const panel = await cdp.evaluate(`(() => ({
+        count: document.getElementById("context-count")?.textContent || "",
         itemCount: document.querySelectorAll("#context-indexed-list .context-item").length,
-        text: document.getElementById("context-indexed-list")?.textContent || "",
+        pathText: document.querySelector("#context-indexed-list .context-item-name")?.textContent || "",
+        copyDisabled: Boolean(document.getElementById("context-copy-paths")?.disabled),
+        hint: document.querySelector(".context-panel-hint")?.textContent || "",
       }))()`);
-      expect(!drawer.hidden && drawer.itemCount === 1 && drawer.text.includes("multi-passage-lines.txt"), "上下文抽屜沒有保留選取結果。");
-      await click(cdp, "#context-close");
-      await waitFor(() => cdp.evaluate("Boolean(document.getElementById('context-drawer')?.hidden)"));
-      await noBrowserErrorsSince(cdp, start, "模式切換／分頁／上下文抽屜");
+      expect(panel.count === "已選 1 / 20" && panel.itemCount === 1, "上下文常駐側欄沒有保留選取結果。");
+      expect(panel.pathText === fixture.multiPath, "上下文側欄沒有顯示合成文件的完整絕對路徑。");
+      expect(!panel.copyDisabled && panel.hint.includes("每行一個"), "上下文側欄複製控制狀態或提示不符。");
+      await click(cdp, "#context-copy-paths");
+      await waitFor(() => cdp.evaluate(`window.__uiSmoke.clipboardText === ${JSON.stringify(fixture.multiPath)}`));
+      const copiedPanelPath = await cdp.evaluate("window.__uiSmoke.clipboardText");
+      expect(copiedPanelPath === fixture.multiPath && !copiedPanelPath.includes("上下文") && !copiedPanelPath.endsWith("\n"), "側欄複製內容不是只有一行絕對路徑。");
+      await click(cdp, "#context-indexed-list .context-item .result-action");
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '0'"));
+
+      const reselected = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const control = row && Array.from(row.querySelectorAll(".document-actions button")).find(node => node.textContent === "加入上下文");
+        if (!(control instanceof HTMLElement)) return false;
+        control.click();
+        return true;
+      })()`);
+      expect(reselected, "移除後無法再次加入上下文。");
+      await waitFor(() => cdp.evaluate("document.getElementById('nav-context-count')?.textContent === '1'"));
+      await click(cdp, "#context-toggle");
+      await waitFor(() => cdp.evaluate("document.getElementById('app-shell')?.classList.contains('context-panel-collapsed') && document.getElementById('context-toggle')?.getAttribute('aria-expanded') === 'false'"));
+      await click(cdp, "#nav-context");
+      await waitFor(() => cdp.evaluate("!document.getElementById('app-shell')?.classList.contains('context-panel-collapsed') && document.getElementById('context-toggle')?.getAttribute('aria-expanded') === 'true'"));
+      await click(cdp, "#context-clear-selection");
+      await noBrowserErrorsSince(cdp, start, "模式切換／分頁／上下文常駐側欄");
+    });
+
+    await check(`${label} 列表與表格維持一致操作群組並呼叫 library API`, async () => {
+      const start = browserEvents.length;
+      await setSearchMode(cdp, "all-terms");
+      await inputAndSearch(cdp, "private node");
+      await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
+      const listActions = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        return row ? {
+          labels: Array.from(row.querySelectorAll(".document-actions button")).map(node => node.textContent || ""),
+          actions: Array.from(row.querySelectorAll(".document-actions button[data-action]")).map(node => node.dataset.action),
+          groupClass: row.querySelector(".document-actions")?.className || "",
+        } : null;
+      })()`);
+      const expectedLabels = ["複製路徑", "複製檔名", "開啟", "顯示所在位置", "Pin", "加入分類", "加入上下文"];
+      expect(listActions && expectedLabels.every(value => listActions.labels.includes(value)), "列表結果遺失一致快捷操作。");
+      expect(listActions?.actions.join(",") === "open,reveal,pin,group,context" && listActions.groupClass.includes("document-actions"), "列表 action data contract 不符。");
+      const clickedLibraryButtons = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+        const pin = row?.querySelector('button[data-action="pin"]');
+        const group = row?.querySelector('button[data-action="group"]');
+        if (pin instanceof HTMLElement) pin.click();
+        if (group instanceof HTMLElement) group.click();
+        return { pin: Boolean(pin), group: Boolean(group) };
+      })()`);
+      expect(clickedLibraryButtons?.pin && clickedLibraryButtons?.group, `列表沒有可點擊的 Pin／分類按鈕：${JSON.stringify(clickedLibraryButtons)}`);
+      try {
+        await waitFor(() => cdp.evaluate("window.__uiSmoke.libraryActions.length === 2"), 5_000);
+      } catch (error) {
+        const libraryDebug = await cdp.evaluate(`(() => {
+          const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
+          return {
+            actions: window.__uiSmoke.libraryActions,
+            toast: document.getElementById("toast")?.textContent || "",
+            path: row?.querySelector(".document-path")?.title || "",
+            buttons: Array.from(row?.querySelectorAll(".document-actions button") || []).map(node => ({ text: node.textContent || "", action: node.dataset.action || "" })),
+          };
+        })()`);
+        throw new Error(`${errorText(error)}；library debug=${JSON.stringify(libraryDebug)}`);
+      }
+      const libraryActions = await cdp.evaluate("window.__uiSmoke.libraryActions");
+      expect(libraryActions[0].path === "/api/library/pins" && libraryActions[0].method === "POST" && libraryActions[0].body?.path === fixture.multiPath && libraryActions[0].body?.pinned === true, "Pin 沒有送出預期 library payload。");
+      expect(libraryActions[1].path === "/api/library/groups" && libraryActions[1].method === "POST" && libraryActions[1].body?.path === fixture.multiPath && !Object.prototype.hasOwnProperty.call(libraryActions[1].body, "pinned"), "分類沒有送出預期 library payload。");
+      await click(cdp, "#view-table");
+      await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
+      const tableActions = await cdp.evaluate(`(() => {
+        const row = Array.from(document.querySelectorAll("#document-table-body tr")).find(node => node.querySelector(".table-title")?.textContent === "multi-passage-lines.txt");
+        if (!row) return null;
+        const cells = Array.from(row.children);
+        const actionCell = cells.at(-1);
+        const checkCell = cells[0];
+        return {
+          cellCount: cells.length,
+          headerCount: document.querySelectorAll(".documents-table thead th").length,
+          labels: Array.from(actionCell?.querySelectorAll(".document-actions button") || []).map(node => node.textContent || ""),
+          actionCellClass: actionCell?.className || "",
+          titleCopyButtons: row.querySelectorAll("td:nth-child(2) .copy-control").length,
+          checkText: (checkCell?.textContent || "").trim(),
+          hasStandaloneDot: Array.from(checkCell?.childNodes || []).some(node => node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim() === "."),
+        };
+      })()`);
+      expect(tableActions?.cellCount === 7 && tableActions.headerCount === 7, "表格結果沒有獨立七欄操作結構。");
+      expect(tableActions.labels.length === expectedLabels.length && expectedLabels.every(value => tableActions.labels.includes(value)), "表格操作群組與列表不一致。");
+      expect(tableActions.titleCopyButtons === 0 && tableActions.actionCellClass.includes("document-actions-cell") && !tableActions.checkText && !tableActions.hasStandaloneDot, "表格標題欄或勾選欄仍有擁擠／多餘句點。");
+      await click(cdp, "#view-list");
+      await waitFor(() => visible(cdp, "#document-list"));
+      await noBrowserErrorsSince(cdp, start, "列表／表格快捷操作");
     });
 
     await check(`${label} 搜尋零結果顯示排除提示與檢查輸入欄`, async () => {

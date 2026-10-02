@@ -96,7 +96,7 @@ test("0.37.0 desktop workbench keeps the shell self-contained and safe", () => {
   assert.match(html, /--sidebar-width: 246px/u);
   for (const control of ["roots-refresh-folder", "root-refresh-action", "search-empty-explain-form", "search-empty-explain-path", "search-empty-explain-button",
     "root-exclusion-preview", "settings-exclusion-policy"]) assert.match(html, new RegExp(control, "u"));
-  for (const endpoint of ["/api/state", "/api/index-status", "/api/exclusions", "/api/explain", "/api/select-folder", "/api/search", "/api/files", "/api/document-action", "/api/preview"]) assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
+  for (const endpoint of ["/api/state", "/api/index-status", "/api/exclusions", "/api/explain", "/api/select-folder", "/api/search", "/api/files", "/api/document-action"]) assert.match(html, new RegExp(endpoint.replace("/", "\\/"), "u"));
   assert.match(html, /可能有位置依預設排除規則不索引；請在下方輸入檔案路徑檢查/u);
   assert.doesNotMatch(html, /可執行 seekah explain|\/explain <路徑>/u);
   assert.match(html, /dataTransfer\.files/u);
@@ -114,8 +114,9 @@ test("0.40.0 search results are a search-engine style list without a detail page
   // SPEC §57：沒有明細頁與預覽紙；標題直接開啟原檔，次要連結為顯示位置與上下文。
   assert.doesNotMatch(html, /dataset\.page = "detail"|detail-preview|preview-paper|openDetail/u);
   assert.ok(html.includes(`button(name, "document-title", event => openDocumentTitle(item, event))`));
-  assert.ok(html.includes(`button("顯示所在位置", "link-action", () => void documentAction(item, "reveal"))`));
-  assert.ok(html.includes(`"加入上下文", "link-action"`));
+  for (const action of ["顯示所在位置", "Pin", "加入分類", "加入上下文"]) assert.match(html, new RegExp(action, "u"));
+  assert.match(html, /result-action/u);
+  assert.doesNotMatch(html, /link-action/u);
   assert.ok(html.includes("檔名符合"));
   assert.ok(html.includes("-webkit-line-clamp: 2"));
   assert.doesNotMatch(html, /file-visual|reason-badge|document-meta|row-check/u);
