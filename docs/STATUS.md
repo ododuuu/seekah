@@ -1,10 +1,10 @@
 # 專案狀態
 
-最後更新：2026-10-03（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；合併後 main 994c920 的 build、npm test、ui-smoke、search-diff 已實跑）
+最後更新：2026-10-02（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；合併後 main 994c920 的 build、npm test、ui-smoke、search-diff 已實跑）
 
 ## 目前狀態
 
-- **2026-10-03 0.48.0（`release/0.48.0`）**：`feat/library-48`、`feat/codex-session-48`、`feat/ui-context-48` 與兩條使用手冊文件線已合併；本次 release 只更新 package／文件，不修改 `src/` 與 `test/`。
+- **2026-10-02 0.48.0（`release/0.48.0`）**：`feat/library-48`、`feat/codex-session-48`、`feat/ui-context-48` 與兩條使用手冊文件線已合併；本次 release 只更新 package／文件，不修改 `src/` 與 `test/`。
   - §95～§97／D127～D129：文件庫提供最近、釘選、分類與已存搜尋，獨立保存路徑與 stable reference metadata，不保存文件內容。
   - §98～§99／D130～D134：Codex rollout 唯讀 parser、Reference Set、loopback API 與安全呈現；不公開 conversation content，不把 Codex 當成索引來源。
   - §94／D136、§100／D135：列表／表格共同操作列、表格「更多」選單、寬畫面延展，以及工作台與 Codex 共用 token session 的索引上下文；右側欄只顯示絕對路徑。
