@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import { lstatSync as lstatSyncFs } from "node:fs";
+import { lstatSync as lstatSyncFs, realpathSync } from "node:fs";
 import path from "node:path";
 import { loadIgnoreRules, loadIgnoreRulesSync, type IgnoreRules } from "./ignore.js";
 import { canonicalizeRootInput, coversPath, parseFsPath, samePath, runtimePathPlatform, type PathPlatform } from "./root-plan.js";
@@ -145,41 +145,121 @@ const GENERIC_BY_SEGMENT: Record<string, string> = {
 
 const RULES_BY_ID = new Map([...GENERIC_RULES, ...SYSTEM_RULES, ...VOLUME_RULES].map(rule => [rule.id, rule]));
 
-function canonicalRoot(root: string, platform: PathPlatform): string {
-  return platform === "win32" ? canonicalizeRootInput(root, platform).path : root;
+export type DefaultExclusionPathResolver = (value: string) => string;
+
+export interface DefaultExclusionOptions {
+  resolvePath?: DefaultExclusionPathResolver;
 }
 
-export function isLocalWindowsVolumeRoot(root: string, platform: PathPlatform = runtimePathPlatform()): boolean {
+const nativeWindowsPathResolver: DefaultExclusionPathResolver = value => realpathSync.native(value);
+const rootResolutionCache = new Map<string, string>();
+const ROOT_RESOLUTION_CACHE_LIMIT = 64;
+
+function stripExtendedWindowsPrefix(value: string): string {
+  if (/^\\\\\?\\UNC\\/iu.test(value)) return `\\\\${value.slice(8)}`;
+  if (/^\\\\\?\\/u.test(value)) return value.slice(4);
+  return value;
+}
+
+function canonicalResolvedWindowsPath(value: string): string {
+  return canonicalizeRootInput(stripExtendedWindowsPrefix(value), "win32").path;
+}
+
+function resolveWindowsPath(input: string, resolver: DefaultExclusionPathResolver): string {
+  const canonical = canonicalizeRootInput(input, "win32").path;
+  let current = canonical;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = canonicalResolvedWindowsPath(resolver(current));
+      return suffix.length ? path.win32.join(resolved, ...suffix.reverse()) : resolved;
+    } catch {
+      const parent = path.win32.dirname(current);
+      if (parent === current) return canonical;
+      const name = path.win32.basename(current);
+      if (name) suffix.unshift(name);
+      current = parent;
+    }
+  }
+}
+
+function hasShortWindowsSegment(value: string): boolean {
+  return /(?:^|\\)[^\\]*~[0-9](?:\\|$)/u.test(value);
+}
+
+function canonicalRoot(root: string, platform: PathPlatform, options: DefaultExclusionOptions = {}): string {
+  if (platform !== "win32") return root;
+  const canonical = canonicalizeRootInput(root, platform).path;
+  if (options.resolvePath) return resolveWindowsPath(canonical, options.resolvePath);
+  const cached = rootResolutionCache.get(canonical);
+  if (cached) return cached;
+  const resolved = resolveWindowsPath(canonical, nativeWindowsPathResolver);
+  rootResolutionCache.set(canonical, resolved);
+  if (rootResolutionCache.size > ROOT_RESOLUTION_CACHE_LIMIT) {
+    rootResolutionCache.delete(rootResolutionCache.keys().next().value!);
+  }
+  return resolved;
+}
+
+function canonicalPath(absPath: string, platform: PathPlatform, options: DefaultExclusionOptions = {}): string {
+  if (platform !== "win32") return absPath;
+  const canonical = canonicalResolvedWindowsPath(absPath);
+  if (options.resolvePath || hasShortWindowsSegment(canonical)) {
+    return resolveWindowsPath(canonical, options.resolvePath ?? nativeWindowsPathResolver);
+  }
+  return canonical;
+}
+
+export function isLocalWindowsVolumeRoot(
+  root: string,
+  platform: PathPlatform = runtimePathPlatform(),
+  options: DefaultExclusionOptions = {},
+): boolean {
   if (platform !== "win32") return false;
   try {
-    const parsed = parseFsPath(canonicalRoot(root, platform), platform);
+    const parsed = parseFsPath(canonicalRoot(root, platform, options), platform);
     return parsed.drive !== null && parsed.parts.length === 0;
   } catch {
     return false;
   }
 }
 
-function isWindowsVolumeRoot(root: string, platform: PathPlatform): boolean {
+function isWindowsVolumeRoot(root: string, platform: PathPlatform, options: DefaultExclusionOptions = {}): boolean {
   if (platform !== "win32") return false;
   try {
-    const parsed = parseFsPath(canonicalRoot(root, platform), platform);
+    const parsed = parseFsPath(canonicalRoot(root, platform, options), platform);
     return parsed.parts.length === 0 && (parsed.drive !== null || parsed.uncHost !== null);
   } catch {
     return false;
   }
 }
 
-function relativeParts(root: string, absPath: string, platform: PathPlatform): string[] | undefined {
-  const normalizedRoot = canonicalRoot(root, platform);
-  if (!coversPath(normalizedRoot, absPath, platform) || samePath(normalizedRoot, absPath, platform)) return undefined;
-  try {
-    const rootParsed = parseFsPath(normalizedRoot, platform);
-    const pathParsed = parseFsPath(absPath, platform);
-    if (rootParsed.drive !== pathParsed.drive || rootParsed.uncHost !== pathParsed.uncHost || rootParsed.uncShare !== pathParsed.uncShare) return undefined;
-    return pathParsed.parts.slice(rootParsed.parts.length);
-  } catch {
+function relativeParts(
+  root: string,
+  absPath: string,
+  platform: PathPlatform,
+  options: DefaultExclusionOptions = {},
+): string[] | undefined {
+  const lexicalRoot = canonicalizeRootInput(root, platform).path;
+  const lexicalPath = platform === "win32" ? canonicalResolvedWindowsPath(absPath) : absPath;
+  if (samePath(lexicalRoot, lexicalPath, platform)) return undefined;
+  const normalizedRoot = canonicalRoot(root, platform, options);
+  const normalizedPath = canonicalPath(absPath, platform, options);
+  let rootParsed: ReturnType<typeof parseFsPath>;
+  let pathParsed: ReturnType<typeof parseFsPath>;
+  if (coversPath(normalizedRoot, normalizedPath, platform)) {
+    rootParsed = parseFsPath(normalizedRoot, platform);
+    pathParsed = parseFsPath(normalizedPath, platform);
+  } else if (platform === "win32" && coversPath(lexicalRoot, lexicalPath, platform)) {
+    rootParsed = parseFsPath(lexicalRoot, platform);
+    pathParsed = parseFsPath(lexicalPath, platform);
+  } else {
     return undefined;
   }
+  if (rootParsed.drive !== pathParsed.drive || rootParsed.uncHost !== pathParsed.uncHost || rootParsed.uncShare !== pathParsed.uncShare) {
+    return undefined;
+  }
+  return pathParsed.parts.slice(rootParsed.parts.length);
 }
 
 function lower(value: string, platform: PathPlatform): string {
@@ -207,10 +287,14 @@ function notExcluded(): ExclusionExplanation {
   return { excluded: false, source: "not-excluded", ruleId: null, matchedRule: null, matchedPath: null, base: null };
 }
 
-export function listDefaultExclusions(root: string, platform: PathPlatform = runtimePathPlatform()): DefaultExclusionRule[] {
+export function listDefaultExclusions(
+  root: string,
+  platform: PathPlatform = runtimePathPlatform(),
+  options: DefaultExclusionOptions = {},
+): DefaultExclusionRule[] {
   const rules = [...GENERIC_RULES];
-  if (isWindowsVolumeRoot(root, platform)) rules.push(...SYSTEM_RULES);
-  if (isLocalWindowsVolumeRoot(root, platform)) rules.push(...VOLUME_RULES);
+  if (isWindowsVolumeRoot(root, platform, options)) rules.push(...SYSTEM_RULES);
+  if (isLocalWindowsVolumeRoot(root, platform, options)) rules.push(...VOLUME_RULES);
   return rules.map(rule => ({ ...rule }));
 }
 
@@ -219,12 +303,13 @@ export function matchDefaultExclusion(
   absPath: string,
   isDirectory: boolean | undefined,
   platform: PathPlatform = runtimePathPlatform(),
+  options: DefaultExclusionOptions = {},
 ): ExclusionExplanation {
-  const parts = relativeParts(root, absPath, platform);
+  const parts = relativeParts(root, absPath, platform, options);
   if (!parts) return notExcluded();
   const normalizedParts = parts.map(part => lower(part, platform));
-  const volume = isLocalWindowsVolumeRoot(root, platform);
-  const volumeRoot = isWindowsVolumeRoot(root, platform);
+  const volume = isLocalWindowsVolumeRoot(root, platform, options);
+  const volumeRoot = isWindowsVolumeRoot(root, platform, options);
   for (let index = 0; index < parts.length; index++) {
     const leaf = index === parts.length - 1;
     const segment = normalizedParts[index]!;
@@ -306,6 +391,7 @@ export function matchExclusion(
   databasePath?: string,
   isLink = false,
   platform: PathPlatform = runtimePathPlatform(),
+  options: DefaultExclusionOptions = {},
 ): ExclusionExplanation {
   if (databasePath && isIndexArtifact(absPath, databasePath)) {
     return {
@@ -320,7 +406,7 @@ export function matchExclusion(
   if (isLink) {
     return { excluded: true, source: "link", ruleId: "link", matchedRule: null, matchedPath: absPath, base: null };
   }
-  const builtIn = matchDefaultExclusion(root, absPath, isDirectory, platform);
+  const builtIn = matchDefaultExclusion(root, absPath, isDirectory, platform, options);
   if (builtIn.excluded) return builtIn;
   return matchUserExclusion(root, absPath, isDirectory, scopes, platform);
 }

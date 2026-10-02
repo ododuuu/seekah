@@ -3135,6 +3135,93 @@ docsearch doctor
 - `test/m96.test.ts` 必須以隔離合成索引與 synthetic Codex rollout 驗證 API token／Origin、stable reference 驗證、跨 reload／跨頁 GET、20 份上限、加入／移除／清除及反向契約；移除共用 API 或其中一端操作接線時，反向斷言必須失敗。
 - `scripts/ui-smoke.mjs` 必須在合成資料中實際由工作台進入 Codex 頁，對已索引 reference 加入上下文，再回到工作台確認右側欄、結果按鈕與計數同步；另驗證移除與 reload 後狀態，並檢查瀏覽器沒有 exception／console error。測試結束必須停止 Workbench、Chrome 及所有合成程序。
 
+## 101. `compact` 的 SQLite client 錯誤分類
+
+依 D137。`compact` 與 `main` 其餘操作一樣，必須在 CLI 邊界將可分類的索引鎖競爭與回復狀態轉成固定 client message；不得因命令分支位於既有主流程 `try`／`catch` 外而把 SQLite 原文輸出給使用者。
+
+### 101.1 固定錯誤邊界
+
+- `compact` 在開啟 `IndexStore`、取得 writer lock、執行壓縮或其相關索引寫入時遇到 `IndexBusyError`／SQLite busy／locked，必須使用共用 `classifyIndexClientError`／`describeIndexClientError` 分類，回傳退出碼 3，並輸出「INDEX_BUSY：索引目前由另一個程序使用，請稍後重試。」。
+- `compact` 遇到既有索引回復類 extended code 776、1288 或 1294 時，沿用共用 `INDEX_RECOVERY_REQUIRED` 固定訊息與退出碼 3；不得刪除 journal、WAL 或 SHM。
+- busy／recovery 的輸出不得包含 `database is locked`、SQLite extended code 或其他 SQLite 原文。非 busy／recovery 錯誤不得被誤分類為 `INDEX_BUSY`，也不得因本節新增的 catch 被靜默吞掉。
+
+### 101.2 驗收
+
+- `test/m97.test.ts` 使用暫存 `LOCALDOCSEARCH_DATA_DIR`、合成索引與另一個 SQLite 連線持有主庫鎖，執行編譯後 CLI `compact`；必須得到退出碼 3、固定 `INDEX_BUSY` 且無 SQLite 原文。
+- 反向驗證移除 compact 的分類接線時，m97 必須回到未處理例外／非固定訊息；還原後測試通過。測試不得讀取真實使用者資料或真實索引。
+
+## 102. 背景更新錯誤記錄與工作狀態清理降級
+
+依 D138。背景更新的 SQLite 回復／鎖競爭錯誤必須在 live status 邊界使用既有固定分類；工作狀態孤兒清理是 best-effort 整理，不能讓工作引擎因清理庫暫時鎖住或損壞而無法啟動。
+
+### 102.1 錯誤記錄分類
+
+- `LiveUpdateEngine.rememberError` 收到索引錯誤物件時，必須先使用共用 `classifyIndexClientError`／`describeIndexClientError`；recovery 類記為固定 `INDEX_RECOVERY_REQUIRED` 訊息，busy／locked 類記為固定 `INDEX_BUSY` 訊息。
+- 固定分類的 recent error、log 與 status 不得包含 SQLite 原文。非索引分類錯誤保留原有錯誤碼與診斷語意，不得被改成 busy 或 recovery。
+- 主索引同步／校正失敗仍須保留 `syncFailed`、待辦或校正狀態的既有失敗語意；固定訊息只改顯示邊界，不得把失敗報成成功。
+
+### 102.2 啟動時孤兒清理失敗
+
+- `LiveUpdateEngine` 建立時先取得目前 `store.roots()`，再嘗試 `cleanupOrphanRoots`。清理失敗時必須記錄可操作的錯誤、將 engine 降級但繼續建立 watcher／consumer；log 與 recent error 必須說明孤兒工作狀態可能仍保留、待辦／最舊時間可能暫時受污染，下一次 engine 啟動會再試。
+- 清理失敗不得刪除來源檔案、索引文件或工作狀態庫中未確認的列；不得以清空 work DB 或把孤兒 root 改掛到現有 root 來假裝完成清理。
+- catch 只涵蓋 `cleanupOrphanRoots` 的 best-effort 整理；取得現有 roots、主索引開啟／完整性與後續同步的資料完整性錯誤不得被這個降級路徑吞掉。
+
+### 102.3 驗收
+
+- `test/m98.test.ts` 使用暫存合成索引，注入 recovery 錯誤驗證 live recent error 不含 SQLite 原文且使用固定 `INDEX_RECOVERY_REQUIRED`；另注入 work DB cleanup failure，驗證 engine 仍可建立、log 說明孤兒狀態後果，且固定分類不洩漏原文。
+- 反向驗證移除 `rememberError` 分類或 cleanup startup catch 時，m98 對應斷言必須失敗；還原後通過。測試不得讀取真實使用者資料或真實索引。
+- 執行 `npm run build`、m97／m98 聚焦測試與完整 `npm test`；本節不改搜尋語意、前端介面、package 版本或資料目錄相容性。
+## 103. 工作台顯示索引儲存容量與 SQLite sidecar
+
+依 D139。工作台的 `GET /api/index-status` 必須在不讀取文件內容、不改變索引狀態的前提下，顯示目前索引產物的檔案容量；計算必須沿用 CLI 已使用的 `IndexStore.storageFootprint()`／`collectIndexStorage()`，不得在工作台另寫一套檔案清單或總量演算法。
+
+### 103.1 狀態資料契約
+
+- `state === "available"` 的 `/api/index-status` 回傳 `storage`：`files`、`totalBytes`、`incomplete`、`approximate`。`files` 必須包含主庫、主庫 `-wal`、主庫 `-shm`、主庫 `-journal` 及既有 writer／live／work SQLite 檔案與 sidecar；不存在的檔案保留 `missing: true`，不把缺檔當成錯誤。
+- `files[*].bytes` 是目前檔案長度，不是檔案系統配置容量，也不包含來源文件大小；`totalBytes` 在所有已列檔案可讀時為現有檔案長度總和，任一檔案讀取未知時為 `null` 且 `incomplete: true`。
+- `approximate: true` 表示目前有 WAL／SHM／journal 等 live sidecar；這只描述容量會隨 SQLite checkpoint／連線變動，不得把它顯示成精確的穩定磁碟配額。
+- `state === "missing"` 或 `"unavailable"` 時 `storage` 為 `null`。其他既有 `index-status` 欄位、CLI `status` 輸出、MCP `index_status` 欄位語意不變。
+
+### 103.2 工作台呈現與邊界
+
+- 設定頁必須有唯讀「索引容量」區塊，至少列出可讀的主庫及已存在 sidecar 的 bytes／MiB、總計及不完整／可變動提示；不得要求使用者輸入容量，也不得用前端重新掃描資料目錄。
+- 容量區塊只顯示索引檔案 metadata，不顯示來源文件正文、snippet、解析錯誤原文或外部服務資料。既有 token、Host／Origin、no-store 與本機資料邊界維持不變。
+
+### 103.3 合成驗收與反向驗證
+
+- `test/m99.test.ts` 必須在暫存合成索引以注入 stat fixture 驗證 `/api/index-status.storage` 的主庫、`-wal`、`-shm`、總量、`approximate` 與設定頁容量入口；移除 API 接線或容量 UI 接線時，正向／反向斷言必須失敗。
+- 驗收只能使用暫存資料與合成 sidecar metadata，不得讀取 `%LOCALAPPDATA%\\LocalDocSearch*`、真實使用者索引或宣稱公司 Windows 驗收。
+
+## 104. stdio MCP `explain_path` 的啟動端信任邊界
+
+依 D140。MCP 以本機 stdio 子程序運作；程序由啟動它的 MCP client／host 擁有並管理，與受瀏覽器 token 保護的 Workbench loopback HTTP server 是不同傳輸邊界。
+
+### 104.1 相容的最小方案
+
+- `explain_path` 維持既有 stdio tool 介面，不要求或猜測 Workbench 的 `X-LocalDocSearch-Token`。在 stdio JSON-RPC 中加入 Workbench token 會破壞既有 MCP client 啟動契約，且沒有可驗證的 Workbench session 可供 server 共用。
+- tool 只接受一個被查詢路徑，回傳該路徑的目前 state、最具體已登錄根目錄、排除來源／規則／命中祖先或目前文件狀態；根外結果不得以 `exists`、`lstat` 或索引查詢洩漏存在資訊。
+- 回應不得列出所有根目錄、其他根目錄的文件／規則／內容、文件正文、snippet、解析錯誤原文或任意讀檔結果。`root`／`matchedPath` 僅為該次被查詢路徑的必要解釋 metadata。
+- MCP server 仍維持唯讀；若未來要讓不受信任的遠端 client 連入，必須另立傳輸、認證與資料邊界規格，不把 stdio 信任模型延伸成 LAN 或 HTTP 暴露。
+
+### 104.2 合成驗收與反向驗證
+
+- `test/m100.test.ts` 必須以兩個合成根目錄啟動 stdio MCP，在不提供 Workbench token 的情況呼叫 `explain_path`，驗證只回傳被查詢根／路徑的排除結果，且不出現另一根目錄、文件內容或 Workbench token 要求；若新增根目錄清單或改成 token gate，測試必須失敗。
+- 測試不得讀取真實索引、Codex 或使用者資料；測試程序結束必須關閉 MCP child process，且不殘留 daemon。
+
+## 105. Windows 8.3 與 subst 路徑的預設排除正規化
+
+依 D141。Windows 預設排除規則在比較根目錄與候選路徑前，必須使用 `realpathSync.native`／等價的 `GetLongPathName` 行為取得實際長路徑；對尚不存在的 leaf，至少解析最近存在的祖先並保留剩餘相對段。POSIX 行為不變。
+
+### 105.1 比較與 volume root
+
+- `PROGRA~1` 等 8.3 段在實際存在時必須先正規化為長名稱，再套用既有 `Program Files/**`、`Program Files (x86)/**`、`ProgramData/**` 等 volume-default 規則；規則 ID、排除來源與窄根目錄行為不變。
+- `subst` 磁碟機根目錄必須以其 realpath target 判斷是否為 volume root。若 target 是 `C:\\Mounted\\Docs` 等帶有路徑段的目錄，該 subst alias 不是 volume root，不得套用整顆本機磁碟的 system／volume-default 規則；一般 `$Recycle.Bin` 等既有規則仍依其明確 scope 判斷。
+- 正規化只用於排除匹配與 volume 判斷，不改寫已登錄根目錄、文件 canonical path、索引資料或使用者來源檔名。synthetic 測試可注入 realpath resolver 模擬 subst，不得真的建立或修改 Windows subst 磁碟機。
+
+### 105.2 合成驗收與反向驗證
+
+- `test/m101.test.ts` 必須以 synthetic realpath resolver 驗證 `C:\\PROGRA~1` 命中 `volume-default:program-files`、subst alias 不列出 volume-default 規則且 `S:\\Windows\\...` 不被誤判成 volume root；移除 realpath 正規化時，正向／反向斷言必須失敗。
+- 測試只能使用字串與暫存合成 fixture，不得執行 `subst`、讀取真實 Windows volume 或宣稱公司 Windows 驗收。
 ## 108. CLI 狀態 JSON 契約
 
 依 D144。`status` 與 `autoupdate status` 增加給腳本使用的 `--json`，不改變未指定旗標時的人類可讀輸出、行順序、文字或退出碼語意。JSON 只在 stdout 輸出一個完整文件，不混入「索引位置」等前導文字；錯誤時也使用同一 schemaVersion 的固定錯誤物件，不把 SQLite 原文當成腳本契約。

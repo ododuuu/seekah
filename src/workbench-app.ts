@@ -977,6 +977,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
 .autoupdate-summary-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; font-size: 11px; }
 .autoupdate-summary-row span:first-child { color: var(--muted); }
 .autoupdate-summary-row span:last-child { overflow-wrap: anywhere; }
+.index-storage-summary { display: grid; gap: 5px; padding-top: 3px; }
+.index-storage-row { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 8px; font-size: 11px; }
+.index-storage-row span:first-child { color: var(--muted); }
+.index-storage-row span:last-child { overflow-wrap: anywhere; }
+.index-storage-note { margin: 7px 0 0; color: var(--muted); font-size: 11px; }
 .autoupdate-status { margin: 0; }
 .delete-detail { padding: 12px; border: 1px solid var(--line); background: var(--sidebar); white-space: pre-wrap; overflow-wrap: anywhere; }
 .delete-warning { margin-top: 12px; color: var(--danger); font-weight: 700; }
@@ -3205,6 +3210,31 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     renderWorkbenchOpenBanner();
     renderStartupCatchupBanner();
   }
+  function renderIndexStorage() {
+    const summary = $("settings-index-storage-summary");
+    if (!summary) return;
+    summary.replaceChildren();
+    const storage = state.indexStatus && state.indexStatus.storage;
+    if (!storage) {
+      summary.append(make("p", "settings-help", "索引容量目前無法讀取。"));
+      return;
+    }
+    const row = (label, value) => {
+      const item = make("div", "index-storage-row", "");
+      item.append(make("span", "", label), make("span", "", value));
+      summary.append(item);
+    };
+    const bytesText = bytes => {
+      if (!Number.isFinite(bytes)) return "未知";
+      return bytes.toLocaleString() + " bytes（" + (bytes / (1024 * 1024)).toFixed(2) + " MiB）";
+    };
+    row("總計", storage.totalBytes === null ? "無法完整計算" : bytesText(storage.totalBytes));
+    const files = Array.isArray(storage.files) ? storage.files.filter(file => !file.missing) : [];
+    for (const file of files) row(file.label, file.unknown ? "無法讀取" : bytesText(file.bytes));
+    if (!files.length) row("檔案", "未找到索引檔案");
+    if (storage.approximate) summary.append(make("p", "index-storage-note", "目前包含 WAL／SHM／journal 等 SQLite 暫存檔；容量會隨連線與 checkpoint 變動。"));
+    if (storage.incomplete) summary.append(make("p", "index-storage-note", "部分索引檔案無法讀取，總計不完整。"));
+  }
   function syncAutoupdateControls() {
     const indexStatus = state.indexStatus || {};
     const startup = indexStatus.autoupdateStartup || {};
@@ -3312,6 +3342,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderRoots();
       renderTrash();
       renderAutoupdateSummary();
+      renderIndexStorage();
       if (state.route === "documents") renderDocuments();
       if (state.route === "temporary") renderTemporary();
       if (!state.indexNotice && state.indexStatus.indexing && state.indexStatus.indexing.state === "failed") setNotice(state.indexStatus.indexing.message, "error");
@@ -3327,6 +3358,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       renderTrash();
       state.workbenchOpenStatusStale = true;
       renderAutoupdateSummary();
+      renderIndexStorage();
     } finally {
       state.statusRefreshBusy = false;
     }
@@ -4013,13 +4045,19 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const reconcileRow = make("div", "settings-number-row", ""); const reconcileLabel = make("label", "", ""); reconcileLabel.htmlFor = "settings-autoupdate-reconcile"; reconcileLabel.append(make("strong", "", "完整校正間隔"), make("small", "", "小時（0.25～24）")); const reconcileField = document.createElement("input"); reconcileField.type = "number"; reconcileField.id = "settings-autoupdate-reconcile"; reconcileField.min = "0.25"; reconcileField.max = "24"; reconcileField.step = "0.25"; reconcileField.addEventListener("change", () => void saveAutoupdateParameters()); reconcileRow.append(reconcileLabel, reconcileField); autoupdateSettings.append(reconcileRow);
     autoupdateSection.append(autoupdateLabel, startupLabel, startupHelp, workbenchOpenModeSection, startupCatchupModeSection, autoupdateSettings);
     const totalLabelEl = settingSwitch("settings-total-exact", "settings-total-exact-label", "精確計算總筆數（預設快速：超過 500 筆顯示「500 筆以上」；精確模式在常見詞上會晚幾秒補上總數）", enabled => saveTotalMode(enabled));
+    const indexStorageSection = make("section", "settings-section", "");
+    indexStorageSection.id = "settings-index-storage";
+    indexStorageSection.append(make("h2", "", "索引容量"), make("p", "settings-help", "沿用 CLI 的索引檔案容量計算，包含主庫與 SQLite 的 WAL／SHM／journal；只顯示檔案 metadata，不讀取文件內容。"));
+    const indexStorageSummary = make("div", "index-storage-summary", "");
+    indexStorageSummary.id = "settings-index-storage-summary";
+    indexStorageSection.append(indexStorageSummary);
     const exclusionPolicySection = make("section", "settings-section", "");
     exclusionPolicySection.id = "settings-exclusion-policy";
     exclusionPolicySection.append(make("h2", "", "哪些位置預設不索引"), make("p", "settings-help", "Seekah 會依目前根目錄與平台規則略過系統資料、內部資料與使用者排除規則；規則、逐規則略過計數與清理進度只讀顯示。"));
     const exclusionPolicyList = make("div", "settings-exclusion-policy-list", "");
     exclusionPolicyList.id = "settings-exclusion-policy-list";
     exclusionPolicySection.append(exclusionPolicyList);
-    settingsBody.append(exclusionPolicySection);
+    settingsBody.append(indexStorageSection, exclusionPolicySection);
     settingsBody.append(settingLabel, autoupdateSection, totalLabelEl); const settingsStatus = make("div", "status", ""); settingsStatus.id = "settings-status"; settingsStatus.setAttribute("role", "status"); settingsStatus.setAttribute("aria-live", "polite"); settingsBody.append(settingsStatus); const settingsActions = make("div", "dialog-actions", ""); settingsActions.append(button("完成", "primary", () => settingsDialog.close())); settingsDialog.append(settingsHead, settingsBody, settingsActions); app.append(settingsDialog);
 
     const deleteDialog = document.createElement("dialog"); deleteDialog.id = "delete-dialog"; deleteDialog.className = "delete-dialog"; deleteDialog.setAttribute("aria-labelledby", "delete-title"); const deleteHead = make("div", "dialog-head", ""); const deleteHeading = make("div", "", ""); deleteHeading.append(make("h2", "", "確認操作"), make("p", "", "")); deleteHeading.firstChild.id = "delete-title"; deleteHeading.lastChild.id = "delete-message"; const deleteClose = iconButton("×", "取消刪除操作", () => deleteDialog.close()); deleteHead.append(deleteHeading, deleteClose); const deleteBody = make("div", "dialog-body", ""); const deleteDetail = make("div", "delete-detail", ""); deleteDetail.id = "delete-detail"; const deleteWarning = make("div", "delete-warning", ""); deleteWarning.id = "delete-warning"; deleteBody.append(deleteDetail, deleteWarning); const deleteActions = make("div", "dialog-actions", ""); const dontRemindLabel = make("label", "setting-check", ""); dontRemindLabel.id = "delete-dont-remind-row"; const dontRemind = document.createElement("input"); dontRemind.type = "checkbox"; dontRemind.id = "delete-dont-remind"; dontRemindLabel.append(dontRemind, make("span", "", "下次不再提醒（可在設定重新開啟）")); const deleteCancel = button("取消", "", () => deleteDialog.close()); const deleteConfirm = button("確認", "danger-fill", () => { const pending = state.pendingDelete; if (!pending) return; const dont = $("delete-dont-remind").checked; state.pendingDelete = null; deleteDialog.close(); void executeDelete(pending.kind, pending.paths, dont); }); deleteConfirm.id = "delete-confirm"; deleteActions.append(dontRemindLabel, deleteCancel, deleteConfirm); deleteDialog.append(deleteHead, deleteBody, deleteActions); app.append(deleteDialog);
