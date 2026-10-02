@@ -15,6 +15,7 @@ interface Fixture {
   databasePath: string;
   indexedPath: string;
   unindexedPath: string;
+  missingPath: string;
   mcpPath: string;
   privateText: string;
 }
@@ -26,6 +27,7 @@ async function createFixture(): Promise<Fixture> {
   const databasePath = path.join(temp, "data", "index.db");
   const indexedPath = path.join(root, "indexed.md");
   const unindexedPath = path.join(root, "not-indexed.md");
+  const missingPath = path.join(root, "missing-fallback.md");
   const mcpPath = path.join(root, "mcp.md");
   const rollout = path.join(codexHome, "sessions", "2026", "10", "02", "rollout-m95.jsonl");
   const privateText = "m95-private-conversation-content";
@@ -38,11 +40,12 @@ async function createFixture(): Promise<Fixture> {
   const rows = [
     { type: "session_meta", payload: { type: "session_meta", session_id: "m95-session", cwd: root, timestamp: "2026-10-02T10:00:00.000Z" } },
     { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Please inspect " + indexedPath + " " + privateText }] } },
-    { type: "response_item", payload: { type: "function_call", server: "seekah", name: "read_document", arguments: { path: mcpPath, query: privateText } } },
-    { type: "response_item", payload: { type: "function_call", name: "shell_command", command: "type " + unindexedPath } },
+    { type: "response_item", payload: { type: "function_call", namespace: "mcp__localdocsearch__search_documents", name: "search_documents", arguments: { path: mcpPath, query: privateText } } },
+    { type: "response_item", payload: { type: "function_call", name: "shell_command", arguments: { command: "type " + unindexedPath } } },
+    { type: "unknown_event", message: missingPath },
   ];
   await writeFile(rollout, rows.map(row => JSON.stringify(row)).join("\n") + "\n", "utf8");
-  return { temp, codexHome, databasePath, indexedPath, unindexedPath, mcpPath, privateText };
+  return { temp, codexHome, databasePath, indexedPath, unindexedPath, missingPath, mcpPath, privateText };
 }
 
 function requestHeaders(token: string): Record<string, string> {
@@ -72,7 +75,7 @@ test("M95 Codex sessions API 只回傳 metadata、reference 與 Seekah 索引狀
   assert.equal(list.readOnly, true);
   assert.equal(list.sessions.length, 1);
   assert.equal(list.sessions[0]?.id, "m95-session");
-  assert.equal(list.sessions[0]?.referenceCount, 3);
+  assert.equal(list.sessions[0]?.referenceCount, 4);
   assert.equal("references" in (list.sessions[0] ?? {}), false);
   assert.doesNotMatch(JSON.stringify(list), new RegExp(fixture.privateText, "u"));
 
@@ -81,17 +84,21 @@ test("M95 Codex sessions API 只回傳 metadata、reference 與 Seekah 索引狀
   const details = await detailsResponse.json() as {
     readOnly: boolean;
     sessionId: string;
-    references: Array<{ path: string; source: string; indexed: boolean; seekahReference?: string }>;
+    references: Array<{ path: string; source: string; indexed: boolean; display: string; indexedStatus?: string; seekahReference?: string }>;
   };
   assert.equal(details.readOnly, true);
   assert.equal(details.sessionId, "m95-session");
-  assert.equal(details.references.length, 3);
+  assert.equal(details.references.length, 4);
   const indexed = details.references.find(item => item.path === fixture.indexedPath);
   assert.ok(indexed);
   assert.equal(indexed.indexed, true);
   assert.match(indexed.seekahReference ?? "", /^[1-9]\d*-[0-9a-f]{16}$/u);
   assert.equal(details.references.find(item => item.path === fixture.mcpPath)?.source, "seekah-mcp");
   assert.equal(details.references.find(item => item.path === fixture.unindexedPath)?.indexed, false);
+  const missingFallback = details.references.find(item => item.path === fixture.missingPath);
+  assert.ok(missingFallback);
+  assert.equal(missingFallback.display, "low-confidence-missing");
+  assert.equal(missingFallback.indexedStatus, "low-confidence-missing");
   assert.doesNotMatch(JSON.stringify(details), new RegExp(fixture.privateText, "u"));
 
   const missing = await fetch(origin + "/api/codex/sessions/m95-missing/references", { headers: requestHeaders(handle.token) });
@@ -115,6 +122,7 @@ test("M95 Codex 工作階段頁面可由 loopback route 開啟且不含對話內
   assert.doesNotMatch(page, new RegExp(fixture.privateText, "u"));
   assert.match(workbenchHtml("m95-workbench-nonce"), /codex-session-toggle/u);
   assert.match(codexSessionHtml("m95-codex-nonce"), /reference\.sources/u);
+  assert.match(codexSessionHtml("m95-codex-nonce"), /low-confidence-missing/u);
 });
 
 test("M95 reverse 移除 API 索引比對或入口時契約必須失敗", async () => {

@@ -148,7 +148,8 @@ button:focus-visible, a:focus-visible { outline:3px solid #e5ae36; outline-offse
       const pathCell = make("span", "reference-path", reference.path);
       const sources = Array.isArray(reference.sources) && reference.sources.length ? reference.sources.map(sourceLabel).join("、") : sourceLabel(reference.source);
       const sourceCell = make("span", "reference-meta", sources + " · " + text(reference.confidence));
-      const indexCell = make("span", "reference-meta", (reference.indexed ? "已在 Seekah 索引" : "未在 Seekah 索引") + " · " + String(reference.occurrences || 0) + " 次");
+      const indexLabel = reference.indexed ? "已在 Seekah 索引" : reference.display === "low-confidence-missing" ? "低信心：檔案與索引皆不存在" : "未在 Seekah 索引";
+      const indexCell = make("span", "reference-meta", indexLabel + " · " + String(reference.occurrences || 0) + " 次");
       if (reference.seekahReference) indexCell.append(make("div", "mono", reference.seekahReference));
       row.append(pathCell, sourceCell, indexCell); refs.append(row);
     }

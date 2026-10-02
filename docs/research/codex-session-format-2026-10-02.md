@@ -2,41 +2,58 @@
 
 ## 範圍與資料邊界
 
-本文件只記錄已知的 Codex rollout JSONL 結構與合成 fixture 的解析結果，不是任何使用者工作階段的 dump。研究腳本只在暫存目錄建立合成 `sessions/YYYY/MM/DD/rollout-*.jsonl`，沒有讀取真實 `~/.codex`、認證資料、歷史索引、附件或 SQLite 狀態。
+本文件只記錄使用者提供的欄位統計摘要與合成 fixture 設計，不是任何使用者工作階段的 dump。研究沒有讀取真實 `~/.codex`、`%LOCALAPPDATA%\LocalDocSearch*`、認證資料、history、attachment 或 SQLite；產品 parser 也不會以這些位置補資料。
 
-產品解析器採唯讀邊界：只列舉可設定 Codex home 下的 `sessions/`，遞迴讀取檔名符合 `rollout-*.jsonl` 的檔案。`history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔與 SQLite 檔案不是輸入來源；解析器不會為了補資料而開啟這些項目。
+產品解析器採唯讀邊界：只列舉可設定 Codex home 下 `sessions/` 遞迴的 `rollout-*.jsonl`。`history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔與 SQLite 狀態檔不是輸入來源。
 
-## 已知 JSONL 形狀
+## 使用者提供的 schema 摘要
 
-每一行是獨立 JSON object。解析器保留欄位名稱、事件類型計數與必要的工作階段 metadata，不輸出 message、reasoning、command、query、tool result 或其他對話內容。
+外部摘要列出 57 個 rollout、57 個 `session_meta` cwd、57 個 `event_msg/item_completed` cwd 與 57 個 `turn_context` cwd；這些 cwd、workspace root、sandbox root、permission profile path 與 world-state filesystem path 都是執行環境 metadata，不是 Reference Set。
 
-| 結構 | 已知欄位／用途 |
-| --- | --- |
-| 頂層事件 | `type`、`timestamp`、`payload`、`data`、`event`。`payload`／`data`／`event` 可包含事件子類型。 |
-| `session_meta` | `session_id`／`sessionId`、`cwd`、`working_directory`、`timestamp`／`created_at`。`cwd` 只作工作階段 metadata 與絕對路徑比對。 |
-| `response_item` | 子類型常見為 `message`、`reasoning`、`function_call`、`tool_call`、`tool_result`；子類型來自 payload 的 `type`、`event_type` 或 `kind`。 |
-| `message` | `role`、`content`、`input`、`text`、`source`／`origin`。路徑只從文字值抽取，不回傳文字本身。 |
-| 工具事件 | `name`／`tool_name`、`arguments`、`command`、`path`、`file`、`file_path`、`uri`、`result` 等。讀檔、shell／command execution 與工具呼叫只產生事件類型與路徑 metadata。 |
-| `event_msg` | 以 `type` 加 payload 子類型計數；若含 `user_message`／`input_message`，可用於訊息路徑 fallback。 |
-| `turn_context`、`world_state` | 只視為未知或附加事件形狀遞迴檢查；不假設其內部內容，也不把整個 object 回傳。 |
+路徑或事件數量最高的欄位如下；數量是欄位出現次數，不是產品 reference 數：
 
-## 路徑與來源分類
+| rollout 結構 | 欄位 | 摘要數量 | parser 契約 |
+| --- | --- | ---: | --- |
+| `turn_context` | permission profile／sandbox entries 的 `path` | 1210／1210 | 忽略 |
+| `response_item/message(user)` | `payload.content[].text` | 1067 | 只處理 `input_text` plain 與 `input_image` |
+| `event_msg/thread_settings_applied` | permission profile path | 987 | 忽略 |
+| `event_msg/item_completed` | `item.results[].url` | 647 | 工具結果，忽略；HTTP／HTTPS 一律不產生 reference |
+| `turn_context` | `workspace_roots[]` | 611 | 忽略 |
+| `response_item/function_call{shell_command}` | `payload.arguments` | 350 | 只作 `codex-tool` |
+| `response_item/custom_tool_call{exec}` | `payload.input` | 349 | 只作 `codex-tool` |
+| `event_msg/item_completed` | `item.command[]` | 325 | `CommandExecution` 才作 `codex-tool` |
+| `turn_context` | `cwd` | 296 | 忽略 |
+| `event_msg/item_completed` | `item.cwd` | 274 | 忽略；不是 command |
+| `event_msg/item_completed` | `item.content[].text` | 230 | 工具輸出，忽略 |
+| `response_item/message(developer)` | `payload.content[].text` | 184 | 環境注入，忽略 |
+| `response_item/function_call_output` | `payload.output` | 156 | 工具輸出，忽略 |
+| `event_msg/item_completed` | `item.stdout` | 155 | 工具輸出，忽略 |
+| `event_msg/item_completed` | `item.aggregated_output`／`formatted_output` | 111／109 | 工具輸出，忽略 |
+| `event_msg/item_completed` | `item.parsed_cmd[].cmd`／`path` | 51／9 | `CommandExecution` 作 `codex-tool` |
 
-合成事件確認可由下列位置發現絕對路徑：
+實際事件類型包括 `UserMessage`、`AgentMessage`、`Reasoning`、`Plan`、`WebSearch`、`FileChange`、`CommandExecution`、`McpToolCall@...` 等；不能以「任何欄位含 path」取代事件型別判斷。
 
-- `session_meta` 的 `cwd`：記錄工作階段工作目錄。
-- `message.content`、`message.text`、`input`：使用者直接提供的路徑；明確的 Seekah prompt／context 標記可分類為 `seekah-prompt`。
-- 工具事件的 `path`、`file`、`file_path`、`filename`、`uri`、`attachment`／`attachments`：記錄工具或附件引用的絕對路徑；不開啟附件本體。
-- `function_call`／shell／read 相關事件的命令或 arguments：記錄抽取出的絕對路徑，來源分類為 `codex-tool`。
-- MCP 工具名稱或 server/source 欄位含 Seekah／LocalDocSearch 標記時，分類為 `seekah-mcp`；不執行 MCP，也不讀取工具結果。
+`response_item/message(user)` 的 content prefix 統計包括：`input_text:environment_context` 122、`input_text:(plain)` 3593、`input_image` 14、`input_text:turn_aborted` 4、`input_text:recommended_plugins` 18、`input_text:# AGENTS.md` 19。前者的四種標記是 Codex 自動注入；只有 plain `input_text` 與 `input_image` 可作使用者來源。
 
-公開 reference 的來源欄位限定為 `seekah-prompt`、`user-provided`、`seekah-mcp`、`codex-tool`。每一筆 reference 另有 `sources`、`confidence`、`occurrences` 與事件類型清單；與 Seekah 索引比對成功時只加上索引文件 reference、狀態與 canonical path。
+## 事件來源與允許欄位
 
-## 未知格式與安全限制
+| 來源 | 僅允許的實際形狀 | 禁止誤判的欄位 |
+| --- | --- | --- |
+| `user-provided` | `response_item/message`、`role=user`、`content[].type=input_text` 的 plain text；`content[].type=input_image` 的明確檔案 URI/path | `environment_context`、`turn_aborted`、`recommended_plugins`、`# AGENTS.md`、developer／assistant message、environment settings |
+| `seekah-prompt` | `# Seekah 上下文` Markdown 的 `## N. <absolute path>` 行；或 pi context sidebar 的「每行一個 absolute path」清單 | Markdown snippet、文件代碼、查詢、說明文字中的 path |
+| `seekah-mcp` | `McpToolCall` 且 server identity 是 `localdocsearch`（相容別名 `seekah`）；或 function-call namespace `mcp__localdocsearch__...` | `mcp__beeper__...`、任意 `server`／`source`／path 字串含 seekah 的非 MCP 事件 |
+| `codex-tool` | `custom_tool_call{apply_patch}` 的 `payload.input`；`FileChange` 的 path／savedPath／changes key；`CommandExecution` 的 command／parsed_cmd；`function_call{shell_command}` 的 arguments；`custom_tool_call{exec}` 的 input | `stdout`、`aggregated_output`、`formatted_output`、`results[].url`、`custom_tool_call_output`、`function_call_output`、cwd、query、web-search action |
 
-無法辨識事件來源時，解析器仍只抽取絕對路徑，來源標為 `user-provided`、信心為 `low`，並將工作階段標為 `message-path-fallback`。這是保守的 metadata fallback，不代表已理解該事件的語意。
+產品 MCP server 的實際註冊名稱是 `localdocsearch`：`src/host-setup.ts` 的 Codex registration 與 `src/mcp.ts` 的 `McpServer` 皆使用此名稱。真實摘要沒有 Seekah／LocalDocSearch MCP call，因此 real-format fixture 的 `seekah-mcp` 預期為 0。
 
-- 不輸出原始 JSONL、message、reasoning、prompt、query、shell command、工具 arguments 或 result。
-- 不輸出 rollout 檔案的本機檔案位置；工作階段 id 只來自 `session_meta.session_id`，缺少時使用 rollout 檔案路徑的 opaque hash，不公開檔名。
-- 路徑解析支援 Windows drive、UNC、POSIX 與 `file://`；只接受絕對路徑，並以受控上限避免單行或 reference 無界成長。
-- API 與工作台頁面只讀取 parser 的 metadata 結果；不提供送回 Codex、修改 rollout、開啟附件或執行 command 的操作。
+## Seekah prompt 與低信心路徑
+
+目前本機 context Markdown 的既有辨識標記是 `# Seekah 上下文`；parser 只從後續 `## N. <absolute path>` 標題取 path，不掃描片段正文。pi context sidebar 的純清單契約是每行一個 absolute path，不另加 marker，因為整段內容已可由「所有非空行都是 absolute path」辨識。這兩種輸入都分類為 `seekah-prompt`；普通使用者文字仍分類為 `user-provided`。
+
+HTTP／HTTPS URL 永遠不是 absolute file path，parser 不輸出 URL reference。未知事件才允許 `message`／`text` 欄位做 `user-provided`／`low` 的 `message-path-fallback`；這類低信心、未在磁碟且未命中 Seekah 索引的 path 只能作低信心 metadata，不得提升成工具或 Seekah 來源。頁面仍以 confidence／indexed 狀態降級呈現，不開啟來源檔案。
+
+## 合成 fixture 必須覆蓋的負例
+
+fixture 必須同時包含：`turn_context` permission／workspace／cwd、`thread_settings_applied` permission／cwd、`world_state`、session base instructions、developer／assistant message、tool output／result URL、`mcp__beeper`、非 localdocsearch 的 `McpToolCall`、HTTP／HTTPS URL；這些值不得進入 Reference Set。正例必須包含 plain user path、Seekah Markdown／pi path list、localdocsearch MCP、FileChange、CommandExecution、shell command、apply_patch 與 exec。
+
+所有 fixture 均使用暫存目錄與 synthetic path；測試不得啟動真實 Codex、讀取使用者 home 或執行 rollout 內的 command。

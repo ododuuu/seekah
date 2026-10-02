@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import type { IndexStore, StoredDocumentRow } from "./store.js";
 export const CODEX_REFERENCE_SOURCES = ["seekah-prompt", "user-provided", "seekah-mcp", "codex-tool"] as const;
 export type CodexReferenceSource = (typeof CODEX_REFERENCE_SOURCES)[number];
 export type CodexReferenceConfidence = "high" | "medium" | "low";
+export type CodexReferenceDisplay = "normal" | "low-confidence-missing";
 export type CodexSessionParseMode = "structured" | "message-path-fallback";
 
 export interface CodexSessionReference {
@@ -17,6 +18,7 @@ export interface CodexSessionReference {
   source: CodexReferenceSource;
   sources: CodexReferenceSource[];
   confidence: CodexReferenceConfidence;
+  display: CodexReferenceDisplay;
   occurrences: number;
   eventTypes: string[];
   indexed: boolean;
@@ -53,15 +55,24 @@ const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_REFERENCES = 2_000;
 const MAX_ROLLOUT_LINE_LENGTH = 2_000_000;
 const SOURCE_PRIORITY = new Map<CodexReferenceSource, number>(CODEX_REFERENCE_SOURCES.map((source, index) => [source, index]));
-const HIGH_CONFIDENCE_KEYS = new Set(["path", "file", "file_path", "filepath", "filename", "uri", "attachment", "attachments"]);
-const TEXT_KEYS = new Set(["text", "input_text", "content", "message", "prompt", "command", "arguments", "output", "result", "path", "file", "file_path", "filepath", "filename", "uri", "attachment", "attachments"]);
-const METADATA_KEYS = new Set(["cwd", "session_id", "sessionId", "call_id", "callId", "id", "timestamp", "created_at", "createdAt", "updated_at", "updatedAt"]);
-const TOOL_EVENT_PATTERN = /(?:function_call|tool_call|tool_use|tool_result|tool_output|shell_command|read_file|command_execution|exec_command)/iu;
-const USER_EVENT_PATTERN = /(?:user_message|input_message)/iu;
-const MCP_NAME_PATTERN = /(?:mcp[\s:_-]*(?:seekah|localdocsearch)|(?:seekah|localdocsearch)[\s:_-]*mcp)/iu;
+const PATH_FIELD_KEYS = new Set(["path", "savedPath", "saved_path", "filePath", "file_path"]);
+const TOOL_NAME_KEYS = new Set(["name", "tool_name", "toolName"]);
+const AUTO_INJECTED_USER_PREFIXES = [
+  /^<environment_context>(?:\s|$)/u,
+  /^<turn_aborted>(?:\s|$)/u,
+  /^<recommended_plugins>(?:\s|$)/u,
+  /^# AGENTS\.md(?:\s|$)/u,
+];
+const SEEKAH_CONTEXT_MARKER = "# Seekah 上下文";
+const MCP_SERVER_NAMES = new Set(["localdocsearch", "seekah"]);
 const ABSOLUTE_PATH_TOKEN = /(?:file:\/\/[^\s"'`<>|]+|[A-Za-z]:[\\/][^\s"'`<>|]+|\\\\[^\s"'`<>|]+|\/(?:[^\s"'`<>|]+\/)*[^\s"'`<>|/]+)/gu;
 
 interface JsonRecord { [key: string]: unknown }
+interface PathEvidence {
+  path: string;
+  source: CodexReferenceSource;
+  confidence: CodexReferenceConfidence;
+}
 interface MutableReference {
   path: string;
   source: CodexReferenceSource;
@@ -108,6 +119,21 @@ function nestedRecord(value: unknown): JsonRecord | null {
   return record(item.payload) ?? record(item.data) ?? record(item.event) ?? item;
 }
 
+function eventPayload(line: JsonRecord): JsonRecord {
+  return nestedRecord(line) ?? line;
+}
+
+function canonicalEventType(line: JsonRecord): string {
+  const type = stringValue(line.type) ?? "unknown";
+  const payload = nestedRecord(line.payload) ?? nestedRecord(line.data) ?? nestedRecord(line.event);
+  const subtype = payload ? firstString(payload.type, payload.event_type, payload.kind) : null;
+  return subtype && (type === "response_item" || type === "event_msg" || type === "response") ? `${type}/${subtype}` : type;
+}
+
+function eventTimestamp(line: JsonRecord, payload: JsonRecord): string | null {
+  return firstString(line.timestamp, line.created_at, line.createdAt, payload.timestamp, payload.created_at, payload.createdAt);
+}
+
 function isWindowsAbsolute(value: string): boolean {
   return /^[A-Za-z]:[\\/]/u.test(value) || /^\\\\/u.test(value);
 }
@@ -144,62 +170,87 @@ function extractAbsolutePaths(text: string): string[] {
   for (const match of text.matchAll(ABSOLUTE_PATH_TOKEN)) {
     const candidate = match[0];
     const index = match.index ?? 0;
-    if (candidate.startsWith("/") && (
-      text[index - 1] === ":" || text[index - 1] === "/"
-      || /(?:https?|ftp):\/\/[^/\s"'`<>|]+$/iu.test(text.slice(0, index))
-    )) continue;
+    const prefix = text.slice(0, index);
+    const lowerPrefix = prefix.toLowerCase();
+    const networkStarts = [lowerPrefix.lastIndexOf("http://"), lowerPrefix.lastIndexOf("https://"), lowerPrefix.lastIndexOf("ftp://")];
+    const networkStart = Math.max(...networkStarts);
+    const splitNetworkUrl = (lowerPrefix.endsWith("htt") && /^p:[\\/]/iu.test(candidate))
+      || (lowerPrefix.endsWith("http") && /^s:[\\/]/iu.test(candidate))
+      || (lowerPrefix.endsWith("ft") && /^p:[\\/]/iu.test(candidate));
+    const insideNetworkUrl = (networkStart >= 0 && !/\s/u.test(text.slice(networkStart, index))) || splitNetworkUrl;
+    if (insideNetworkUrl || (candidate.startsWith("/") && (text[index - 1] === ":" || text[index - 1] === "/"))) continue;
     const normalized = normalizeAbsolutePath(candidate);
     if (normalized && !paths.includes(normalized)) paths.push(normalized);
   }
   return paths;
 }
 
-function walkStrings(value: unknown, key: string | undefined, output: string[], depth = 0): void {
+function collectAbsolutePaths(value: unknown, output: string[], depth = 0): void {
   if (depth > 8) return;
   if (typeof value === "string") {
-    if (!key || TEXT_KEYS.has(key) || key.includes("text") || key.includes("message")) output.push(value);
+    output.push(...extractAbsolutePaths(value));
     return;
   }
   if (Array.isArray(value)) {
-    for (const item of value) walkStrings(item, key, output, depth + 1);
+    for (const item of value) collectAbsolutePaths(item, output, depth + 1);
     return;
   }
   const item = record(value);
   if (!item) return;
-  for (const [childKey, child] of Object.entries(item)) {
-    if (METADATA_KEYS.has(childKey)) continue;
-    walkStrings(child, childKey, output, depth + 1);
-  }
+  for (const child of Object.values(item)) collectAbsolutePaths(child, output, depth + 1);
 }
 
-function collectExplicitStrings(value: unknown, keys: ReadonlySet<string>, output: string[], depth = 0): void {
-  if (depth > 6) return;
-  if (typeof value === "string") return;
+function collectPathFields(value: unknown, output: string[], depth = 0): void {
+  if (depth > 8) return;
   if (Array.isArray(value)) {
-    for (const item of value) collectExplicitStrings(item, keys, output, depth + 1);
+    for (const item of value) collectPathFields(item, output, depth + 1);
     return;
   }
   const item = record(value);
   if (!item) return;
   for (const [key, child] of Object.entries(item)) {
-    if (keys.has(key) && typeof child === "string") output.push(child);
-    collectExplicitStrings(child, keys, output, depth + 1);
+    if (PATH_FIELD_KEYS.has(key)) collectAbsolutePaths(child, output, depth + 1);
+    else collectPathFields(child, output, depth + 1);
   }
 }
 
-function eventPayload(line: JsonRecord): JsonRecord {
-  return nestedRecord(line) ?? line;
+function evidenceFromValue(value: unknown, source: CodexReferenceSource, confidence: CodexReferenceConfidence): PathEvidence[] {
+  const paths: string[] = [];
+  collectAbsolutePaths(value, paths);
+  return paths.map(pathValue => ({ path: pathValue, source, confidence }));
 }
 
-function canonicalEventType(line: JsonRecord): string {
-  const type = stringValue(line.type) ?? "unknown";
-  const payload = nestedRecord(line.payload) ?? nestedRecord(line.data) ?? nestedRecord(line.event);
-  const subtype = payload ? firstString(payload.type, payload.event_type, payload.kind) : null;
-  return subtype && (type === "response_item" || type === "event_msg" || type === "response") ? `${type}/${subtype}` : type;
+
+function collectTextValues(value: unknown, output: string[], depth = 0): void {
+  if (depth > 8) return;
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextValues(item, output, depth + 1);
+    return;
+  }
+  const item = record(value);
+  if (!item) return;
+  for (const child of Object.values(item)) collectTextValues(child, output, depth + 1);
 }
 
-function eventTimestamp(line: JsonRecord, payload: JsonRecord): string | null {
-  return firstString(line.timestamp, line.created_at, line.createdAt, payload.timestamp, payload.created_at, payload.createdAt);
+function applyPatchEvidence(value: unknown): PathEvidence[] {
+  const texts: string[] = [];
+  const paths: string[] = [];
+  collectTextValues(value, texts);
+  for (const text of texts) {
+    for (const match of text.matchAll(/^\s*\*\*\*\s+(?:(?:Update|Add|Delete) File|(?:Move|Copy) to):\s*(.+?)\s*$/gmu)) {
+      paths.push(...extractAbsolutePaths(match[1]!));
+    }
+  }
+  collectPathFields(value, paths);
+  return uniquePaths(paths).map(pathValue => ({ path: pathValue, source: "codex-tool", confidence: "high" }));
+}
+
+function uniquePaths(values: readonly string[]): string[] {
+  return [...new Set(values.map(normalizeAbsolutePath).filter((value): value is string => Boolean(value)))];
 }
 
 function sessionMeta(line: JsonRecord, payload: JsonRecord): { id?: string; cwd?: string; startedAt?: string } {
@@ -219,85 +270,156 @@ function roleOf(line: JsonRecord, payload: JsonRecord): string | null {
   return firstString(line.role, payload.role, record(payload.message)?.role);
 }
 
-function namedStrings(line: JsonRecord, payload: JsonRecord): string[] {
-  const values: string[] = [];
-  collectExplicitStrings(line, new Set(["source", "origin", "producer", "server", "server_name", "serverName", "tool", "tool_name", "toolName", "name", "mcp", "integration"]), values);
-  collectExplicitStrings(payload, new Set(["source", "origin", "producer", "server", "server_name", "serverName", "tool", "tool_name", "toolName", "name", "mcp", "integration"]), values);
-  return values;
+function isAutoInjectedUserText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return AUTO_INJECTED_USER_PREFIXES.some(prefix => prefix.test(trimmed));
 }
 
-function isSeekahMcp(line: JsonRecord, payload: JsonRecord, names: readonly string[]): boolean {
-  const source = names.join(" ");
-  if (MCP_NAME_PATTERN.test(source) || /seekah|localdocsearch/iu.test(source)) return true;
-  const eventMarkers = [stringValue(line.type), stringValue(payload.type)].filter(Boolean).join(" ");
-  return names.some(value => /^(?:search_documents|prepare_context|index_status|explain_path|open_search_app)$/iu.test(value))
-    && /mcp|seekah|localdocsearch/iu.test(`${source} ${eventMarkers}`);
-}
-
-function explicitPrompt(line: JsonRecord, payload: JsonRecord, names: readonly string[]): boolean {
-  if (names.some(value => /seekah[\s:_-]*(?:prompt|context)|(?:prompt|context)[\s:_-]*seekah/iu.test(value))) return true;
-  const source = firstString(line.source, line.origin, payload.source, payload.origin);
-  return Boolean(source && /seekah[\s:_-]*prompt/iu.test(source));
-}
-
-function textValuesForPathOnly(line: JsonRecord, payload: JsonRecord): string[] {
-  const values: string[] = [];
-  walkStrings(line.message, "message", values);
-  walkStrings(payload.message, "message", values);
-  walkStrings(payload.content, "content", values);
-  walkStrings(payload.input, "input", values);
-  return values;
-}
-
-function isPathOnlyPrompt(values: readonly string[]): boolean {
-  const lines = values.flatMap(value => value.split(/\r?\n/u).map(item => item.trim()).filter(Boolean));
-  return lines.length >= 2 && lines.every(item => Boolean(normalizeAbsolutePath(item.replace(/^['"]|['"]$/gu, ""))));
-}
-
-function isStructuredPathKey(key: string | undefined): boolean {
-  return Boolean(key && HIGH_CONFIDENCE_KEYS.has(key));
-}
-
-function collectPaths(value: unknown, output: Array<{ path: string; structured: boolean }>, key: string | undefined, depth = 0): void {
-  if (depth > 8) return;
-  if (typeof value === "string") {
-    for (const item of extractAbsolutePaths(value)) output.push({ path: item, structured: isStructuredPathKey(key) });
-    return;
+function seekahPromptPaths(text: string): string[] {
+  const trimmed = text.trim();
+  if (trimmed.startsWith(SEEKAH_CONTEXT_MARKER)) {
+    const paths: string[] = [];
+    for (const line of trimmed.split(/\r?\n/u)) {
+      const match = /^##\s+\d+\.\s+(.+?)\s*$/u.exec(line.trim());
+      if (match?.[1]) {
+        const normalized = normalizeAbsolutePath(match[1]);
+        if (normalized) paths.push(normalized);
+      }
+    }
+    return uniquePaths(paths);
   }
-  if (Array.isArray(value)) {
-    for (const item of value) collectPaths(item, output, key, depth + 1);
-    return;
-  }
-  const item = record(value);
-  if (!item) return;
-  for (const [childKey, child] of Object.entries(item)) {
-    if (METADATA_KEYS.has(childKey)) continue;
-    collectPaths(child, output, childKey, depth + 1);
-  }
+  const lines = trimmed.split(/\r?\n/u).map(item => item.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const paths = lines.map(normalizeAbsolutePath);
+  return paths.every((value): value is string => Boolean(value)) ? uniquePaths(paths) : [];
 }
 
-function isUserEvent(type: string, line: JsonRecord, payload: JsonRecord): boolean {
-  const role = roleOf(line, payload)?.toLowerCase();
-  return role === "user" || USER_EVENT_PATTERN.test(type);
+function userMessageEvidence(payload: JsonRecord): PathEvidence[] {
+  if (roleOf({}, payload)?.toLowerCase() !== "user") return [];
+  if (!Array.isArray(payload.content)) return [];
+  const evidence: PathEvidence[] = [];
+  for (const rawItem of payload.content) {
+    const item = record(rawItem);
+    if (!item) continue;
+    const contentType = stringValue(item.type)?.toLowerCase();
+    const isPlainInputText = contentType === "input_text" || contentType === "input_text:plain" || contentType === "input_text:(plain)";
+    if (isPlainInputText) {
+      const text = stringValue(item.text);
+      if (!text || isAutoInjectedUserText(text)) continue;
+      const promptPaths = seekahPromptPaths(text);
+      if (promptPaths.length) evidence.push(...promptPaths.map(pathValue => ({ path: pathValue, source: "seekah-prompt" as const, confidence: "high" as const })));
+      else evidence.push(...evidenceFromValue(text, "user-provided", "medium"));
+    } else if (contentType === "input_image" || contentType === "input_image:(plain)") {
+      evidence.push(...evidenceFromValue(item, "user-provided", "medium"));
+    }
+  }
+  return evidence;
 }
 
-function sourceForEvent(line: JsonRecord, payload: JsonRecord, type: string, names: readonly string[], textValues: readonly string[]): { source: CodexReferenceSource; confidence: CodexReferenceConfidence; fallback: boolean } {
-  if (explicitPrompt(line, payload, names)) return { source: "seekah-prompt", confidence: "high", fallback: false };
-  if (isSeekahMcp(line, payload, names)) return { source: "seekah-mcp", confidence: "high", fallback: false };
-  if (TOOL_EVENT_PATTERN.test(type)) return { source: "codex-tool", confidence: "high", fallback: false };
-  if (isUserEvent(type, line, payload)) {
-    return isPathOnlyPrompt(textValues)
-      ? { source: "seekah-prompt", confidence: "medium", fallback: false }
-      : { source: "user-provided", confidence: "medium", fallback: false };
+function isAllowedMcpIdentity(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (MCP_SERVER_NAMES.has(normalized)) return true;
+  if (/^mcp__(?:localdocsearch|seekah)(?:__|$)/u.test(normalized)) return true;
+  return /(?:^|[@:#_\s-])(?:localdocsearch|seekah)(?:[#:_\s-]|$)/u.test(normalized);
+}
+
+function isAllowedMcpNamespace(line: JsonRecord, payload: JsonRecord): boolean {
+  return [
+    firstString(line.namespace, line.tool_namespace, line.toolNamespace),
+    firstString(payload.namespace, payload.tool_namespace, payload.toolNamespace),
+    firstString(line.name, payload.name),
+  ].filter((value): value is string => Boolean(value)).some(value => /^mcp__(?:localdocsearch|seekah)(?:__|$)/iu.test(value));
+}
+
+function toolName(payload: JsonRecord): string | null {
+  for (const key of TOOL_NAME_KEYS) {
+    const value = stringValue(payload[key]);
+    if (value) return value;
   }
-  return { source: "user-provided", confidence: "low", fallback: true };
+  return null;
+}
+
+function functionCallEvidence(line: JsonRecord, payload: JsonRecord): PathEvidence[] {
+  const name = toolName(payload) ?? stringValue(line.name);
+  if (isAllowedMcpNamespace(line, payload)) return evidenceFromValue(payload.arguments, "seekah-mcp", "high");
+  if (name?.toLowerCase() === "shell_command") return evidenceFromValue(payload.arguments, "codex-tool", "high");
+  return [];
+}
+
+function customToolEvidence(payload: JsonRecord): PathEvidence[] {
+  const name = toolName(payload)?.toLowerCase();
+  if (name === "apply_patch") return applyPatchEvidence(payload.input);
+  if (name === "exec") return evidenceFromValue(payload.input, "codex-tool", "high");
+  return [];
+}
+
+function fileChangeEvidence(item: JsonRecord): PathEvidence[] {
+  const paths: string[] = [];
+  for (const key of PATH_FIELD_KEYS) {
+    if (key in item) collectAbsolutePaths(item[key], paths);
+  }
+  collectPathFields(item.content, paths);
+  const changes = record(item.changes);
+  if (changes) {
+    for (const key of Object.keys(changes)) {
+      const normalized = normalizeAbsolutePath(key);
+      if (normalized) paths.push(normalized);
+    }
+  }
+  return uniquePaths(paths).map(pathValue => ({ path: pathValue, source: "codex-tool", confidence: "high" }));
+}
+
+function mcpIdentityValues(line: JsonRecord, payload: JsonRecord, item: JsonRecord): string[] {
+  return [
+    item.type, item.server, item.server_name, item.serverName, item.namespace,
+    payload.server, payload.server_name, payload.serverName, payload.namespace,
+    line.server, line.server_name, line.serverName, line.namespace,
+  ].map(stringValue).filter((value): value is string => Boolean(value));
+}
+
+function isMcpToolCallType(value: string | null): boolean {
+  return Boolean(value && /^(?:mcp_tool_call|mcptoolcall)(?:[@:#]|$)/iu.test(value));
+}
+
+function itemCompletedEvidence(line: JsonRecord, payload: JsonRecord): PathEvidence[] {
+  const item = record(payload.item);
+  if (!item) return [];
+  const itemType = stringValue(item.type);
+  if (itemType && /^(?:filechange|file_change)$/iu.test(itemType)) {
+    return fileChangeEvidence(item);
+  }
+  if (itemType && /^(?:commandexecution|command_execution)$/iu.test(itemType)) {
+    return evidenceFromValue([item.command, item.parsed_cmd], "codex-tool", "high");
+  }
+  if (isMcpToolCallType(itemType) && mcpIdentityValues(line, payload, item).some(isAllowedMcpIdentity)) {
+    return evidenceFromValue([item.arguments, item.input], "seekah-mcp", "high");
+  }
+  return [];
+}
+
+function isStructuredEventType(type: string): boolean {
+  return type === "session_meta" || type === "turn_context" || type === "world_state" || type === "compacted"
+    || type === "response_item" || type.startsWith("response_item/")
+    || type === "event_msg" || type.startsWith("event_msg/");
+}
+
+function structuredEvidence(type: string, line: JsonRecord, payload: JsonRecord): PathEvidence[] {
+  if (type === "response_item/message") return userMessageEvidence(payload);
+  if (type === "response_item/function_call") return functionCallEvidence(line, payload);
+  if (type === "response_item/custom_tool_call") return customToolEvidence(payload);
+  if (type === "event_msg/item_completed") return itemCompletedEvidence(line, payload);
+  return [];
+}
+
+function fallbackMessageEvidence(line: JsonRecord, payload: JsonRecord): PathEvidence[] {
+  return evidenceFromValue([line.message, line.text, payload.message, payload.text], "user-provided", "low");
 }
 
 function confidenceRank(value: CodexReferenceConfidence): number {
   return value === "high" ? 3 : value === "medium" ? 2 : 1;
 }
 
-function addReference(session: MutableSession, item: { path: string; source: CodexReferenceSource; confidence: CodexReferenceConfidence; eventType: string }, maxReferences: number): void {
+function addReference(session: MutableSession, item: PathEvidence & { eventType: string }, maxReferences: number): void {
   const key = pathKey(item.path);
   const existing = session.references.get(key);
   if (!existing) {
@@ -332,11 +454,13 @@ function createMutableSession(id: string): MutableSession {
 
 function finalizeReference(reference: MutableReference): CodexSessionReference {
   const sources = [...reference.sources].sort((left, right) => (SOURCE_PRIORITY.get(left) ?? 99) - (SOURCE_PRIORITY.get(right) ?? 99));
+  const display: CodexReferenceDisplay = reference.confidence === "low" && !existsSync(reference.path) ? "low-confidence-missing" : "normal";
   return {
     path: reference.path,
     source: reference.source,
     sources,
     confidence: reference.confidence,
+    display,
     occurrences: reference.occurrences,
     eventTypes: [...reference.eventTypes].sort(),
     indexed: reference.indexed,
@@ -386,16 +510,12 @@ function consumeLine(session: MutableSession, line: string, maxReferences: numbe
   if (meta.startedAt && !session.startedAt) session.startedAt = meta.startedAt;
   if (type === "session_meta" || payload.type === "session_meta") return;
 
-  const names = namedStrings(lineRecord, payload);
-  const pathValues: Array<{ path: string; structured: boolean }> = [];
-  collectPaths(lineRecord, pathValues, undefined);
-  const textValues = textValuesForPathOnly(lineRecord, payload);
-  const classification = sourceForEvent(lineRecord, payload, type, names, textValues);
-  for (const item of pathValues) {
-    const confidence = classification.fallback ? "low" : item.structured ? "high" : classification.confidence;
-    addReference(session, { path: item.path, source: classification.source, confidence, eventType: type }, maxReferences);
-    if (classification.fallback) session.parseMode = "message-path-fallback";
+  const evidence = structuredEvidence(type, lineRecord, payload);
+  const fallback = evidence.length || isStructuredEventType(type) ? [] : fallbackMessageEvidence(lineRecord, payload);
+  for (const item of [...evidence, ...fallback]) {
+    addReference(session, { ...item, eventType: type }, maxReferences);
   }
+  if (fallback.length) session.parseMode = "message-path-fallback";
 }
 
 async function rolloutFiles(codexHome: string): Promise<string[]> {
@@ -468,9 +588,16 @@ export function markIndexedCodexReferences(sessions: readonly CodexSession[], st
     ...session,
     references: session.references.map(reference => {
       const document = indexedDocument(store, reference.path);
-      if (!document) return { ...reference, indexed: false };
+      if (!document) {
+        return {
+          ...reference,
+          indexed: false,
+          ...(reference.display === "low-confidence-missing" ? { indexedStatus: "low-confidence-missing" } : {}),
+        };
+      }
       return {
         ...reference,
+        display: "normal",
         indexed: true,
         indexedPath: document.path,
         seekahReference: documentReference(document.id, document.path),
