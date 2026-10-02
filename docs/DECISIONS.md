@@ -1661,23 +1661,18 @@
 ## D125：工作台上下文採常駐側欄，Codex prompt 只複製絕對路徑（2026-10-02）
 
 - **背景**：工作台原本以遮罩抽屜承載上下文預覽，無法在瀏覽結果、臨時文件與頁面操作間保持可見；使用者要把選取文件交給 Codex 時，只需要可貼上的本機路徑，不需要文件內容或自動送出。
-- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 338 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
+- **決策**：沿用 `src/workbench-app.ts` 既有 `state.selected` 與 `state.imported` 的 session-local 選取狀態，改以三欄工作台右側常駐 `context-panel` 呈現；寬版使用 320 px，1180 px 仍保留欄位但可由原生按鈕收合為 0，重新展開不改變選取。側欄、左導覽數字、列表與表格勾選全部由同一狀態重繪。
 - **路徑規則**：前端只收集已選索引結果中的完整絕對路徑，以穩定順序去重後用 `join("\n")` 產生剪貼簿文字；不加標題、標記、檔名、正文或尾端說明，也不自動送出。上傳臨時文件若沒有原始絕對路徑，側欄可以顯示其 session 項目，但排除於 prompt，禁止用檔名冒充路徑。
 - **取捨**：不新增 Codex session 讀寫、不使用 browser storage、不新增外部服務或路徑 endpoint；這使 prompt 可驗證且不會把本機文件內容離開本機。若未來要傳文件內容或管理持久上下文，必須另立規格與決策。
 - **驗證**：`test/m89.test.ts` 負責 source contract 與反向斷言，`scripts/ui-smoke.mjs` 負責三種視窗寬度的真實瀏覽器互動。
 
-## D126：釘選／分類先採 pi2 假定的 library API 呼叫點（2026-10-02）
+## D126：結果列操作沿用文件庫 API 並以失敗回復（2026-10-02）
 
-- **背景**：本分支需要先提供結果列釘選與加入分類按鈕，但 pi2 的 library 行為規格 §95 尚未在本分支出現；前端不得自行建立另一份持久化模型。
-- **假定契約**：
-  - `GET /api/library/pins` 回傳 `{ "items": [...] }`，供未來載入既有釘選狀態。
-  - `POST /api/library/pins` 接受 `{ "path": string, "reference": string, "pinned": boolean }`，成功回傳可選 `message` 與 `item`。
-  - `GET /api/library/groups` 回傳 `{ "groups": [{ "id": string, "name": string }] }`，供未來分類選擇器使用。
-  - `POST /api/library/groups` 接受 `{ "path": string, "reference": string }`；pi2 可在後續 §95 擴充 `groupId` 或分類選擇欄位，成功回傳可選 `message` 與 `item`。
-  - 失敗回應使用既有 `api` helper 的錯誤格式；前端顯示錯誤 toast，不得把失敗當成功。
-- **決策**：`src/workbench-app.ts` 只保留釘選與分類的 POST 呼叫點，使用索引結果的絕對路徑與 reference，不在前端 fake persistence、不讀取或寫入外部服務；GET 契約先記錄供 pi2 後續整合，分類 UI 不在本項偷偷選擇或建立資料。
-- **取捨**：按鈕目前可驗證釘選切換、request payload 與錯誤處理，但真正的釘選狀態同步、分類選擇與持久化由 §95／pi2 決定；若 §95 改變 endpoint 或 payload，必須同步更新本決策、前端與 `test/m90.test.ts`。
-- **驗證**：UI smoke 以隔離瀏覽器 fetch mock 驗證兩個 POST 呼叫點及 payload；不連線真實 library，也不使用使用者索引。
+- **背景**：§94 的列表與表格結果列需要提供釘選、分類及上下文等一致操作；§95 已定義文件庫的實際持久化模型與 loopback API，前端不得另建一套狀態或使用瀏覽器儲存。
+- **決策**：`src/workbench-app.ts` 的 `resultActions(item)` 同時供列表與表格使用；釘選使用目前 `state.library.pinned` 判斷文案，新增／取消分別呼叫 `PUT`／`DELETE /api/library/pinned`，取消只送 `path` 與 `reference`；分類呼叫 `POST /api/library/groups/:id/items`。所有 payload 只使用完整絕對路徑、stable reference 與顯示名稱。
+- **一致性**：釘選操作先以 session-local 暫存狀態更新按鈕，並以 `libraryActionChain` 依序送出釘選／分類請求；成功後重新讀取文件庫並清除暫存，失敗則回復原本釘選集合、重新讀取並顯示本機錯誤。成功 toast 只在 API 成功後顯示，不把失敗假稱為已保存。
+- **取捨**：不修改搜尋結果、排序、索引 schema 或文件內容，不使用 browser storage、外部服務或新 endpoint；後續 API 行為以 SPEC §95 為準。
+- **驗證**：`test/m90.test.ts` 驗證列表／表格操作與 API 呼叫點及反向斷言；`scripts/ui-smoke.mjs` 在 1920×1080、1440×900、1180×800 以隔離合成資料實際驗證釘選／取消釘選／分類請求。
 
 ## D133：Codex path recall 以逐行 token 掃描保留完整 reference
 

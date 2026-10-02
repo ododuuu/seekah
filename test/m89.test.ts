@@ -21,7 +21,10 @@ function assertContextContract(source: string, smoke: string = smokeSource): voi
   assert.match(source, /copy-context-paths/u, "缺少結果頁批次複製按鈕。");
   assert.match(source, /未自動送出/u, "沒有明確禁止自動送出。");
   assert.match(source, /context-indexed-list/u, "缺少索引文件側欄清單。");
-  assert.match(source, /context-temporary-list/u, "缺少臨時文件側欄清單。");
+  assert.match(source, /function appendContextPath\(node, value\)/u, "上下文沒有獨立路徑換行渲染器。");
+  assert.match(source, /documentFilenameValue\(selected\.item\)/u, "上下文項目沒有顯示檔名。");
+  assert.match(source, /context-item-meta/u, "上下文項目沒有第二行路徑樣式。");
+  assert.match(source, /\.app-shell:not\(\.context-panel-collapsed\) \.bulk-bar \{ display: none; \}/u, "右側上下文展開時沒有隱藏底部選取列。");
   assert.match(source, /item\.selected && item\.status === "indexed"/u, "臨時文件沒有排除不可用路徑。");
   assert.doesNotMatch(source, /context-close/u, "仍殘留遮罩抽屜關閉控制。");
   assert.doesNotMatch(source, /const scrim =/u, "仍殘留上下文遮罩。");
@@ -29,6 +32,8 @@ function assertContextContract(source: string, smoke: string = smokeSource): voi
   assert.match(smoke, /context-copy-paths/u, "UI smoke 沒有驗證側欄複製。");
   assert.match(smoke, /clipboardText === \$\{JSON\.stringify\(fixture\.multiPath\)\}/u, "UI smoke 沒有驗證純絕對路徑剪貼簿。");
   assert.match(smoke, /#context-clear-selection/u, "UI smoke 沒有驗證側欄清空選取。");
+  assert.match(smoke, /bulkDisplay === \(viewport\.width <= 1180 \? "flex" : "none"\)/u, "UI smoke 沒有驗證上下文展開時的底部選取列。");
+  assert.match(smoke, /checkVisibleText.*checkPseudoText.*includes\("\."\)/su, "UI smoke 沒有驗證勾選框儲存格可見文字。");
 }
 
 test("M89 上下文常駐側欄與純路徑 prompt 契約", () => {

@@ -665,6 +665,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   margin-top: 8px;
 }
 .document-actions .btn { flex: 0 0 auto; height: 30px; min-height: 30px; }
+.document-actions select.result-action { flex: 0 0 auto; height: 30px; min-height: 30px; padding: 4px 24px 4px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: var(--paper); color: var(--ink); font-size: 11px; }
 .result-action.btn { height: 30px; min-height: 30px; padding: 4px 8px; font-size: 11px; }
 .result-action.is-active { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-2); }
 .table-wrap {
@@ -730,6 +731,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
   box-shadow: 0 -5px 20px rgba(31,62,51,.12);
 }
 .bulk-bar strong { margin-right: auto; color: var(--brand-2); }
+.app-shell:not(.context-panel-collapsed) .bulk-bar { display: none; }
 
 /* temporary files */
 .drop-zone {
@@ -852,8 +854,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex="0"]:
 .context-section h3 { margin: 0 0 7px; color: var(--muted); font-size: 12px; }
 .context-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .context-item:last-child { border-bottom: 0; }
-.context-item-name { min-width: 0; color: var(--ink); font: 12px/1.45 "Cascadia Mono", Consolas, monospace; overflow-wrap: anywhere; }
-.context-item-meta { margin-top: 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.context-item-name { min-width: 0; color: var(--ink); font: 700 12px/1.45 "Segoe UI", "Noto Sans TC", sans-serif; overflow-wrap: anywhere; }
+.context-item-meta { min-width: 0; margin-top: 3px; color: var(--muted); font: 11px/1.4 "Cascadia Mono", Consolas, monospace; white-space: normal; word-break: normal; overflow-wrap: normal; }
 .context-item-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .context-panel-footer { padding: 14px 16px 18px; border-top: 1px solid var(--line); }
 .context-panel-footer .btn { width: 100%; }
@@ -1006,6 +1008,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
   .document-query select, .scope-summary select { max-width: 126px; }
   .result-passage { grid-template-columns: fit-content(110px) minmax(0, 1fr); gap: 6px; }
   .result-passage-snippet { font-size: 12px; line-height: 1.4; }
+  .app-shell:not(.context-panel-collapsed) .bulk-bar { display: flex; }
 }
 /* reduced motion */
 @media (prefers-reduced-motion: reduce) {
@@ -1032,7 +1035,6 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     typeFilter: "",
     sortMode: "relevance",
     statusFilter: "",
-    sortMode: "relevance",
     queryDraft: "",
     submittedQuery: "",
     data: null,
@@ -1095,6 +1097,8 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     dialogTrigger: null,
     library: { recent: [], pinned: [], groups: [], savedSearches: [], busy: false },
   };
+  const pendingPinned = new Map();
+  let libraryActionChain = Promise.resolve();
 
   const $ = id => document.getElementById(id);
   function make(tag, className, text) {
@@ -1473,6 +1477,37 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       : typeof item.filename === "string" && item.filename ? item.filename : documentFilenameValue(item);
     return { path: pathValue, reference: item.reference, name };
   }
+  function sameLibraryDocument(left, right) {
+    return Boolean(left && right
+      && ((left.reference && right.reference && left.reference === right.reference)
+        || (left.path && right.path && left.path === right.path)));
+  }
+  function libraryDocumentKey(item) {
+    if (item && item.reference) return "reference:" + item.reference;
+    if (item && item.path) return "path:" + item.path;
+    return "";
+  }
+  function mergePendingPinned(items) {
+    let result = items.slice();
+    for (const pending of pendingPinned.values()) {
+      result = pending.pinned
+        ? [pending.body, ...result.filter(candidate => !sameLibraryDocument(candidate, pending.body))]
+        : result.filter(candidate => !sameLibraryDocument(candidate, pending.body));
+    }
+    return result;
+  }
+  function applyPinnedState(body, pinned) {
+    state.library.pinned = pinned
+      ? [body, ...state.library.pinned.filter(candidate => !sameLibraryDocument(candidate, body))]
+      : state.library.pinned.filter(candidate => !sameLibraryDocument(candidate, body));
+    renderSidebar();
+    renderDocuments();
+  }
+  function isLibraryPinned(item) {
+    const body = libraryDocumentPayload(item);
+    if (!body) return false;
+    return state.library.pinned.some(candidate => sameLibraryDocument(candidate, body));
+  }
   function libraryRoute(route) {
     return route === "library-recent" || route === "library-pinned"
       || route === "library-groups" || route === "library-saved-searches";
@@ -1486,7 +1521,7 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
         api("/api/library/groups"), api("/api/library/saved-searches"),
       ]);
       state.library.recent = Array.isArray(recent && recent.items) ? recent.items : [];
-      state.library.pinned = Array.isArray(pinned && pinned.items) ? pinned.items : [];
+      state.library.pinned = mergePendingPinned(Array.isArray(pinned && pinned.items) ? pinned.items : []);
       state.library.groups = Array.isArray(groups && groups.groups) ? groups.groups : [];
       state.library.savedSearches = Array.isArray(savedSearches && savedSearches.items) ? savedSearches.items : [];
       renderSidebar();
@@ -1929,32 +1964,56 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
       : toggleSelection(item, input.checked));
     return input;
   }
-  async function libraryAction(action, item) {
-    const documentPath = escapeText(item && item.path);
-    if (!isAbsoluteDocumentPath(documentPath)) {
+  async function libraryAction(action, item, groupId) {
+    const body = libraryDocumentPayload(item);
+    if (!body || !isAbsoluteDocumentPath(body.path)) {
       showToast("只有完整絕對路徑文件可加入釘選或分類。");
       return;
     }
-    const endpoint = action === "pin" ? "/api/library/pins" : "/api/library/groups";
-    const pinned = action === "pin" ? !Boolean(item.pinned) : undefined;
-    try {
-      const data = await api(endpoint, {
-        method: "POST",
-        body: action === "pin" ? { path: documentPath, reference: item.reference, pinned } : { path: documentPath, reference: item.reference },
-      });
-      if (action === "pin") {
-        const returnedItem = data && data.item;
-        item.pinned = returnedItem && typeof returnedItem.pinned === "boolean"
-          ? returnedItem.pinned
-          : data && typeof data.pinned === "boolean" ? data.pinned : pinned;
-        renderDocuments();
-      }
-      showToast(data && data.message ? data.message : action === "pin"
-        ? item.pinned ? "已釘選文件。" : "已取消釘選。"
-        : "已加入分類。");
-    } catch (error) {
-      showToast(error.message || (action === "pin" ? "釘選操作失敗。" : "加入分類失敗。"));
+    if (action === "group" && !Number.isSafeInteger(groupId)) {
+      showToast("請先選擇分類。");
+      return;
     }
+    const pinned = action === "pin" ? !isLibraryPinned(item) : undefined;
+    const endpoint = action === "pin"
+      ? "/api/library/pinned"
+      : "/api/library/groups/" + encodeURIComponent(String(groupId)) + "/items";
+    const method = action === "pin" ? (pinned ? "PUT" : "DELETE") : "POST";
+    const requestBody = action === "pin" && !pinned
+      ? { path: body.path, reference: body.reference }
+      : body;
+    const mutation = action === "pin" ? {
+      body,
+      pinned,
+      key: libraryDocumentKey(body),
+      previousPinned: state.library.pinned.slice(),
+    } : null;
+    if (mutation) {
+      pendingPinned.set(mutation.key, mutation);
+      applyPinnedState(body, pinned);
+    }
+    const operation = async () => {
+      try {
+        await api(endpoint, { method, body: requestBody });
+        await refreshLibrary();
+        if (mutation && pendingPinned.get(mutation.key) === mutation) {
+          pendingPinned.delete(mutation.key);
+          applyPinnedState(body, pinned);
+        }
+        showToast(action === "pin" ? pinned ? "已釘選文件。" : "已取消釘選文件。" : "已加入分類。");
+      } catch (error) {
+        if (mutation && pendingPinned.get(mutation.key) === mutation) {
+          pendingPinned.delete(mutation.key);
+          state.library.pinned = mutation.previousPinned;
+          renderSidebar();
+          renderDocuments();
+          await refreshLibrary();
+        }
+        showToast(error.message || (action === "pin" ? "釘選操作失敗。" : "加入分類失敗。"));
+      }
+    };
+    libraryActionChain = libraryActionChain.then(operation, operation);
+    await libraryActionChain;
   }
   function resultActions(item) {
     const actions = make("div", "document-actions");
@@ -1974,13 +2033,24 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     open.dataset.action = "open";
     const reveal = button("顯示所在位置", "small result-action", () => void documentAction(item, "reveal"));
     reveal.dataset.action = "reveal";
-    const pinned = Boolean(item.pinned);
+    const pinned = isLibraryPinned(item);
     const pin = button(pinned ? "取消釘選" : "釘選", "small result-action", () => void libraryAction("pin", item));
     pin.dataset.action = "pin";
     pin.dataset.pinned = String(pinned);
     pin.classList.toggle("is-active", pinned);
-    const group = button("加入分類", "small result-action", () => void libraryAction("group", item));
+    const group = document.createElement("select");
+    group.className = "small result-action";
     group.dataset.action = "group";
+    group.setAttribute("aria-label", "加入分類");
+    group.append(new Option("加入分類", ""));
+    for (const libraryGroup of state.library.groups) group.append(new Option(libraryGroup.name, String(libraryGroup.id)));
+    group.disabled = state.library.groups.length === 0;
+    group.addEventListener("change", () => {
+      const groupId = Number(group.value);
+      if (!group.value || !Number.isSafeInteger(groupId)) return;
+      group.value = "";
+      void libraryAction("group", item, groupId);
+    });
     const selected = selectedReference(item.reference);
     const toggle = button(selected ? "移出上下文" : "加入上下文",
       selected ? "small result-action is-active" : "small result-action primary",
@@ -2509,6 +2579,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     state.dialogTrigger = null;
     if (trigger instanceof HTMLElement && document.contains(trigger)) trigger.focus();
   }
+  function appendContextPath(node, value) {
+    const path = escapeText(value);
+    node.title = path;
+    for (const part of String(path).split(/([\\\\/])/u)) {
+      node.append(document.createTextNode(part));
+      if (/^[\\\\/]$/u.test(part)) node.append(document.createElement("wbr"));
+    }
+  }
   function renderContextPanel() {
     const count = selectedCount();
     $("nav-context-count").textContent = String(count);
@@ -2522,7 +2600,10 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     for (const selected of state.selected.values()) {
       const row = make("div", "context-item");
       const body = make("div", "", "");
-      body.append(make("div", "context-item-name", selected.item.path));
+      body.append(make("div", "context-item-name", documentFilenameValue(selected.item)));
+      const pathNode = make("div", "context-item-meta", "");
+      appendContextPath(pathNode, selected.item.path);
+      body.append(pathNode);
       const actions = make("div", "context-item-actions");
       actions.append(button("移除", "small result-action", () => {
         state.selected.delete(selected.reference);
@@ -2536,8 +2617,14 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     for (const item of selectedTemps) {
       const row = make("div", "context-item");
       const body = make("div", "", "");
-      body.append(make("div", "context-item-name", item.path || item.filename));
-      body.append(make("div", "context-item-meta", item.path ? "" : "臨時上傳文件沒有可複製的原始絕對路徑。"));
+      body.append(make("div", "context-item-name", documentFilenameValue(item)));
+      if (item.path) {
+        const pathNode = make("div", "context-item-meta", "");
+        appendContextPath(pathNode, item.path);
+        body.append(pathNode);
+      } else {
+        body.append(make("div", "context-item-meta", "臨時上傳文件沒有可複製的原始絕對路徑。"));
+      }
       row.append(body, button("移除", "small result-action", () => {
         item.selected = false;
         invalidatePreview("選取已變更；路徑清單已更新。", true);

@@ -518,9 +518,13 @@ async function installPickerPatch(cdp) {
         window.__uiSmoke.documentActions.push(body);
         return new Response(JSON.stringify({ changed: false }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      if (requestPath === "/api/library/pins" || requestPath === "/api/library/groups") {
+      const libraryPathParts = requestPath.split("/");
+      const isLibraryGroupItems = libraryPathParts.length === 6
+        && libraryPathParts[1] === "api" && libraryPathParts[2] === "library"
+        && libraryPathParts[3] === "groups" && libraryPathParts[4] && libraryPathParts[5] === "items";
+      if ((requestPath === "/api/library/pinned" && (requestMethod === "PUT" || requestMethod === "DELETE"))
+        || (isLibraryGroupItems && requestMethod === "POST")) {
         window.__uiSmoke.libraryActions.push({ path: requestPath, method: requestMethod, body });
-        return new Response(JSON.stringify({ message: "煙霧測試已記錄 library action", item: body }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (requestPath === "/api/settings" && body?.startupCatchupMode !== undefined && window.__uiSmoke.failNextStartupCatchupMode) {
         window.__uiSmoke.failNextStartupCatchupMode = false;
@@ -1338,12 +1342,16 @@ async function runViewport(viewport, chromePath) {
       const panel = await cdp.evaluate(`(() => ({
         count: document.getElementById("context-count")?.textContent || "",
         itemCount: document.querySelectorAll("#context-indexed-list .context-item").length,
-        pathText: document.querySelector("#context-indexed-list .context-item-name")?.textContent || "",
+        nameText: document.querySelector("#context-indexed-list .context-item-name")?.textContent || "",
+        pathText: document.querySelector("#context-indexed-list .context-item-meta")?.textContent || "",
+        pathTitle: document.querySelector("#context-indexed-list .context-item-meta")?.title || "",
+        bulkDisplay: getComputedStyle(document.getElementById("bulk-bar")).display,
         copyDisabled: Boolean(document.getElementById("context-copy-paths")?.disabled),
         hint: document.querySelector(".context-panel-hint")?.textContent || "",
       }))()`);
       expect(panel.count === "已選 1 / 20" && panel.itemCount === 1, "上下文常駐側欄沒有保留選取結果。");
-      expect(panel.pathText === fixture.multiPath, "上下文側欄沒有顯示合成文件的完整絕對路徑。");
+      expect(panel.nameText === "multi-passage-lines.txt" && panel.pathText === fixture.multiPath && panel.pathTitle === fixture.multiPath, "上下文側欄沒有以檔名／完整絕對路徑兩行顯示。");
+      expect(panel.bulkDisplay === (viewport.width <= 1180 ? "flex" : "none"), "結果底部選取列沒有依上下文欄狀態隱藏。");
       expect(!panel.copyDisabled && panel.hint.includes("每行一個"), "上下文側欄複製控制狀態或提示不符。");
       await click(cdp, "#context-copy-paths");
       await waitFor(() => cdp.evaluate(`window.__uiSmoke.clipboardText === ${JSON.stringify(fixture.multiPath)}`));
@@ -1371,6 +1379,7 @@ async function runViewport(viewport, chromePath) {
 
     await check(`${label} 列表與表格維持一致操作群組並呼叫 library API`, async () => {
       const start = browserEvents.length;
+      await cdp.evaluate("window.__uiSmoke.libraryActions = []");
       await setSearchMode(cdp, "all-terms");
       await inputAndSearch(cdp, "private node");
       await waitFor(() => cdp.evaluate(`Boolean(Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt"))`));
@@ -1381,13 +1390,14 @@ async function runViewport(viewport, chromePath) {
       const listActions = await cdp.evaluate(`(() => {
         const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
         const group = row?.querySelector(".document-actions");
-        const buttons = Array.from(group?.querySelectorAll("button") || []);
+        const controls = Array.from(group?.querySelectorAll("button, select") || []);
+        const label = node => node instanceof HTMLSelectElement ? node.selectedOptions?.[0]?.textContent || "" : node.textContent || "";
         return row ? {
-          labels: buttons.map(node => node.textContent || ""),
-          actions: buttons.filter(node => node.dataset.action).map(node => node.dataset.action),
+          labels: controls.map(label),
+          actions: controls.filter(node => node.dataset.action).map(node => node.dataset.action),
           groupClass: group?.className || "",
           gap: group ? getComputedStyle(group).gap : "",
-          heights: buttons.map(node => Math.round(node.getBoundingClientRect().height)),
+          heights: controls.map(node => Math.round(node.getBoundingClientRect().height)),
           primaryContext: Boolean(row.querySelector('button[data-action="context"].primary')),
         } : null;
       })()`);
@@ -1398,26 +1408,16 @@ async function runViewport(viewport, chromePath) {
       const clickedLibraryButtons = await cdp.evaluate(`(() => {
         const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
         const pin = row?.querySelector('button[data-action="pin"]');
-        const group = row?.querySelector('button[data-action="group"]');
+        const group = row?.querySelector('select[data-action="group"]');
+        const groupOption = group instanceof HTMLSelectElement ? Array.from(group.options).find(option => option.value) : null;
         if (pin instanceof HTMLElement) pin.click();
-        if (group instanceof HTMLElement) group.click();
-        return { pin: Boolean(pin), group: Boolean(group) };
+        if (group instanceof HTMLSelectElement && groupOption) {
+          group.value = groupOption.value;
+          group.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return { pin: Boolean(pin), group: Boolean(group && groupOption) };
       })()`);
       expect(clickedLibraryButtons?.pin && clickedLibraryButtons?.group, `列表沒有可點擊的釘選／分類按鈕：${JSON.stringify(clickedLibraryButtons)}`);
-      try {
-        await waitFor(() => cdp.evaluate("window.__uiSmoke.libraryActions.length === 2"), 5_000);
-      } catch (error) {
-        const libraryDebug = await cdp.evaluate(`(() => {
-          const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
-          return {
-            actions: window.__uiSmoke.libraryActions,
-            toast: document.getElementById("toast")?.textContent || "",
-            path: row?.querySelector(".document-path")?.title || "",
-            buttons: Array.from(row?.querySelectorAll(".document-actions button") || []).map(node => ({ text: node.textContent || "", action: node.dataset.action || "" })),
-          };
-        })()`);
-        throw new Error(`${errorText(error)}；library debug=${JSON.stringify(libraryDebug)}`);
-      }
       const toggledAgain = await cdp.evaluate(`(() => {
         const row = Array.from(document.querySelectorAll("#document-list .document-row")).find(node => node.querySelector(".document-title")?.textContent === "multi-passage-lines.txt");
         const pin = row?.querySelector('button[data-action="pin"]');
@@ -1427,9 +1427,9 @@ async function runViewport(viewport, chromePath) {
       expect(toggledAgain, "釘選成功後找不到取消釘選按鈕。");
       await waitFor(() => cdp.evaluate("window.__uiSmoke.libraryActions.length === 3"), 5_000);
       const libraryActions = await cdp.evaluate("window.__uiSmoke.libraryActions");
-      expect(libraryActions[0].path === "/api/library/pins" && libraryActions[0].method === "POST" && libraryActions[0].body?.path === fixture.multiPath && libraryActions[0].body?.pinned === true, "釘選沒有送出預期 library payload。");
-      expect(libraryActions[1].path === "/api/library/groups" && libraryActions[1].method === "POST" && libraryActions[1].body?.path === fixture.multiPath && !Object.prototype.hasOwnProperty.call(libraryActions[1].body, "pinned"), "分類沒有送出預期 library payload。");
-      expect(libraryActions[2].path === "/api/library/pins" && libraryActions[2].method === "POST" && libraryActions[2].body?.path === fixture.multiPath && libraryActions[2].body?.pinned === false, "取消釘選沒有送出 pinned=false。");
+      expect(libraryActions[0].path === "/api/library/pinned" && libraryActions[0].method === "PUT" && libraryActions[0].body?.path === fixture.multiPath && libraryActions[0].body?.reference && libraryActions[0].body?.name && !Object.prototype.hasOwnProperty.call(libraryActions[0].body, "pinned"), "釘選沒有送出 pi2 PUT payload。");
+      expect(/^\/api\/library\/groups\/\d+\/items$/u.test(libraryActions[1].path) && libraryActions[1].method === "POST" && libraryActions[1].body?.path === fixture.multiPath && libraryActions[1].body?.reference && libraryActions[1].body?.name, "分類沒有送出 pi2 items POST payload。");
+      expect(libraryActions[2].path === "/api/library/pinned" && libraryActions[2].method === "DELETE" && libraryActions[2].body?.path === fixture.multiPath && libraryActions[2].body?.reference && !Object.prototype.hasOwnProperty.call(libraryActions[2].body, "name"), "取消釘選沒有送出 pi2 DELETE payload。");
       await click(cdp, "#view-table");
       await waitFor(() => cdp.evaluate("!document.getElementById('document-table-wrap')?.hidden"));
       const tableActions = await cdp.evaluate(`(() => {
@@ -1439,25 +1439,27 @@ async function runViewport(viewport, chromePath) {
         const actionCell = cells.at(-1);
         const checkCell = cells[0];
         const group = actionCell?.querySelector(".document-actions");
-        const buttons = Array.from(group?.querySelectorAll("button") || []);
+        const controls = Array.from(group?.querySelectorAll("button, select") || []);
         return {
           cellCount: cells.length,
           headerCount: document.querySelectorAll(".documents-table thead th").length,
-          labels: buttons.map(node => node.textContent || ""),
+          labels: controls.map(node => node instanceof HTMLSelectElement ? node.selectedOptions?.[0]?.textContent || "" : node.textContent || ""),
           actionCellClass: actionCell?.className || "",
           gap: group ? getComputedStyle(group).gap : "",
-          heights: buttons.map(node => Math.round(node.getBoundingClientRect().height)),
+          heights: controls.map(node => Math.round(node.getBoundingClientRect().height)),
           primaryContext: Boolean(actionCell?.querySelector('button[data-action="context"].primary')),
           titleCopyButtons: row.querySelectorAll("td:nth-child(2) .copy-control").length,
-          checkText: (checkCell?.textContent || "").trim(),
-          hasStandaloneDot: Array.from(checkCell?.childNodes || []).some(node => node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim() === "."),
+          checkVisibleText: (checkCell?.innerText || "").trim(),
+          checkPseudoText: [getComputedStyle(checkCell, "::before").content, getComputedStyle(checkCell, "::after").content].join(""),
+          hasStandaloneDot: (checkCell?.innerText || "").includes(".")
+            || [getComputedStyle(checkCell, "::before").content, getComputedStyle(checkCell, "::after").content].some(value => value.includes(".")),
         };
       })()`);
       expect(tableActions?.cellCount === 7 && tableActions.headerCount === 7, "表格結果沒有獨立七欄操作結構。");
       expect(tableActions.labels.length === expectedLabels.length && expectedLabels.every(value => tableActions.labels.includes(value)), "表格操作群組與列表不一致。");
       expect(tableActions.gap === "6px" && tableActions.heights.every(value => value === 30) && tableActions.primaryContext
         && tableActions.titleCopyButtons === 0 && tableActions.actionCellClass.includes("document-actions-cell")
-        && !tableActions.checkText && !tableActions.hasStandaloneDot, "表格操作列樣式或勾選欄仍有擁擠／多餘句點。");
+        && !tableActions.checkVisibleText.includes(".") && !tableActions.checkPseudoText.includes("."), "勾選框所在儲存格可見文字不得含句點。");
       await click(cdp, "#view-list");
       await waitFor(() => visible(cdp, "#document-list"));
       await noBrowserErrorsSince(cdp, start, "列表／表格快捷操作");

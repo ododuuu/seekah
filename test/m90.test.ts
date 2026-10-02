@@ -18,15 +18,20 @@ function assertActionContract(source: string, smoke: string = smokeSource): void
   assert.doesNotMatch(source, /\.link-action\s*\{/u, "仍殘留無框文字連結操作樣式。");
   assert.match(source, /open\.dataset\.action = "open"/u, "缺少開啟 action。");
   assert.match(source, /reveal\.dataset\.action = "reveal"/u, "缺少顯示所在位置 action。");
-  assert.match(source, /const pinned = Boolean\(item\.pinned\)/u, "釘選按鈕沒有讀取目前狀態。");
+  assert.match(source, /const pinned = isLibraryPinned\(item\)/u, "釘選按鈕沒有讀取目前狀態。");
   assert.match(source, /pinned \? "取消釘選" : "釘選"/u, "釘選按鈕沒有依狀態切換中文文案。");
   assert.match(source, /pin\.dataset\.action = "pin"/u, "缺少釘選 action。");
   assert.match(source, /group\.dataset\.action = "group"/u, "缺少分類 action。");
   assert.match(source, /toggle\.dataset\.action = "context"/u, "缺少上下文 action。");
-  assert.match(source, /\/api\/library\/pins/u, "缺少釘選 API 呼叫點。");
-  assert.match(source, /\/api\/library\/groups/u, "缺少分類 API 呼叫點。");
+  assert.match(source, /\/api\/library\/pinned/u, "缺少釘選 API 呼叫點。");
+  assert.match(source, /\/api\/library\/groups\/" \+ encodeURIComponent[\s\S]*? \+ "\/items/u, "缺少分類 items API 呼叫點。");
   assert.match(source, /method: "POST"/u, "library API 沒有使用 POST。");
-  assert.match(source, /const pinned = action === "pin" \? !Boolean\(item\.pinned\)/u, "釘選 payload 沒有反映切換狀態。");
+  assert.match(source, /const pinned = action === "pin" \? !isLibraryPinned\(item\)/u, "釘選 payload 沒有反映切換狀態。");
+  assert.match(source, /const method = action === "pin" \? \(pinned \? "PUT" : "DELETE"\) : "POST"/u, "釘選沒有使用 pi2 PUT／DELETE API。");
+  assert.match(source, /const requestBody = action === "pin" && !pinned/u, "取消釘選沒有使用 pi2 identity payload。");
+  assert.match(source, /pendingPinned\.set\(mutation\.key, mutation\);\s*applyPinnedState\(body, pinned\)/u, "釘選切換沒有先更新本機狀態。");
+  assert.match(source, /libraryActionChain = libraryActionChain\.then\(operation, operation\)/u, "釘選／分類操作沒有依序執行。");
+  assert.match(source, /await refreshLibrary\(\);[\s\S]*?pendingPinned\.delete\(mutation\.key\)/u, "釘選 API 成功後沒有同步並解除暫存狀態。");
   assert.match(source, /sortMode: "relevance"/u, "排序沒有預設目前結果：相關性。");
   assert.match(source, /grid-template-columns: fit-content\(110px\)/u, "多段落標籤欄沒有縮至內容寬度上限。");
   assert.match(source, /max-width: none/u, "列表結果區仍固定 max-width。");
@@ -38,7 +43,7 @@ function assertActionContract(source: string, smoke: string = smokeSource): void
   assert.match(source, /min-width: 1240px/u, "表格寬度不足以容納完整操作列。");
   assert.match(source, /\.documents-table th:nth-child\(7\) \{ width: 480px; \}/u, "表格操作欄沒有保留完整操作列寬度。");
   assert.match(smoke, /expectedLabels = \["複製路徑", "複製檔名", "開啟", "顯示所在位置", "釘選", "加入分類", "加入上下文"\]/u, "UI smoke 沒有驗證完整操作群組。");
-  assert.match(smoke, /libraryActions\.length === 3/u, "UI smoke 沒有驗證釘選／取消釘選與分類 POST。");
+  assert.match(smoke, /libraryActions\.length === 3/u, "UI smoke 沒有驗證 pi2 釘選／取消釘選與分類 POST。");
   assert.match(smoke, /document-sort.*selectedOptions/u, "UI smoke 沒有驗證排序下拉文字。");
   assert.match(smoke, /titleCopyButtons === 0/u, "UI smoke 沒有驗證表格標題欄不擁擠。");
   assert.match(smoke, /hasStandaloneDot/u, "UI smoke 沒有驗證勾選欄多餘句點。");
@@ -51,8 +56,10 @@ test("M90 列表／表格一致快捷操作與 library API 契約", () => {
 test("M90 reverse 移除操作、獨立欄或 API 呼叫點時必須失敗", () => {
   assertActionContract(workbenchSource);
 
-  const withoutPin = workbenchSource.replace(/const pin = button\(pinned \? "取消釘選" : "釘選"[\s\S]*?pin\.dataset\.action = "pin";/u, "const removedPin = null;");
+  const withoutPin = workbenchSource.replace(/const pinned = isLibraryPinned\(item\);[\s\S]*?pin\.dataset\.action = "pin";/u, "const removedPin = null;");
   assert.throws(() => assertActionContract(withoutPin), /釘選|action/u);
+  const withoutOptimisticPin = workbenchSource.replace(/pendingPinned\.set\(mutation\.key, mutation\);\s*applyPinnedState\(body, pinned\)/u, "const removedOptimisticPin = null;");
+  assert.throws(() => assertActionContract(withoutOptimisticPin), /本機|切換/u);
 
   const withoutGroupApi = workbenchSource.replace(/\/api\/library\/groups/gu, "/api/removed/groups");
   assert.throws(() => assertActionContract(withoutGroupApi), /分類|API/u);
