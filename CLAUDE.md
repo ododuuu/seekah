@@ -13,7 +13,7 @@
 
 ## 常用指令
 
-- 建置與全部測試：`npm test`（含 TypeScript build）；0.48.0 合併後 `main` 的總數、通過、失敗、略過待監工提供，先記為 `TBD`。
+- 建置與全部測試：`npm test`（含 TypeScript build）；0.48.0 合併後 `main`（`994c920`）為 524 項、521 通過、0 失敗、3 略過。
 - 單一測試：`npm run build` 後 `node --test dist/test/mNN.test.js`。
 - 工作台前端改動**必跑**：`node scripts/ui-smoke.mjs`（需本機 Chrome，1180×800、1440×900 與 1920×1080；失敗清單必須為空；結束後確認沒有殘留 daemon／Chrome）。
 - 搜尋程式改動**必做**差分測試：`scripts/search-diff.mjs`（小型 650、大型 30；新舊結果需 0 差異）。
@@ -46,6 +46,6 @@
 ## 目前狀態摘要
 
 - 版本 0.48.0；目前 worktree 為 `release/0.48.0`，GitHub `main` 由使用者自行 push；本機真實索引狀態不在本版宣稱。
-- 0.48.0 已合併文件庫、Codex session／Reference Set、工作台／Codex 跨頁上下文與結果操作介面，範圍為 SPEC §§94–100、D127–D136；測試與 build 數字待監工在合併後 `main` 實跑。
+- 0.48.0 已合併文件庫、Codex session／Reference Set、工作台／Codex 跨頁上下文與結果操作介面，範圍為 SPEC §§94–100、D127–D136；合併後 `main`（`994c920`）的 `npm run build` 通過、`npm test` 為 524 項／521 通過／0 失敗／3 略過、ui-smoke 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。
 - 監工提供的 57 個真實 rollout 統計為 structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；parser 經六輪修正。
 - Codex rollout 格式未公開，可能隨 Codex 更新變動；公司 Windows 正式驗收目前仍只到 0.44，不能宣稱 0.48 已通過。

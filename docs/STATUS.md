@@ -1,6 +1,6 @@
 # 專案狀態
 
-最後更新：2026-10-03（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；自動驗證數字待監工提供）
+最後更新：2026-10-03（package 0.48.0：文件庫、Codex session／Reference Set、跨頁上下文與結果操作介面；SPEC §§94–100／D127–D136；合併後 main 994c920 的 build、npm test、ui-smoke、search-diff 已實跑）
 
 ## 目前狀態
 
@@ -9,7 +9,7 @@
   - §98～§99／D130～D134：Codex rollout 唯讀 parser、Reference Set、loopback API 與安全呈現；不公開 conversation content，不把 Codex 當成索引來源。
   - §94／D136、§100／D135：列表／表格共同操作列、表格「更多」選單、寬畫面延展，以及工作台與 Codex 共用 token session 的索引上下文；右側欄只顯示絕對路徑。
   - 監工提供的 57 個真實 rollout 統計：structured 57/57、全量解析 1.5 秒、user-provided（on-disk）288、codex-tool 205、base64 false positive 0；parser 經六輪修正。
-  - `npm run build`、`npm test`、`ui-smoke`、`search-diff` 與總測試數字均先記為 `TBD`，待合併後 `main` 實跑；Codex 格式未公開，可能隨更新變動。
+  - 監工在合併後 `main`（`994c920`）實跑：`npm run build` 通過；`npm test` 524 項、521 通過、0 失敗、3 略過；`ui-smoke` 失敗清單為空；search-diff 以 0.47.0（`e4f06bb`）為基準，小型 650、大型 30，錯誤 0、差異 0。Codex 格式未公開，可能隨更新變動。
   - 公司 Windows 正式證據仍只到 0.44，不能宣稱 0.48 已通過。
 
 - **2026-10-02 0.47.0（`release/0.47.0`）**：三條分支已合併；合併後 main 的 `npm test` 為 498 項，495 通過、0 失敗、3 略過；`ui-smoke` 失敗清單為空；搜尋差分以基準 `3d8f6b5` 比較小型 650／大型 30，錯誤 0、差異 0。
