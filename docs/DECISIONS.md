@@ -42,6 +42,44 @@
 - 否決：
   - 不讀取 `%LOCALAPPDATA%\\LocalDocSearch*`，不執行真實索引操作，不把一次通過的本機 smoke 宣稱為公司 Windows 驗收；不修改 package version、lockfile、STATUS、NEXT-TODO 或 handoff。
 
+## D131：Codex 工作階段以 token 保護的 loopback metadata 頁面呈現
+
+- 日期：2026-10-02。依 SPEC §99；本分支範圍是 `src/workbench.ts`、`src/codex-session-app.ts`、`src/workbench-app.ts` 與 `test/m95.test.ts`，不修改 package 版本、STATUS、NEXT-TODO 或 handoff。
+- 事實：
+  - 工作台已有 loopback HTTP server、URL fragment token 與 CSP；Codex 頁面可沿用同一個本機認證邊界，不需要新增服務或瀏覽器 storage。
+  - Reference Set 需要同時呈現 session summary 與指定 session 的完整 path metadata，且既有索引可用 exact／case-insensitive path lookup 產生 canonical document reference。
+- 決定：
+  - 新增 `GET /api/codex/sessions` 與 `GET /api/codex/sessions/:id/references`；兩者均要求 `X-LocalDocSearch-Token`，只回傳 parser metadata、事件統計、來源／confidence、絕對路徑與索引狀態。
+  - 新增 `/codex-sessions` 獨立頁面，從工作台頂列進入；所有值以 DOM `textContent` 呈現。頁面只提供重新整理與回到工作台，不提供送出、修改 rollout、執行 tool 或開啟附件。
+  - parser 結果若有現有索引才做唯讀比對；索引不存在時仍可顯示 session metadata，不在 Codex 頁面啟動索引或 autoupdate。
+- 理由：
+  - 復用既有 loopback token／CSP 能維持本機資料邊界，獨立頁面檔案也避開平行工作台頁面重構的主要衝突面。
+  - API summary 與 detail 分離可避免清單重複傳輸 reference，同時讓 UI 在選取 session 後才讀取有限的 detail。
+- 否決：
+  - 不把 Codex message、reasoning、query、command、tool result 或附件內容放入 API／HTML；不把 Codex home 檔案路徑或原始 rollout 檔名公開。
+  - 不新增外部服務、MCP 呼叫、Provider 傳送、write endpoint 或跨工作階段保存。
+- 驗證：
+  - `test/m95.test.ts` 覆蓋 token 403、summary／detail、索引 path match、頁面 CSP／安全 DOM 呈現、內容不外洩與入口／索引比對的反向契約。
+
+## D130：Codex rollout 採合成研究與有界唯讀 parser
+
+- 日期：2026-10-02。依 SPEC §98；本分支範圍是 `src/codex-session.ts`、`test/m94.test.ts`、`docs/research/codex-session-format-2026-10-02.md`，不修改 package 版本、STATUS、NEXT-TODO 或 handoff。
+- 事實：
+  - 已知 rollout 是 `sessions/YYYY/MM/DD/rollout-*.jsonl`，每行是 JSON event；常見 envelope／event 欄位包括 `type`、`payload`、`data`、`event`、`session_meta`、`response_item`、`event_msg`、`turn_context` 與 `world_state`。
+  - 使用者路徑可能在 `cwd`、message content／text／input、工具 `path`／`file_path`／`uri`、shell／read command 或 function arguments；MCP 身分可由 tool／server／source／name 欄位辨識。附件只作 rollout 中的 path reference，不開啟附件。
+  - 研究只使用暫存目錄的合成 JSONL；沒有讀取真實 `~/.codex`、認證、history、attachment 或 SQLite，也沒有把合成 conversation content 放入解析結果。
+- 決定：
+  - parser 只列舉可設定 Codex home 的 `sessions/` 下 `rollout-*.jsonl`，以固定 session／line／reference 上限逐行唯讀解析；不依賴 `history.jsonl`、`session_index.jsonl`、archived sessions、attachments 或 SQLite。
+  - Reference 以正規化絕對路徑去重，保留事件類型、occurrences、來源集合與 confidence；來源固定為 `seekah-prompt`、`user-provided`、`seekah-mcp`、`codex-tool`。
+  - 未知事件只做絕對路徑 fallback，標為 `user-provided`／`low` 與 `message-path-fallback`；API／頁面只輸出 metadata，永不輸出 message、reasoning、command、query、tool result 或原始 JSONL。
+- 理由：
+  - 只讀 rollout 已足以建立第一版工作階段 Reference Set；不碰其他 Codex state 可降低認證、版本變動與敏感資料外洩風險。
+  - 明確來源欄位與低信心 fallback 能讓未知格式可見但不假裝理解，並保留後續以新 event schema 擴充的空間。
+- 否決：
+  - 不反序列化或輸出完整事件、不執行 Codex tool／MCP、不把 path reference 寫回 Codex、不加入 OCR、embedding 或外部解析服務。
+- 驗證：
+  - `test/m94.test.ts` 覆蓋 synthetic session metadata、事件統計、四種來源、無效行、輸入檔案邊界、跨平台絕對路徑與 conversation content 不輸出；移除 path collection 時反向契約失敗。
+
 ## D124：多段落當頁以 chunk／heading 候選縮小儲存讀取
 
 - 日期：2026-10-02。依 SPEC §92。本分支範圍是 `src/store.ts` 的 current chunk store 讀取、`src/search.ts` 傳遞當頁前四個詞、`test/m88.test.ts`、`docs/0.47-SEARCH-SLOW-NOTES.md`；不修改 UI、多段落挑選／片段函式、package 版本、STATUS、NEXT-TODO 或 handoff。

@@ -21,6 +21,8 @@ import { combineWorkbenchContext, importDocument, sanitizeUploadName, WORKBENCH_
 import { modelChoices, previewId, previewMatches, ProviderError, ProviderKeys, providerNames, providerSelections, requestProvider, requestProviderWithFallback, resolveModelRoute, routeSignature, validateModel, validateProvider, validateProviderSelection, type ProviderName, type ProviderSelection, type ProviderState, type RoutedProviderResult } from "./workbench-provider.js";
 import { workbenchHtml } from "./workbench-app.js";
 import { traceHtml } from "./trace-app.js";
+import { codexSessionHtml } from "./codex-session-app.js";
+import { codexSessionById, markIndexedCodexReferences, parseCodexSessions, summarizeCodexSessions } from "./codex-session.js";
 import { actOnDocument, type DocumentAction } from "./open-document.js";
 import { coversPath, samePath } from "./root-plan.js";
 import { sync } from "./sync.js";
@@ -56,6 +58,7 @@ export interface WorkbenchOptions {
   token?: string;
   secret?: Buffer;
   environment?: NodeJS.ProcessEnv;
+  codexHome?: string;
   fetcher?: typeof fetch;
   tempParent?: string;
   indexHold?: () => Promise<void>;
@@ -492,6 +495,15 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
     return openStore(options.databasePath, store => indexedLibraryDocument(store, input.reference, input.path), options.createIndexStore);
   }
 
+  const codexParserOptions = {
+    ...(options.codexHome === undefined ? {} : { codexHome: options.codexHome }),
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
+  };
+  const readCodexSessions = async () => {
+    const sessions = await parseCodexSessions(codexParserOptions);
+    if (!existsSync(options.databasePath)) return sessions;
+    return openStore(options.databasePath, store => markIndexedCodexReferences(sessions, store), options.createIndexStore);
+  };
 
   function persistIndexing(force = false): void {
     const now = Date.now();
@@ -781,8 +793,50 @@ export async function createWorkbench(options: WorkbenchOptions): Promise<Workbe
         });
         response.end(body); return;
       }
+      if (request.method === "GET" && url.pathname === "/codex-sessions") {
+        const nonce = randomBytes(18).toString("base64url");
+        const body = codexSessionHtml(nonce);
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
+          "cache-control": "no-store",
+          "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+          "cross-origin-opener-policy": "same-origin",
+        });
+        response.end(body); return;
+      }
       if (!url.pathname.startsWith("/api/")) { json(response, 404, { error: "找不到本機資源。" }); return; }
       if (request.headers["x-localdocsearch-token"] !== token) { json(response, 403, { error: "工作階段 token 無效。" }); return; }
+      if (request.method === "GET" && url.pathname === "/api/codex/sessions") {
+        const sessions = await readCodexSessions();
+        json(response, 200, { readOnly: true, sessions: summarizeCodexSessions(sessions) });
+        return;
+      }
+      const codexReferencesPrefix = "/api/codex/sessions/";
+      if (request.method === "GET" && url.pathname.startsWith(codexReferencesPrefix) && url.pathname.endsWith("/references")) {
+        const encodedId = url.pathname.slice(codexReferencesPrefix.length, -"/references".length);
+        let sessionId: string;
+        try { sessionId = decodeURIComponent(encodedId); }
+        catch { throw Object.assign(new Error("Codex 工作階段代碼無效。"), { statusCode: 400 }); }
+        if (!sessionId || sessionId.length > 512) throw Object.assign(new Error("Codex 工作階段代碼無效。"), { statusCode: 400 });
+        const session = codexSessionById(await readCodexSessions(), sessionId);
+        if (!session) { json(response, 404, { error: "找不到 Codex 工作階段。" }); return; }
+        json(response, 200, {
+          readOnly: true,
+          sessionId: session.id,
+          cwd: session.cwd,
+          startedAt: session.startedAt,
+          lastEventAt: session.lastEventAt,
+          eventCount: session.eventCount,
+          invalidLineCount: session.invalidLineCount,
+          eventTypes: session.eventTypes,
+          parseMode: session.parseMode,
+          references: session.references,
+        });
+        return;
+      }
       if (request.method === "GET" && url.pathname === "/api/traces") {
         const typeValue = url.searchParams.get("type");
         const statusValue = url.searchParams.get("status");

@@ -3032,3 +3032,42 @@ docsearch doctor
 - 每項文件庫行為都必須有正向斷言及可移除實作接線後失敗的反向斷言：持久化 transaction／去重／損壞隔離、loopback path 驗證／四種事件、以及四個 UI 導覽／選取／重新搜尋。
 - 文件庫相關變更完成後必須執行 `npm run build`、三個聚焦測試、`node scripts/ui-smoke.mjs`、`npm test` 及 `scripts/search-diff.mjs`；搜尋差異必須為 0。所有命令都必須在本 worktree 執行，測試程序與 Chrome 結束後不得殘留指向暫存資料的程序。
 - 不得因文件庫功能順手加入 OCR、embedding、LAN 暴露、外部內容服務、未規格化檔案格式或 browser storage；任何新產品行為須另立規格與設計決策。
+
+## 98. Codex rollout 工作階段唯讀解析與 Reference Set
+
+依 D130。本節只增加本機 Codex rollout 的 metadata 解析，不把 Codex 變成文件索引來源，也不把任何對話內容送到外部服務。
+
+### 98.1 輸入邊界與可配置 home
+
+- 解析器可由嵌入端傳入 Codex home；工作台使用 `SEEKAH_CODEX_HOME`、`CODEX_HOME`，最後才使用目前使用者 home 下的 `.codex`。所有路徑列舉與讀取必須留在本機且唯讀。
+- 輸入只限 Codex home 下 `sessions/` 遞迴的 `rollout-*.jsonl`。不得為補資料而讀取 `history.jsonl`、`session_index.jsonl`、`archived_sessions/`、`attachments/`、認證檔或 SQLite 狀態檔。
+- 每行 JSONL 個別解析；`session_meta`、`response_item`、`event_msg`、`turn_context`、`world_state` 與未知事件至少保留事件類型統計、有效／無效行數與必要的 session metadata。不得把 JSONL 原文、message、reasoning、query、command、tool arguments 或 result 放入公開結果。
+- `cwd`、`session_id`、時間欄位可作工作階段 metadata；路徑抽取只接受 Windows drive、UNC、POSIX 或 `file://` 絕對路徑，並有工作階段數、單行長度與 reference 數上限。
+
+### 98.2 Reference Set 與來源分類
+
+- Reference Set 以正規化絕對路徑去重，保存出現次數、事件類型、confidence 與來源集合；同一路徑可同時保留多個來源，但主要來源與最高 confidence 必須可重現。
+- 公開來源分類固定為 `seekah-prompt`、`user-provided`、`seekah-mcp`、`codex-tool`。Seekah prompt／context 的明確欄位、使用者 message path、Seekah MCP tool/server 名稱、Codex read／shell／function tool event 分別依此分類。
+- `path`、`file`、`file_path`、`filename`、`uri`、`attachment`／`attachments` 與工具 command／arguments 中的絕對路徑可抽取；附件本體不開啟、不解析、不複製。
+- 解析器只與現有 Seekah 索引做唯讀 exact／case-insensitive path 比對；成功時可回傳 canonical document reference、path 與 status，不改變索引。
+
+### 98.3 未知格式 fallback 與驗收
+
+- 無法辨識事件來源時仍可抽取絕對路徑，但來源固定為 `user-provided`、confidence 為 `low`，並標記 `message-path-fallback`；不得猜測事件語意。
+- `test/m94.test.ts` 必須以暫存 Codex home 的合成 rollout 驗證 session metadata、事件統計、四種來源、無效行、只讀檔案邊界與不輸出 conversation content；移除 path collection 的反向契約必須失敗。
+
+## 99. Codex 工作階段 loopback API 與工作台頁面
+
+依 D131。Codex 工作階段功能只提供本機工作台的 metadata 檢視，不提供送出、修改、執行或附件開啟操作。
+
+### 99.1 API
+
+- `GET /api/codex/sessions` 回傳唯讀 session summary、事件類型統計、reference 數與來源計數；`GET /api/codex/sessions/:id/references` 回傳指定 session 的 cwd、時間、事件統計與 Reference Set。
+- 兩個 endpoint 均沿用工作台 URL fragment token 的 `X-LocalDocSearch-Token` 認證；回應不得包含原始 rollout path、message、reasoning、prompt、query、command、tool arguments、tool result 或附件內容。
+- detail reference 可標示是否已在 Seekah 索引，並在已索引時附 canonical document reference；讀取不存在索引時仍可回傳 rollout metadata，不得把 Codex parser 變成索引建立流程。
+
+### 99.2 工作台呈現與驗收
+
+- `/codex-sessions` 顯示工作階段清單、cwd、時間、事件類型統計、Reference Set、來源分類、confidence 與 Seekah 索引狀態；所有動態值以安全 text node 呈現。
+- 頁面只提供重新整理與回到工作台；不得以瀏覽器 storage、外部服務、MCP 或 Provider 傳送 Codex 內容。
+- `test/m95.test.ts` 必須驗證 token 邊界、session／reference API、索引比對、頁面 CSP／安全文字呈現與 conversation content 不外洩；移除 API 索引比對或頁面入口的反向契約必須失敗。

@@ -3502,10 +3502,11 @@ dialog::backdrop { background: rgba(19,28,24,.55); }
     const refresh = button("完整校正", "top-button", () => void runIndex()); refresh.id = "top-refresh"; refresh.title = "列舉所有根目錄並比較 metadata；只重新解析新增或變更的文件。";
     const stop = button("停止同步", "top-button", () => void stopIndex()); stop.id = "top-stop"; stop.hidden = true;
     const trace = button("Trace", "top-button", () => { location.href = "/traces#" + encodeURIComponent(token()); }); trace.id = "trace-toggle"; trace.title = "開啟獨立 Trace 診斷頁，查看持久化搜尋與 answer log。";
+    const codex = button("Codex 工作階段", "top-button", () => { location.href = "/codex-sessions#" + encodeURIComponent(token()); }); codex.id = "codex-session-toggle"; codex.title = "開啟唯讀 Codex 工作階段與路徑 reference。";
     const theme = button("主題：自動", "top-button theme-button", cycleTheme); theme.id = "theme-button"; theme.setAttribute("aria-label", "切換工作台主題");
     const settings = button("設定", "top-button", () => openSettings(settings)); settings.id = "settings-toggle";
     const status = make("span", "local-status", "本機模式"); status.id = "top-status";
-    topActions.append(refresh, stop, trace, theme, settings, status); topbar.append(brand, searchLabel, topActions); shell.append(topbar);
+    topActions.append(refresh, stop, trace, codex, theme, settings, status); topbar.append(brand, searchLabel, topActions); shell.append(topbar);
 
     const sidebar = make("aside", "sidebar"); sidebar.setAttribute("aria-label", "主要導覽");
     const documentsGroup = make("div", "nav-group", "文件"); sidebar.append(documentsGroup);
